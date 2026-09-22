@@ -119,14 +119,18 @@ def test_dead_parent_exits_without_stopped_ping(tmp_path):
     assert all(not p.get("stopped") for p in sent)
 
 
-def test_max_lifetime_cap_sends_stopped_ping(tmp_path):
+def test_max_lifetime_cap_exits_without_stopped_ping(tmp_path):
+    """The cap bounds the PINGER's lifetime, not the agent's. A stopped
+    ping at the cap would falsely assert a still-running agent had
+    stopped -- exactly the lie the dead-parent case already avoids."""
     sent = []
     pinger, clock, sleeps = _make_pinger(
         tmp_path, lambda p, t: sent.append(p),
         max_lifetime=1.0, interval=100.0, poll_interval=0.5,
     )
     pinger.run()
-    assert sent[-1]["stopped"] is True
+    assert len(sent) >= 1  # the immediate first ping still went out
+    assert all(not p.get("stopped") for p in sent)
 
 
 def test_periodic_pings_at_interval(tmp_path):

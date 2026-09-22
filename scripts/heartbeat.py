@@ -38,8 +38,11 @@ Lifetime -- exits on the FIRST of:
      a clean stop for a killed process would be a lie; the backend's
      stale -> gone path exists for exactly this case.
   3. A 12-hour absolute cap, so no bug can leave a pinger running forever.
-     Sends a final stopped ping (this is a deliberate, controlled exit, not
-     a crash).
+     Exits WITHOUT a stopped ping, exactly like the dead-parent case:
+     ``stopped`` describes the AGENT, not the pinger, and a session still
+     running at hour 12 is plausible for this product's target long-lived
+     agents. The cap bounds the pinger's own lifetime; it is not evidence
+     the agent stopped. The backend's stale -> gone path covers this.
 
 A pid file prevents duplicate pingers for the same session: if one exists
 and names a live process, this process exits immediately.
@@ -201,8 +204,9 @@ class Pinger:
                 if not self._pid_alive(self.watch_pid):
                     return  # killed process: no stopped ping, that would lie
                 if self.clock() - start >= self.max_lifetime:
-                    self._send(stopped=True)
-                    return
+                    return  # cap on the PINGER, not evidence the agent
+                            # stopped: a live agent past 12h must not be
+                            # reported stopped; let stale->gone handle it
                 if self.clock() - last_ping >= self.interval:
                     self._send(stopped=False)
                     last_ping = self.clock()
