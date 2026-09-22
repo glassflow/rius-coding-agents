@@ -106,3 +106,21 @@ def test_redact_never_leaks_the_key():
     assert config.redact("glassflow_abcdef123456") == "glassflow_…"
     assert "abcdef" not in config.redact("glassflow_abcdef123456")
     assert config.redact(None) == "<unset>"
+
+
+def test_redact_ri_form():
+    assert config.redact("ri_S8QkXkns.OtpIDoWm") == "ri_…"
+    assert "S8QkXk" not in config.redact("ri_S8QkXkns.OtpIDoWm")
+    assert "OtpIDo" not in config.redact("ri_S8QkXkns.OtpIDoWm")
+
+
+def test_redact_no_underscore():
+    assert config.redact("nounderscorehere") == "<redacted>"
+    assert "nounde" not in config.redact("nounderscorehere")
+
+
+def test_missing_api_key_mentioned_even_when_default_off(tmp_path):
+    home = _home(tmp_path)
+    c = config.resolve("s1", "/x/y", {}, home)
+    assert c.enabled is False
+    assert "RIUS_API_KEY" in c.reason

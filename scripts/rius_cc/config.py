@@ -138,7 +138,10 @@ def _max_attr_bytes(env: Mapping[str, str]) -> int:
 def redact(api_key: Optional[str]) -> str:
     if not api_key:
         return "<unset>"
-    return "glassflow_…"
+    idx = api_key.find("_")
+    if idx == -1:
+        return "<redacted>"
+    return api_key[: idx + 1] + "…"
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
@@ -170,9 +173,12 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
                 enabled = path_decision
                 reason = path_reason
 
-    if enabled and not api_key:
-        enabled = False
-        reason = "off: RIUS_API_KEY is not set"
+    if not api_key:
+        if enabled:
+            enabled = False
+            reason = "off: RIUS_API_KEY is not set"
+        else:
+            reason = reason + "; also RIUS_API_KEY is not set"
 
     return Config(
         enabled=enabled,
