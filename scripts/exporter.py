@@ -51,6 +51,8 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
             return 0
 
         cfg = config.resolve(session_id, cwd, env, home)
+        _log(home, cfg, "session %s: resolved config, api_key=%s, endpoint=%s"
+             % (session_id, config.redact(cfg.api_key), cfg.endpoint))
         if not cfg.enabled:
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
@@ -61,6 +63,17 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
                 return 0
 
             st = state.load(session_id, home)
+
+            # Mint and persist the instance id unconditionally, before any
+            # export decision. A heartbeat pinger starts at SessionStart and
+            # must be able to send this id on its very first ping, even for
+            # a session that starts and then sits idle with nothing to
+            # export -- so this cannot wait on there being spans to send.
+            instance_id = st.get("instance_id")
+            if not instance_id:
+                instance_id = str(uuid.uuid4())
+                st["instance_id"] = instance_id
+                state.save(session_id, home, st)
 
             entries, new_offset = transcript.read_from(transcript_path, st.get("offset", 0))
 
@@ -91,11 +104,6 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
                 out += spans.finalize_session(st, ctx, now_ns)
 
             if out:
-                instance_id = st.get("instance_id")
-                if not instance_id:
-                    instance_id = str(uuid.uuid4())
-                    st["instance_id"] = instance_id
-
                 resource_attrs = {
                     "service.name": cfg.service_name,
                     "service.instance.id": instance_id,
@@ -109,9 +117,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
                      % (session_id, len(out), status))
 
                 if not (status and 200 <= status < 300):
-                    # Export failed: do NOT advance the offset, so the next
-                    # hook invocation retries these same transcript lines.
+                    # Export failed: do NOT advance the offset and do NOT
+                    # count these spans as exported, so the next hook
+                    # invocation retries these same transcript lines.
                     return 0
+
+                st["spans_exported"] = st.get("spans_exported", 0) + len(out)
 
             st["offset"] = new_offset
             state.save(session_id, home, st)

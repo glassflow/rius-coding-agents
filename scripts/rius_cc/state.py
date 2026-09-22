@@ -23,6 +23,7 @@ def new_state() -> dict:
         "root_start_ns": 0,
         "last_ns": 0,
         "open_task_spans": [],
+        "spans_exported": 0,
     }
 
 

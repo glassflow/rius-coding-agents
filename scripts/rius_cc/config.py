@@ -152,7 +152,7 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
     if capture_content is None:
         capture_content = True
     max_attr_bytes = _max_attr_bytes(env)
-    debug = bool(_parse_bool_env(env.get("RIUS_DEBUG")))
+    debug = bool(_parse_bool_env(env.get("RIUS_CLAUDE_DEBUG")))
 
     enabled = False
     reason = "off: no path rule matches %s, and the default is off" % cwd
