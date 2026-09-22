@@ -75,11 +75,21 @@ tracing stays off regardless of any other setting.
 
 | Command | Effect |
 |---|---|
-| `/rius on` | Turn tracing on for the current session only, overriding path rules and env vars. |
-| `/rius off` | Turn tracing off for the current session only, same override strength as `on`. |
-| `/rius clear` | Remove the per-session override, falling back to the normal resolution (env vars, then path rules, then off). |
-| `/rius enable-here` | Add the current working directory to the persistent path rules. |
-| `/rius status` | Print the resolved on/off state, the endpoint, the redacted API key, and spans exported so far this session. |
+| `/rius enable-here` | Add the current working directory to the persistent path rules. This is the normal way to turn tracing on. |
+| `/rius status` | Print the resolved on/off state, the endpoint, the redacted API key, spans exported so far, and the last export error if there was one. |
+| `/rius on --session <id>` | Turn tracing on for one session only, overriding path rules and env vars. |
+| `/rius off --session <id>` | Turn tracing off for one session only, same override strength as `on`. |
+| `/rius clear --session <id>` | Remove that per-session override, falling back to the normal resolution (env vars, then path rules, then off). |
+
+`on`, `off` and `clear` require an explicit `--session` and refuse to run
+without one. They write a per-session override, and the slash command has no
+way to tell them which session it is running in; inferring it from the most
+recently active session would either do nothing useful on a fresh install or
+flip tracing for a different session you happen to have open. `/rius status`
+prints the session id it can see, so the normal flow is `status`, then
+`/rius on --session <that id>` if you really want a one-session override.
+Most of the time you want `/rius enable-here` instead, which needs no session
+id at all.
 
 `/rius status` is the important one. Because the default is off, a plugin
 that's installed correctly but simply not enabled for this folder looks

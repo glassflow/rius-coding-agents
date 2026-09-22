@@ -343,10 +343,16 @@ Defaults match the SDK's where a name is shared.
 
 ### 8.4 Commands
 
-- `/rius on` / `/rius off` — this session only.
+- `/rius on --session <id>` / `/rius off --session <id>` — that session only.
+  `--session` is mandatory: these write a per-session override and must never
+  guess which session they are acting on.
+- `/rius clear --session <id>` — remove that per-session override, falling
+  back to the normal resolution ladder.
 - `/rius enable-here` — add `cwd` to the path rules.
 - `/rius status` — resolved state, the layer that decided it, endpoint,
-  workspace, and spans exported this session.
+  workspace, spans exported this session, and the last export error if any.
+  This is the one action allowed to infer a session id, because it only
+  reads; when it does, it says so.
 
 ## 9. Failure handling
 

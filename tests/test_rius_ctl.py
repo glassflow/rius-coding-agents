@@ -58,6 +58,102 @@ def test_enable_here_is_idempotent(tmp_path):
     assert rules["enabled_paths"].count("/opt/proj") == 1
 
 
+# --- C4: the real /rius path passes no --session at all ------------------
+
+def _fresh_home(tmp_path):
+    home = str(tmp_path)
+    (tmp_path / ".claude" / "rius").mkdir(parents=True)
+    return home
+
+
+def test_on_without_session_refuses_instead_of_guessing(tmp_path):
+    """commands/rius.md never passes --session. On a fresh install there is
+    no state file, so the guessed session id was "" -- which made the
+    override path the sessions DIRECTORY and open(dir, "w") raise
+    IsADirectoryError. /rius on simply did not work on a fresh install."""
+    home = _fresh_home(tmp_path)
+    r = _run(["on"], home, {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    lower = r.stdout.lower()
+    assert "isadirectory" not in lower and "error:" not in lower
+    assert "session" in lower
+    assert "enable-here" in r.stdout          # points at the thing that works
+    assert not (tmp_path / ".claude" / "rius" / "sessions").exists()
+
+
+def test_off_and_clear_without_session_also_refuse(tmp_path):
+    home = _fresh_home(tmp_path)
+    for action in ("off", "clear"):
+        r = _run([action], home, {"RIUS_API_KEY": "glassflow_k"})
+        assert r.returncode == 0
+        assert "enable-here" in r.stdout, action
+        assert "isadirectory" not in r.stdout.lower(), action
+
+
+def test_on_without_session_never_targets_another_live_session(tmp_path):
+    """Two concurrent sessions: the override used to land on whichever one
+    wrote state most recently, silently enabling somebody else's session."""
+    home = _fresh_home(tmp_path)
+    import sys as _sys, pathlib as _pathlib
+    _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent / "scripts"))
+    from rius_cc import state as _state
+    _state.save("other-session", home, _state.new_state())
+
+    r = _run(["on"], home, {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    assert "enable-here" in r.stdout
+    assert not (tmp_path / ".claude" / "rius" / "sessions" / "other-session").exists()
+
+
+def test_on_with_an_empty_session_argument_refuses(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["on", "--session", ""], home, {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    assert "enable-here" in r.stdout
+    assert not (tmp_path / ".claude" / "rius" / "sessions").exists()
+
+
+def test_status_without_session_says_it_inferred_one(tmp_path):
+    """status keeps the fallback -- it only reads -- but must say so."""
+    home = _fresh_home(tmp_path)
+    import sys as _sys, pathlib as _pathlib
+    _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent / "scripts"))
+    from rius_cc import state as _state
+    st = _state.new_state()
+    st["spans_exported"] = 7
+    _state.save("guessed-session", home, st)
+
+    r = _run(["status", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    assert "guessed-session" in r.stdout
+    assert "inferred" in r.stdout.lower()
+    assert "7" in r.stdout
+
+
+def test_status_on_a_fresh_install_does_not_crash(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["status", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    assert "unknown" in r.stdout.lower()
+    assert "error" not in r.stdout.lower()
+
+
+def test_status_with_an_explicit_session_does_not_claim_to_infer(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], home,
+             {"RIUS_API_KEY": "glassflow_k"})
+    assert "inferred" not in r.stdout.lower()
+
+
+def test_enable_here_still_needs_no_session(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home,
+             {"RIUS_API_KEY": "glassflow_k"})
+    assert r.returncode == 0
+    rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
+    assert "/opt/proj" in rules["enabled_paths"]
+
+
 def test_unknown_action_exits_zero_with_usage(tmp_path):
     home = str(tmp_path)
     (tmp_path / ".claude" / "rius").mkdir(parents=True)

@@ -4,6 +4,12 @@
 Actions: on | off | clear | enable-here | status
 Flags:   --session <id>   --cwd <path>
 
+`on`, `off` and `clear` write a per-session override and therefore REFUSE
+to run without an explicit `--session`: guessing the session (from the most
+recently modified state file) either crashes on a fresh install or lands the
+override on somebody else's concurrent session. `status` only reads, so it
+may infer a session -- and says so when it does.
+
 Default is OFF. `status` is the only thing that distinguishes a
 correctly-installed-but-not-yet-enabled plugin from a broken one, so it
 must surface the resolved state, the deciding layer (cfg.reason,
@@ -23,6 +29,27 @@ USAGE = (
     "Usage: rius_ctl.py <on|off|clear|enable-here|status> "
     "[--session <id>] [--cwd <path>]"
 )
+
+# Actions that WRITE a per-session override. These must never guess which
+# session they are acting on: guessing means either crashing on a fresh
+# install (no state file -> session id "" -> the override path is the
+# sessions DIRECTORY) or silently flipping tracing on for whichever other
+# session happened to write state most recently.
+SESSION_WRITE_ACTIONS = ("on", "off", "clear")
+
+NO_SESSION_MESSAGE = """\
+Rius: I cannot tell which session this is, so I will not guess.
+
+`%s` writes a per-session override, and picking the wrong session would
+either do nothing or turn tracing on for a different session you have open.
+
+What to do instead:
+  * `/rius enable-here` -- enable this folder (and everything under it)
+    persistently, via the path rules in ~/.claude/rius/config.json. This is
+    the normal way to turn tracing on and needs no session id.
+  * `/rius status` -- prints the session id it can see; then run
+    `/rius %s --session <that id>` if you really want a one-session override.
+"""
 
 
 def _parse_args(argv):
@@ -93,12 +120,19 @@ def _spans_exported(session_id, home):
     return st.get("spans_exported")
 
 
-def _print_status(session_id, cwd, home):
+def _print_status(session_id, cwd, home, inferred=False):
     cfg = config.resolve(session_id or "", cwd or "", os.environ, home)
     print("Rius tracing: %s" % ("on" if cfg.enabled else "off"))
     print("Reason: %s" % cfg.reason)
     print("cwd: %s" % (cwd or "<unknown, default>"))
-    print("session: %s" % (session_id or "<unknown>"))
+    if not session_id:
+        print("session: <unknown> (no --session given and no session state "
+              "on disk yet)")
+    elif inferred:
+        print("session: %s (inferred: the most recently active session on "
+              "this machine, not necessarily this one)" % session_id)
+    else:
+        print("session: %s" % session_id)
     print("Endpoint: %s" % cfg.endpoint)
     print("API key: %s" % config.redact(cfg.api_key))
     spans = _spans_exported(session_id, home)
@@ -106,35 +140,50 @@ def _print_status(session_id, cwd, home):
         print("Spans exported this session: %s" % spans)
     else:
         print("Spans exported this session: unknown")
+    # "Spans exported: 0" with no explanation is the single most confusing
+    # thing this command can print, so say why when we know.
+    last = state.load(session_id, home).get("last_export_error") if session_id else None
+    if last:
+        print("Last export error: %s (at %s)"
+              % (last.get("reason"), last.get("at")))
+
+
+def dispatch(argv, home):
+    action, session_id, cwd = _parse_args(argv)
+
+    inferred = False
+    if action in SESSION_WRITE_ACTIONS and not session_id:
+        # Refuse loudly rather than guess. Still exit 0, like every path here.
+        print(NO_SESSION_MESSAGE % (action, action))
+        return
+    if not session_id:
+        # `status` only READS, so inferring is safe there -- as long as it
+        # says out loud that it inferred.
+        session_id = _most_recent_session(home) or ""
+        inferred = bool(session_id)
+
+    if action == "on":
+        config.set_session_override(session_id, home, True)
+        print("Rius tracing turned on for session %s." % session_id)
+    elif action == "off":
+        config.set_session_override(session_id, home, False)
+        print("Rius tracing turned off for session %s." % session_id)
+    elif action == "clear":
+        config.set_session_override(session_id, home, None)
+        print("Session override cleared for session %s." % session_id)
+    elif action == "enable-here":
+        target_cwd = cwd or os.getcwd()
+        _enable_here(target_cwd, home)
+        print("Rius tracing enabled for %s." % target_cwd)
+    elif action == "status":
+        _print_status(session_id, cwd, home, inferred=inferred)
+    else:
+        print(USAGE)
 
 
 def main():
     try:
-        home = os.path.expanduser("~")
-        action, session_id, cwd = _parse_args(sys.argv[1:])
-
-        if session_id is None:
-            session_id = _most_recent_session(home)
-            if session_id is None:
-                session_id = ""
-
-        if action == "on":
-            config.set_session_override(session_id, home, True)
-            print("Rius tracing turned on for this session.")
-        elif action == "off":
-            config.set_session_override(session_id, home, False)
-            print("Rius tracing turned off for this session.")
-        elif action == "clear":
-            config.set_session_override(session_id, home, None)
-            print("Session override cleared.")
-        elif action == "enable-here":
-            target_cwd = cwd or os.getcwd()
-            _enable_here(target_cwd, home)
-            print("Rius tracing enabled for %s." % target_cwd)
-        elif action == "status":
-            _print_status(session_id, cwd, home)
-        else:
-            print(USAGE)
+        dispatch(sys.argv[1:], os.path.expanduser("~"))
     except BaseException as exc:  # never fail this CLI
         print("rius_ctl.py error: %s" % exc)
     sys.exit(0)
