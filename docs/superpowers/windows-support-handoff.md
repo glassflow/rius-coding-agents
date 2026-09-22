@@ -365,3 +365,65 @@ falls back to `os.getppid()` when `ps` fails. On POSIX `ps` is effectively
 always present, so this should never trigger; when it does, the result is a
 pinger that runs unwatched (and logs it) instead of one that exits
 immediately. That is strictly the better failure.
+
+---
+
+# Deferred minors from the pre-merge review (carried forward verbatim)
+
+The fix wave addressed C1, C2, I1, I2, I3, M1, M3, M4, M6, M10 and M12. These six
+were knowingly deferred. Recorded here because they otherwise existed only in a
+review transcript. None blocks merge; each is a real observation.
+
+**M2 — the Windows locking tests assert the fake's semantics, not Windows'.**
+`tests/test_platform_compat.py` and the re-run guarantees in `tests/test_state.py`
+derive exclusivity from `FakeMsvcrt`'s `(st_dev, st_ino) -> fd` registry. What is
+under test is the WIRING — that `try_lock` returns False on OSError, that
+`session_lock` propagates it, that `unlock` is called. What is NOT under test is
+that Windows actually refuses the second `os.open`. Raised so the test names are
+not later mistaken for Windows verification. Closes with a real Windows CI job
+(RIUS-945).
+
+**M5 — `bootstrap.log` is unrotated, uncapped, and written unconditionally.**
+`hook.sh`. Inconsistent with `rius_cc/log.py`, which writes date-stamped files
+gated on `cfg.debug`. Three lines per hook event, and PreToolUse/PostToolUse fire
+per tool call, so a user with no Python accumulates hundreds of lines per session.
+Also the claim that it "distinguishes the failure cases" holds only one way: its
+PRESENCE means "no interpreter found", but its ABSENCE is ambiguous between "hook
+never ran", "hook ran fine" and "mkdir failed". Fix: write
+`bootstrap-YYYY-MM-DD.log` to match `log.py`, or dedupe same-message-same-day.
+
+**M7 — the glob spelling of a degenerate path rule is still accepted, on both
+platforms.** `scripts/rius_cc/config.py`. A rule of `C:\*` passes `_is_usable_rule`
+(`rule[3:].strip("\\/")` is `"*"`, truthy), normalises to `c:/*`, and fnmatch
+matches across separators — enabling a whole drive with content capture. This
+exactly mirrors the pre-existing POSIX behaviour of `/*`, so it is NOT a
+regression. The issue is that `test_degenerate_windows_rules_never_match_anything`
+enumerates `C:\`, `C:/`, `C:`, `\\`, `\\srv`, `//`, `*`, `**` and OMITS `C:\*` and
+`C:/*`, so it reads as covering the degenerate cases when the glob spelling is
+uncovered. Either add those literals and tighten `_is_usable_rule`, or add an
+explicit "known-accepted" note covering both the POSIX and Windows spellings.
+Related and smaller: `\\srv\share` (bare share root) is accepted, arguably as
+broad as `C:\`.
+
+**M8 — one microscopic POSIX behaviour change.** A rule of `//x` (double slash,
+single component) was usable before and is now rejected by the UNC arm in
+`config.py`. `//srv/share` and all ordinary `/...` rules are unaffected.
+Effectively unreachable; noted only for completeness of the regression sweep.
+
+**M9 — `IS_WINDOWS` is snapshotted in two places, so "simulate Windows" is not a
+single switch.** `config.py` does `from .platform_compat import IS_WINDOWS`,
+creating an independent copy; `tests/test_config.py`'s `as_windows` patches
+`config.IS_WINDOWS` while every other fixture patches
+`platform_compat.IS_WINDOWS`. Consequence: `test_detached_spawn_kwargs_reach_popen_on_windows`
+runs with a "Windows" platform_compat and a POSIX config — a chimera. Fine for
+what that test asserts, but no test can drive the whole system down the Windows
+path, and the next person to try will be confused. Prefer reading
+`platform_compat.IS_WINDOWS` at call time, or a `platform_compat.is_windows()`
+accessor.
+
+**M11 — `hooks.json` now requires `bash` on PATH.** Previously the command was the
+script path itself, needing only the shebang and the exec bit. On a POSIX box
+without bash (minimal Alpine, NixOS) hooks that work today would stop. `hook.sh`
+is `#!/bin/sh`-clean, so `sh "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh"` would work
+everywhere — but it may interact with Claude Code's `"shell": "bash"` field, so
+verify before changing. Very low likelihood; noted for the regression sweep.
