@@ -1,7 +1,7 @@
 import struct
 from unittest import mock
 
-from rius_cc import otlp, spans
+from rius_cc import otlp, proto, spans
 
 
 def _span(**kw):
@@ -31,14 +31,44 @@ def test_scope_name_is_glassflow():
 
 
 def test_root_span_omits_parent_field():
-    body = otlp.encode({}, [_span(parent_span_id=None)])
-    assert b"\x22" not in body          # tag for field 4, parent_span_id
+    """`b"\\x22" not in body` was a raw byte scan for a value that is also the
+    ASCII double quote, so it would have failed the moment any name or
+    attribute contained one. Compare the two encodings instead."""
+    parent = "c" * 16
+    without = otlp.encode({}, [_span(parent_span_id=None, name='say "hi"')])
+    with_parent = otlp.encode({}, [_span(parent_span_id=parent, name='say "hi"')])
+
+    assert bytes.fromhex(parent) not in without
+    assert bytes.fromhex(parent) in with_parent
+    # field 4, LEN, 8 bytes of span id: tag + length + payload
+    assert proto.bytes_field(4, bytes.fromhex(parent)) in with_parent
+    assert len(with_parent) == len(without) + 10
 
 
 def test_attribute_types_encode_distinctly():
+    """The old version asserted only that two substrings appeared, so it
+    would have passed with every value encoded as a string."""
     body = otlp.encode({}, [_span(attributes={
         "s": "txt", "i": 7, "b": True, "d": 1.5, "arr": ["x", "y"]})])
-    assert b"txt" in body and b"arr" in body
+
+    # AnyValue field 1 = string, 2 = bool (varint), 3 = int, 4 = double,
+    # 5 = array. Each value must use its OWN field, not field 1.
+    assert proto.string_field(1, "txt") in body
+    assert proto.tag(2, proto.WIRE_VARINT) + proto.varint(1) in body
+    assert proto.varint_field(3, 7) in body
+    assert proto.double_field(4, 1.5) in body
+    assert proto.ld(5, proto.ld(1, proto.string_field(1, "x"))
+                    + proto.ld(1, proto.string_field(1, "y"))) in body
+    # the give-away that a value got stringified
+    for stringified in (b"True", b"true", b"1.5", b"'x'"):
+        assert proto.string_field(1, stringified.decode()) not in body
+
+
+def test_a_none_attribute_is_an_empty_any_value_not_the_word_none():
+    body = otlp.encode({}, [_span(attributes={"k": None})])
+    assert b"None" not in body
+    # key present, value submessage present and empty
+    assert proto.string_field(1, "k") + proto.ld(2, b"") in body
 
 
 def test_empty_span_list_is_empty_body():

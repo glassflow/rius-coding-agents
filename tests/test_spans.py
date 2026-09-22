@@ -15,12 +15,23 @@ def _new_state():
 
 
 def test_ids_are_derived_and_stable():
-    # Literal expectations: if the derivation ever changes, in-flight sessions
-    # orphan their spans. This test exists to make that change loud.
-    assert spans.trace_id_for("abc") == spans.trace_id_for("abc")
+    """Literal expectations, as spec section 10 requires. If the derivation
+    ever changes, in-flight sessions orphan their spans and a resumed session
+    silently starts a second trace. The previous version of this test asserted
+    only shape and determinism, so swapping sha256 for md5 would have passed
+    it -- it could not fail."""
+    assert spans.trace_id_for("abc") == "ba7816bf8f01cfea414140de5dae2223"
+    assert spans.span_id_for("abc") == "ba7816bf8f01cfea"
+
+    sid = "11111111-1111-1111-1111-111111111111"
+    assert spans.trace_id_for(sid) == "bafde89c041e1756082b933aaf16cad8"
+    assert spans.span_id_for("session:" + sid) == "d4dd0dd4af7527a8"
+    assert spans.span_id_for("turn:p1") == "a5817ee2869029be"
+    assert spans.span_id_for("toolu_1") == "4838a0c252e24a61"
+
+    # and the shape the OTLP encoder relies on
     assert len(spans.trace_id_for("abc")) == 32
     assert len(spans.span_id_for("abc")) == 16
-    assert int(spans.trace_id_for("abc"), 16) >= 0          # valid hex
     assert spans.trace_id_for("abc") != spans.trace_id_for("abd")
 
 
@@ -221,6 +232,26 @@ def test_truncate_marks_what_it_removed():
     assert out.startswith("x" * 10)
     assert "[truncated 90 bytes]" in out
     assert spans.truncate("short", 100) == "short"
+
+
+def test_truncate_measures_and_slices_in_the_same_unit():
+    """It measured BYTES and sliced CHARACTERS, so a non-ASCII value came
+    out up to 4x over the cap and the reported byte count was wrong."""
+    value = "é" * 100                       # 200 bytes, 100 characters
+    out = spans.truncate(value, 10)
+    head = out.split(" …[truncated")[0]
+    assert len(head.encode("utf-8")) <= 10, "truncated value is still over the cap"
+    assert "[truncated 190 bytes]" in out
+
+    # a cut landing mid-codepoint must drop the partial character, not
+    # produce a replacement char and not raise
+    head11 = spans.truncate(value, 11).split(" …[truncated")[0]
+    assert head11 == "é" * 5
+    assert "�" not in head11
+
+    # a 4-byte codepoint, the worst case for the old slice
+    emoji = spans.truncate("🙂" * 50, 6).split(" …[truncated")[0]
+    assert len(emoji.encode("utf-8")) <= 6
 
 
 def test_finalize_session_emits_no_root_if_one_never_started():

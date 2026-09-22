@@ -20,6 +20,10 @@ RETRY_DELAY_S = 0.5
 
 
 def _any_value(value: Any) -> bytes:
+    # An AnyValue with no field set is how OTLP spells "no value". Falling
+    # through to str(value) would emit the literal string "None".
+    if value is None:
+        return b""
     # bool MUST be checked before int -- bool is an int subclass in Python.
     if isinstance(value, bool):
         return proto.tag(2, proto.WIRE_VARINT) + proto.varint(1 if value else 0)

@@ -50,11 +50,19 @@ def span_id_for(key: str) -> str:
 
 
 def truncate(value: str, limit: int) -> str:
+    """Cap a value at `limit` BYTES, with an explicit marker for the rest.
+
+    Slice the encoded bytes, not the characters: measuring bytes and slicing
+    characters let a non-ASCII value come out up to 4x over the cap, and made
+    the reported byte count wrong. errors="ignore" drops a codepoint the cut
+    landed in the middle of, rather than emitting a replacement character.
+    """
     encoded = value.encode("utf-8")
     if len(encoded) <= limit:
         return value
     dropped = len(encoded) - limit
-    return value[:limit] + " …[truncated %d bytes]" % dropped
+    head = encoded[:limit].decode("utf-8", errors="ignore")
+    return head + " …[truncated %d bytes]" % dropped
 
 
 class Ctx:
