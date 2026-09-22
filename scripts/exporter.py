@@ -12,8 +12,8 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, log as rius_log, otlp, spans, state, subagents,
-                     transcript)
+from rius_cc import (config, log as rius_log, otlp, platform_compat, spans,
+                     state, subagents, transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -285,7 +285,7 @@ def main() -> None:
             wrapper = json.load(fh)
         event = wrapper.get("event")
         payload = wrapper.get("payload") or {}
-        home = os.environ.get("HOME", os.path.expanduser("~"))
+        home = platform_compat.home_dir(os.environ)
         run(event, payload, os.environ, home, instance_id)
         try:
             os.remove(payload_path)

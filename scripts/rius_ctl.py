@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, state  # noqa: E402
+from rius_cc import config, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py <on|off|clear|enable-here|status> "
@@ -133,6 +133,7 @@ def _print_status(session_id, cwd, home, inferred=False):
               "this machine, not necessarily this one)" % session_id)
     else:
         print("session: %s" % session_id)
+    print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
     print("API key: %s" % config.redact(cfg.api_key))
     spans = _spans_exported(session_id, home)
@@ -183,7 +184,7 @@ def dispatch(argv, home):
 
 def main():
     try:
-        dispatch(sys.argv[1:], os.path.expanduser("~"))
+        dispatch(sys.argv[1:], platform_compat.home_dir(os.environ))
     except BaseException as exc:  # never fail this CLI
         print("rius_ctl.py error: %s" % exc)
     sys.exit(0)

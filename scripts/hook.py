@@ -89,9 +89,9 @@ def main() -> None:
             return
 
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rius_cc import config, state
+        from rius_cc import config, platform_compat, state
 
-        home = os.path.expanduser("~")
+        home = platform_compat.home_dir(os.environ)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
@@ -113,6 +113,9 @@ def main() -> None:
             json.dump({"event": event, "payload": payload}, fh)
 
         stderr, log_fh = _spawn_stderr(cfg, home)
+        # detach: the child must outlive this hook process. setsid on POSIX,
+        # DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP on Windows.
+        detach = platform_compat.detached_child_kwargs()
         try:
             exporter = os.path.join(script_dir, "exporter.py")
             subprocess.Popen(
@@ -120,8 +123,8 @@ def main() -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
-                start_new_session=True,      # detach: outlives this process
                 close_fds=True,
+                **detach
             )
 
             if event == "SessionStart":
@@ -135,8 +138,8 @@ def main() -> None:
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr,
-                    start_new_session=True,
                     close_fds=True,
+                    **detach
                 )
         finally:
             if log_fh is not None:
@@ -157,27 +160,30 @@ def main() -> None:
 
 
 def _claude_code_pid() -> int:
-    """Best-effort pid of the live Claude Code process for this session.
+    """Best-effort pid of the live Claude Code process, or 0 if unknown.
 
-    hooks.json invokes this script through `bash -c "... hook.py EVENT"`, so
-    this process's immediate parent is that short-lived bash, not Claude
-    Code -- bash exits right after hook.py does, regardless of whether
-    Claude Code itself is still alive. Walk up one more level (bash's
-    parent) via `ps`, which is Claude Code's actual pid. Falls back to the
-    immediate parent if that lookup fails for any reason.
+    hooks.json invokes this script through a shell, so this process's
+    immediate parent is that short-lived shell, not Claude Code -- it exits
+    right after hook.py does, regardless of whether Claude Code is still
+    alive. Walk up one more level; the grandparent is Claude Code's actual
+    pid. `rius_cc.platform_compat` does the walk: `ps` on POSIX, a Toolhelp
+    process snapshot on Windows, where `ps` does not exist.
+
+    It returns 0, NOT the immediate parent, when the walk fails. Handing the
+    pinger the shell's pid is worse than handing it nothing: the shell is
+    already dying, so the pinger would see a dead parent on its first
+    iteration and exit having sent one ping -- a session that silently
+    produces no heartbeats, which is the bug this code path had once before.
+    Worse, a pid that has since been recycled would have the pinger watching
+    an unrelated process. 0 means "unwatched": the pinger then relies on the
+    stop file and its 12-hour cap, and says so in the log.
     """
-    ppid = os.getppid()
     try:
-        out = subprocess.check_output(
-            ["ps", "-o", "ppid=", "-p", str(ppid)],
-            stderr=subprocess.DEVNULL, timeout=1,
-        )
-        grandparent = int(out.decode().strip())
-        if grandparent > 0:
-            return grandparent
+        from rius_cc import platform_compat
+        grandparent = platform_compat.parent_pid_of(os.getppid())
     except BaseException:
-        pass
-    return ppid
+        return 0
+    return grandparent if grandparent > 0 else 0
 
 
 if __name__ == "__main__":

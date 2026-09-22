@@ -4,15 +4,20 @@ State is the small dict the span builder (spans.py) reads and mutates
 across hook invocations: transcript offset, open tool/turn spans, and
 root span bookkeeping. Saves are atomic (temp file + os.replace) and a
 corrupt state file resets to a fresh state instead of raising.
+
+Nothing here imports a platform-specific module: `fcntl` at module scope is
+exactly what made the detached exporter die on import under Windows, with
+its stderr on DEVNULL and nothing anywhere saying so.
 """
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import tempfile
 import time
+
+from . import platform_compat
 
 RETRY_INTERVAL_S = 0.05
 
@@ -81,7 +86,7 @@ def save(session_id: str, home: str, state: dict) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(state, fh)
-        os.replace(tmp_path, path)
+        platform_compat.replace_atomic(tmp_path, path)
     except BaseException:
         try:
             os.remove(tmp_path)
@@ -101,6 +106,11 @@ def session_lock(session_id: str, home: str, block_timeout: float = 0.0,
     bounded wait -- if they lose the lock, nothing ever finalises the session
     and the root span stays pending forever.
 
+    The descriptor is opened fresh every call and closed in `finally`: both
+    backing implementations (flock, and msvcrt byte-range locking) are
+    per-descriptor, so a cached fd would make a process invisible to its own
+    lock.
+
     The yield deliberately sits OUTSIDE the try/except: an OSError raised
     inside the caller's `with` body propagates back into this generator, and
     a yield in the handler would make it resume and yield a second time,
@@ -109,19 +119,19 @@ def session_lock(session_id: str, home: str, block_timeout: float = 0.0,
     """
     path = lock_path(session_id, home)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR)
+    fd = platform_compat.open_lock_file(path)
+    acquired = False
     try:
         deadline = clock() + max(0.0, block_timeout)
-        acquired = False
         while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if platform_compat.try_lock(fd):
                 acquired = True
                 break
-            except OSError:
-                if clock() >= deadline:
-                    break
-                sleep(RETRY_INTERVAL_S)
+            if clock() >= deadline:
+                break
+            sleep(RETRY_INTERVAL_S)
         yield acquired
     finally:
+        if acquired:
+            platform_compat.unlock(fd)
         os.close(fd)

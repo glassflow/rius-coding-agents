@@ -10,11 +10,16 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 from typing import Mapping, Optional
+
+from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
 DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
+
+_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
@@ -100,7 +105,7 @@ def _read_path_rules(home: str) -> dict:
 
 
 def _is_usable_rule(rule) -> bool:
-    """Reject rules that would match (almost) every path on the machine.
+    r"""Reject rules that would match (almost) every path on the machine.
 
     `cwd.startswith(rule.rstrip("/") + "/")` is true for EVERY absolute path
     when rule is "" or "/", and fnmatch turns "*" into the same thing. A
@@ -108,19 +113,45 @@ def _is_usable_rule(rule) -> bool:
     silently enable tracing -- with full content capture -- for the whole
     filesystem. A rule has to be an absolute path naming something below the
     root to be worth honouring; anything else is a typo, not an intent.
+
+    "Absolute" is platform-shaped. On Windows it is `C:\proj` or
+    `\\server\share\proj`; the POSIX-only leading-"/" test rejected every
+    rule `/rius enable-here` had just written there, so tracing could never
+    be turned on and nothing said why. The degenerate cases are rejected in
+    the Windows spelling too: a bare drive root (`C:\`) is as broad as "/".
     """
-    if not isinstance(rule, str):
+    if not isinstance(rule, str) or not rule:
         return False
-    if not rule.startswith("/"):
-        return False           # "", " ", "*", "**", "opt/proj"
-    if not rule.rstrip("/"):
-        return False           # "/", "//"
-    return True
+    if rule.startswith("/") and not rule.startswith("//"):
+        return bool(rule.rstrip("/"))       # "/" -> the whole filesystem
+    if _DRIVE_RE.match(rule):
+        return bool(rule[3:].strip("\\/"))  # "C:\" -> the whole drive
+    if rule.startswith("\\\\") or rule.startswith("//"):
+        # UNC needs a server AND a share: "\\srv" alone is not a location.
+        parts = [p for p in rule.replace("/", "\\").split("\\") if p]
+        return len(parts) >= 2
+    return False                            # "", " ", "*", "**", "opt/proj"
+
+
+def _normalise_for_match(path: str) -> str:
+    r"""Compare paths the way the local filesystem would.
+
+    A no-op on POSIX. On Windows the separator is either slash and the
+    comparison is case-insensitive, so `C:\Proj` and `c:/proj` are one
+    path -- treating them as two means a rule the user just wrote silently
+    fails to match. This only ever merges spellings the OS itself already
+    considers identical, so it cannot widen a rule beyond its own directory.
+    """
+    if not IS_WINDOWS:
+        return path
+    return path.replace("\\", "/").lower()
 
 
 def _rule_matches(cwd: str, rule: str) -> bool:
     if not _is_usable_rule(rule):
         return False
+    cwd = _normalise_for_match(cwd)
+    rule = _normalise_for_match(rule)
     if cwd == rule:
         return True
     if cwd.startswith(rule.rstrip("/") + "/"):

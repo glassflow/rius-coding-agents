@@ -57,6 +57,21 @@ This works against a private `github.com/glassflow/rius-coding-agents` repo
 using your existing git credentials -- no extra auth step is needed if you can
 already `git clone` the repo.
 
+### Platform support
+
+macOS, Linux and Windows. The plugin is pure standard library, so the only
+requirement is a Python 3.9+ on `PATH`.
+
+On Windows the hook is launched through Git Bash, which Claude Code already
+needs for its own Bash tool, and `scripts/hook.sh` picks the interpreter --
+`py`, then `python`, then `python3`. If it cannot find one it writes a line
+saying so to `~/.claude/rius/log/bootstrap.log` rather than doing nothing
+quietly. `/rius status` prints which platform implementation is live.
+
+If Claude Code on your machine falls back to PowerShell because Git Bash is
+not installed, the hooks will not run. That is the one configuration this
+plugin does not yet cover.
+
 ## Enabling a folder
 
 Tracing defaults to off everywhere. To turn it on for the folder you're

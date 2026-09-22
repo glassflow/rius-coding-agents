@@ -332,3 +332,138 @@ def test_session_end_does_not_spawn_heartbeat(tmp_path):
     pid_path = os.path.join(state.state_dir(home), sid + ".heartbeat.pid")
     time.sleep(0.3)
     assert not os.path.exists(pid_path)
+
+
+# --- Cross-platform spawn and parent lookup ---------------------------------
+
+import json as _json  # noqa: E402
+from rius_cc import platform_compat  # noqa: E402
+from tests.test_platform_compat import FakeMsvcrt  # noqa: E402
+
+HOOK_SH = str(pathlib.Path(__file__).parent.parent / "scripts" / "hook.sh")
+HOOKS_JSON = pathlib.Path(__file__).parent.parent / "hooks" / "hooks.json"
+
+
+def test_detached_spawn_kwargs_reach_popen_on_posix(tmp_path, monkeypatch):
+    """TRAP 3: the child must outlive this hook process. On POSIX that is
+    setsid, and it is the only reason the exporter survives at all."""
+    env, home = _enabled_env(tmp_path)
+    calls = _run_in_process(
+        monkeypatch, "PostToolUse",
+        {"session_id": "detach-1", "cwd": str(tmp_path),
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+    assert calls[0]["kwargs"]["start_new_session"] is True
+    assert "creationflags" not in calls[0]["kwargs"]
+
+
+def test_detached_spawn_kwargs_reach_popen_on_windows(tmp_path, monkeypatch):
+    """start_new_session is POSIX-only. Windows needs creationflags, and a
+    hook that passed start_new_session there would spawn nothing."""
+    monkeypatch.setattr(platform_compat, "IS_WINDOWS", True)
+    # The session lock now goes through msvcrt too -- without this the hook
+    # would swallow the ImportError and spawn nothing, which is precisely
+    # the silent failure being fixed.
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt())
+    env, home = _enabled_env(tmp_path)
+    calls = _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": "detach-2", "cwd": str(tmp_path),
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+    assert len(calls) == 2
+    for call in calls:
+        kwargs = call["kwargs"]
+        assert "start_new_session" not in kwargs
+        flags = kwargs["creationflags"]
+        assert flags & platform_compat.DETACHED_PROCESS
+        assert flags & platform_compat.CREATE_NEW_PROCESS_GROUP
+
+
+def test_claude_code_pid_never_falls_back_to_the_dying_shell(monkeypatch):
+    """TRAP 5. The immediate parent is the shell hooks.json spawned, and it
+    exits the moment hook.py does. Handing the pinger that pid makes it see
+    a dead parent on its first iteration and exit -- a session that silently
+    produces no heartbeats, which is a bug this code path has had before. A
+    recycled pid would be worse still: the pinger would watch a stranger.
+    0 means 'unwatched', and the pinger says so."""
+    monkeypatch.setattr(platform_compat, "parent_pid_of", lambda _pid: 0)
+    got = hook_mod._claude_code_pid()
+    assert got == 0
+    assert got != os.getppid()
+
+
+def test_claude_code_pid_uses_the_grandparent_when_known(monkeypatch):
+    monkeypatch.setattr(platform_compat, "parent_pid_of", lambda _pid: 4242)
+    assert hook_mod._claude_code_pid() == 4242
+
+
+def test_claude_code_pid_survives_a_raising_lookup(monkeypatch):
+    def boom(_pid):
+        raise OSError("no ps, no toolhelp")
+    monkeypatch.setattr(platform_compat, "parent_pid_of", boom)
+    assert hook_mod._claude_code_pid() == 0
+
+
+# --- TRAP 4: how the hook is invoked at all ---------------------------------
+
+def test_hooks_json_does_not_rely_on_the_shebang():
+    """Windows has no shebang support, so a hooks.json that executes
+    hook.py directly is a plugin that does nothing there, silently."""
+    wired = _json.loads(HOOKS_JSON.read_text())["hooks"]
+    assert wired, "no hook events wired"
+    for event, groups in wired.items():
+        for group in groups:
+            for entry in group["hooks"]:
+                command = entry["command"]
+                assert "hook.sh" in command, \
+                    "%s is invoked without the interpreter-resolving launcher" % event
+                assert command.endswith(" " + event), command
+                assert entry["shell"] == "bash", \
+                    "%s must declare its shell rather than inherit one" % event
+
+
+def test_launcher_runs_the_hook_end_to_end(tmp_path):
+    """The launcher is what Claude Code actually executes, so it -- not just
+    hook.py -- has to produce the hook's effects."""
+    env, home = _enabled_env(tmp_path)
+    sid = "launcher-1"
+    r = subprocess.run(
+        ["bash", HOOK_SH, "SessionEnd"],
+        input=_json.dumps({"session_id": sid, "cwd": str(tmp_path),
+                           "transcript_path": "/nonexistent.jsonl"}),
+        capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0
+    assert r.stdout.strip() == "", "the launcher wrote to the hook control channel"
+    assert os.path.exists(os.path.join(state.state_dir(home),
+                                       sid + ".heartbeat.stop"))
+
+
+def test_launcher_exits_zero_and_silent_on_garbage(tmp_path):
+    env, _home = _enabled_env(tmp_path)
+    r = subprocess.run(["bash", HOOK_SH, "Stop"], input="not json",
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
+    """A hook that can find no Python can only do one useful thing: leave a
+    breadcrumb. Exiting 0 with nothing written is the failure mode this
+    whole plugin exists to avoid."""
+    home = tmp_path / "home"
+    home.mkdir()
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    # A PATH with the shell's own utilities but no python of any name.
+    for tool in ("mkdir", "date", "cat"):
+        for candidate in ("/bin/" + tool, "/usr/bin/" + tool):
+            if os.path.exists(candidate):
+                os.symlink(candidate, str(fakebin / tool))
+                break
+    r = subprocess.run(["/bin/sh", HOOK_SH, "Stop"], input="{}",
+                       capture_output=True, text=True, timeout=30,
+                       env={"PATH": str(fakebin), "HOME": str(home)})
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    log = home / ".claude" / "rius" / "log" / "bootstrap.log"
+    assert log.exists(), "no Python and no explanation anywhere"
+    assert "no Python interpreter found" in log.read_text()

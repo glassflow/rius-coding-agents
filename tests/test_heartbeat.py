@@ -394,3 +394,65 @@ def test_main_does_nothing_when_disabled(monkeypatch, home):
     monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
     heartbeat.main()
     assert called["n"] == 0
+
+
+# --- Cross-platform liveness ------------------------------------------------
+
+from rius_cc import platform_compat  # noqa: E402
+
+
+def test_liveness_never_uses_os_kill_on_windows(tmp_path, monkeypatch):
+    """TRAP 1, at the call site that would do the damage. os.kill(pid, 0) is
+    a probe on POSIX and an attack on Windows: CTRL_C_EVENT is 0, so signal
+    0 becomes GenerateConsoleCtrlEvent(CTRL_C_EVENT, pid) aimed at Claude
+    Code's console process group, and on a build without console IO it
+    reaches TerminateProcess instead. The pinger must never get there."""
+    monkeypatch.setattr(platform_compat, "IS_WINDOWS", True)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("the heartbeat signalled the process it watches")
+
+    monkeypatch.setattr(os, "kill", explode)
+    monkeypatch.setattr(platform_compat, "_kernel32",
+                        lambda: _FakeKernel32Alive())
+
+    sent = []
+    pinger, _clock, _sleeps = _make_pinger(
+        tmp_path, _stop_writer(tmp_path, sent), watch_pid=4321)
+    pinger.run()
+    assert any(p.get("stopped") for p in sent)
+
+
+class _FakeKernel32Alive:
+    def OpenProcess(self, access, inherit, pid):
+        assert access == platform_compat.PROCESS_QUERY_LIMITED_INFORMATION
+        return 0x99
+
+    def GetExitCodeProcess(self, handle, out_ref):
+        out_ref._obj.value = platform_compat.STILL_ACTIVE
+        return 1
+
+    def CloseHandle(self, handle):
+        return 1
+
+
+def test_unwatched_pinger_keeps_running_instead_of_exiting(tmp_path, monkeypatch):
+    """TRAP 5's degradation. When the parent cannot be identified hook.py
+    passes 0. The pinger must NOT treat that as a dead parent and leave --
+    that is a session that silently produces no heartbeats. It runs on the
+    stop file and the lifetime cap instead, and says so."""
+    probed = []
+    monkeypatch.setattr(platform_compat, "pid_alive",
+                        lambda pid: probed.append(pid) or True)
+
+    sent, logged = [], []
+    pinger, _clock, _sleeps = _make_pinger(
+        tmp_path, _stop_writer(tmp_path, sent, after=2), watch_pid=0,
+        interval=0.0, log=logged.append)
+    pinger.run()
+
+    assert len(sent) >= 2, "the unwatched pinger exited after its first ping"
+    assert any(p.get("stopped") for p in sent), "no final stopped ping"
+    assert probed == [], "pid 0 must never be probed"
+    assert any("unwatched" in m for m in logged), \
+        "running unwatched was not reported anywhere"

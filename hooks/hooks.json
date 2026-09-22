@@ -2,22 +2,70 @@
   "description": "Stream this Claude Code session to Rius as OTLP traces",
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" SessionStart", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" SessionStart",
+            "shell": "bash"
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" UserPromptSubmit", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" UserPromptSubmit",
+            "shell": "bash"
+          }
+        ]
+      }
     ],
     "PreToolUse": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" PreToolUse", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" PreToolUse",
+            "shell": "bash"
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" PostToolUse", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" PostToolUse",
+            "shell": "bash"
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" Stop", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" Stop",
+            "shell": "bash"
+          }
+        ]
+      }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" SessionEnd", "shell": "bash" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" SessionEnd",
+            "shell": "bash"
+          }
+        ]
+      }
     ]
   }
 }

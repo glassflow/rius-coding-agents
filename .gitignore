@@ -17,3 +17,6 @@ htmlcov/
 
 # personal, holds a real credential for local acceptance testing
 .claude/settings.local.json
+
+# agent scratch: reports, research, drafts
+.superpowers/

@@ -33,10 +33,15 @@ Contract (payload v1), verified against the Rius Python SDK
 Lifetime -- exits on the FIRST of:
   1. The stop file appears (written by hook.py on SessionEnd). Sends the
      final ``stopped: true`` ping first.
-  2. The watched Claude Code process is no longer alive
-     (``os.kill(pid, 0)`` raises). Exits WITHOUT a stopped ping -- claiming
-     a clean stop for a killed process would be a lie; the backend's
-     stale -> gone path exists for exactly this case.
+  2. The watched Claude Code process is no longer alive. Exits WITHOUT a
+     stopped ping -- claiming a clean stop for a killed process would be a
+     lie; the backend's stale -> gone path exists for exactly this case.
+     The liveness probe lives in ``rius_cc.platform_compat.pid_alive``:
+     ``os.kill(pid, 0)`` is a harmless probe on POSIX but an ATTACK on
+     Windows (see that module), so it is never called there. A watch pid of
+     0 means "the parent could not be identified"; the pinger then runs
+     unwatched, bounded by the stop file and the 12-hour cap, rather than
+     exiting at once and producing no heartbeats at all.
   3. A 12-hour absolute cap, so no bug can leave a pinger running forever.
      Exits WITHOUT a stopped ping, exactly like the dead-parent case:
      ``stopped`` describes the AGENT, not the pinger, and a session still
@@ -59,6 +64,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from rius_cc import platform_compat  # noqa: E402
 
 PAYLOAD_VERSION = 1
 OPEN_TRACES_CAP = 32
@@ -149,15 +158,8 @@ class Pinger:
         return os.path.join(self._state_dir(), self.session_id + ".heartbeat.pid")
 
     def _pid_alive(self, pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True  # exists, just owned by someone else
-        except OSError:
-            return False
-        return True
+        """Never os.kill: on Windows that terminates or Ctrl+C's the target."""
+        return platform_compat.pid_alive(pid)
 
     def acquire_pid_lock(self) -> bool:
         """False if another live pinger already owns this session."""
@@ -211,6 +213,11 @@ class Pinger:
             self._log("another live pinger already owns this session")
             return
         try:
+            if self.watch_pid <= 0:
+                # Said out loud rather than swallowed: without a watch pid
+                # the only exits left are the stop file and the cap.
+                self._log("no watchable parent pid; running unwatched until "
+                          "the stop file or the lifetime cap")
             self.clear_stop_file()
             start = self.clock()
             self._send(stopped=False)
@@ -219,7 +226,7 @@ class Pinger:
                 if os.path.exists(self.stop_path()):
                     self._send(stopped=True)
                     return
-                if not self._pid_alive(self.watch_pid):
+                if self.watch_pid > 0 and not self._pid_alive(self.watch_pid):
                     return  # killed process: no stopped ping, that would lie
                 if self.clock() - start >= self.max_lifetime:
                     return  # cap on the PINGER, not evidence the agent
@@ -245,7 +252,6 @@ def main() -> None:
     except ValueError:
         return
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from rius_cc import config, log as rius_log, state
 
     cfg = config.resolve(session_id, cwd, os.environ, home)
@@ -265,7 +271,8 @@ def main() -> None:
 
     url = heartbeat_url(cfg.endpoint)
     transport = http_transport(url, cfg.api_key)
-    log("starting: watching pid %d, posting to %s" % (watch_pid, url))
+    log("starting: watching pid %s, posting to %s"
+        % (watch_pid if watch_pid > 0 else "<unknown>", url))
     pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport,
                     watch_pid, log=log)
     pinger.run()

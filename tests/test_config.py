@@ -161,3 +161,86 @@ def test_missing_api_key_mentioned_even_when_default_off(tmp_path):
     c = config.resolve("s1", "/x/y", {}, home)
     assert c.enabled is False
     assert "RIUS_API_KEY" in c.reason
+
+
+# --- Windows path rules -----------------------------------------------------
+#
+# `/rius enable-here` writes the cwd verbatim into enabled_paths. On Windows
+# that is `C:\proj`, which the POSIX-only leading-slash check rejected as
+# unusable -- so enable-here reported success, tracing stayed off, and
+# nothing anywhere said why.
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture
+def as_windows(monkeypatch):
+    monkeypatch.setattr(config, "IS_WINDOWS", True)
+
+
+def test_windows_drive_path_rule_enables_folder_and_subfolders(tmp_path, as_windows):
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["C:\\Users\\kiran\\proj"]}, fh)
+    assert config.resolve("s1", "C:\\Users\\kiran\\proj",
+                          BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "C:\\Users\\kiran\\proj\\src",
+                          BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "C:\\Users\\kiran\\other",
+                          BASE_ENV, home).enabled is False
+
+
+def test_windows_matching_ignores_case_and_separator(tmp_path, as_windows):
+    """The Windows filesystem treats these as one path, so a rule the user
+    just wrote must not fail to match its own directory."""
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["C:\\Users\\Kiran\\Proj"]}, fh)
+    for spelling in ("c:/users/kiran/proj",
+                     "C:/Users/Kiran/Proj/src",
+                     "c:\\USERS\\kiran\\PROJ\\deep"):
+        assert config.resolve("s1", spelling, BASE_ENV, home).enabled is True, spelling
+
+
+def test_windows_unc_path_rule_works(tmp_path, as_windows):
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["\\\\build\\share\\proj"]}, fh)
+    assert config.resolve("s1", "\\\\build\\share\\proj\\src",
+                          BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "\\\\build\\other\\proj",
+                          BASE_ENV, home).enabled is False
+
+
+def test_degenerate_windows_rules_never_match_anything(tmp_path, as_windows):
+    """SECURITY, same rule as the POSIX case: a bare drive root is every
+    path on that drive, and a server with no share is not a location."""
+    home = _home(tmp_path)
+    for bad in ["C:\\", "C:/", "c:\\", "C:", "\\\\", "\\\\srv", "//",
+                "", " ", "*", "**", "users\\kiran"]:
+        with open(config.path_rules_path(home), "w") as fh:
+            json.dump({"enabled_paths": [bad]}, fh)
+        c = config.resolve("s1", "C:\\Users\\kiran\\proj", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled an unrelated folder" % (bad,)
+        c = config.resolve("s1", "C:\\", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled a whole drive" % (bad,)
+
+
+def test_windows_disabled_rule_still_wins(tmp_path, as_windows):
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["C:\\proj"],
+                   "disabled_paths": ["C:\\proj\\secret"]}, fh)
+    assert config.resolve("s1", "C:\\proj\\src", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "C:\\proj\\secret\\x",
+                          BASE_ENV, home).enabled is False
+
+
+def test_posix_rules_are_unchanged_by_the_windows_support(tmp_path):
+    """The Windows spellings must not have widened anything on POSIX."""
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["/opt/example"]}, fh)
+    assert config.resolve("s1", "/opt/example/x", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/OPT/EXAMPLE/x", BASE_ENV, home).enabled is False, \
+        "POSIX paths are case-sensitive and must stay that way"

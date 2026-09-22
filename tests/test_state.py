@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 
@@ -132,3 +133,109 @@ def test_an_oserror_inside_the_with_body_is_not_masked(tmp_path):
         with state.session_lock("s1", home):
             raise OSError("the real problem")
     assert "the real problem" in str(exc.value)
+
+
+# --- The same guarantees, driven down the Windows branch --------------------
+#
+# Windows locks a byte RANGE via msvcrt, not the whole file via flock, and
+# this suite never runs there. These re-assert every promise session_lock
+# makes, with the Windows implementation and a fake msvcrt whose sharing
+# rules match Windows': a byte-range lock belongs to the HANDLE, so a second
+# descriptor is refused even inside one process.
+
+from tests.test_platform_compat import FakeMsvcrt  # noqa: E402
+from rius_cc import platform_compat  # noqa: E402
+
+
+@pytest.fixture
+def windows_locking(monkeypatch):
+    fake = FakeMsvcrt()
+    monkeypatch.setattr(platform_compat, "IS_WINDOWS", True)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    return fake
+
+
+def test_windows_lock_is_exclusive(tmp_path, windows_locking):
+    home = str(tmp_path)
+    with state.session_lock("s1", home) as got:
+        assert got is True
+        with state.session_lock("s1", home) as second:
+            assert second is False
+
+
+def test_windows_lock_released_after_block(tmp_path, windows_locking):
+    home = str(tmp_path)
+    with state.session_lock("s1", home) as got:
+        assert got is True
+    with state.session_lock("s1", home) as again:
+        assert again is True, "the lock was never released"
+
+
+def test_windows_different_sessions_do_not_block_each_other(tmp_path, windows_locking):
+    home = str(tmp_path)
+    with state.session_lock("s1", home) as a:
+        with state.session_lock("s2", home) as b:
+            assert a is True and b is True
+
+
+def test_windows_block_timeout_retries_then_gives_up(tmp_path, windows_locking):
+    home = str(tmp_path)
+    clock, sleeps = _FakeClock(), []
+
+    def sleep(dt):
+        sleeps.append(dt)
+        clock.advance(dt)
+
+    with state.session_lock("s1", home):
+        with state.session_lock("s1", home, block_timeout=2.0,
+                                clock=clock, sleep=sleep) as got:
+            assert got is False
+    assert sleeps, "gave up without waiting at all"
+    assert sum(sleeps) <= 2.0 + state.RETRY_INTERVAL_S, "waited longer than asked"
+    # The bounded wait must be OUR loop, not msvcrt's LK_LOCK, whose fixed
+    # 10x1s retry we could not control.
+    assert FakeMsvcrt.LK_LOCK not in windows_locking.modes_used
+
+
+def test_windows_block_timeout_acquires_when_the_holder_releases(tmp_path, windows_locking):
+    home = str(tmp_path)
+    clock, holder = _FakeClock(), {}
+
+    def sleep(dt):
+        clock.advance(dt)
+        if clock.t >= 0.2 and "cm" in holder:
+            holder.pop("cm").__exit__(None, None, None)
+
+    cm = state.session_lock("s1", home)
+    cm.__enter__()
+    holder["cm"] = cm
+    with state.session_lock("s1", home, block_timeout=2.0,
+                            clock=clock, sleep=sleep) as got:
+        assert got is True
+
+
+def test_windows_default_is_non_blocking(tmp_path, windows_locking):
+    home = str(tmp_path)
+    clock, sleeps = _FakeClock(), []
+    with state.session_lock("s1", home):
+        with state.session_lock("s1", home, clock=clock,
+                                sleep=sleeps.append) as got:
+            assert got is False
+    assert sleeps == []
+
+
+def test_windows_an_oserror_inside_the_with_body_is_not_masked(tmp_path, windows_locking):
+    home = str(tmp_path)
+    with pytest.raises(OSError) as exc:
+        with state.session_lock("s1", home):
+            raise OSError("the real problem")
+    assert "the real problem" in str(exc.value)
+
+
+def test_windows_lock_descriptor_is_never_left_open(tmp_path, windows_locking):
+    """A cached or leaked descriptor would make a process invisible to its
+    own lock, since both backends are per-descriptor."""
+    home = str(tmp_path)
+    with state.session_lock("s1", home):
+        pass
+    assert windows_locking.held == {}, "the lock outlived its `with` block"
