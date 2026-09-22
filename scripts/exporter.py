@@ -5,7 +5,6 @@ Zero third-party dependencies -- only the standard library and rius_cc.
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import sys
@@ -13,7 +12,7 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import config, otlp, spans, state, transcript
+from rius_cc import config, log as rius_log, otlp, spans, state, transcript
 
 
 def _now_ns() -> int:
@@ -23,25 +22,13 @@ def _now_ns() -> int:
         return int(time.time() * 1e9)
 
 
-def _log(home: str, cfg, message: str) -> None:
-    if not getattr(cfg, "debug", False):
-        return
-    try:
-        text = message
-        api_key = getattr(cfg, "api_key", None)
-        if api_key:
-            text = text.replace(api_key, config.redact(api_key))
-        log_dir = os.path.join(home, ".claude", "rius", "log")
-        os.makedirs(log_dir, exist_ok=True)
-        date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-        path = os.path.join(log_dir, date + ".log")
-        with open(path, "a") as fh:
-            fh.write(text.rstrip("\n") + "\n")
-    except BaseException:
-        pass
+def _log(home: str, cfg, message: str, force: bool = False) -> None:
+    rius_log.write(home, cfg, message, force=force)
 
 
-def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
+def run(event: str, payload: dict, env: Mapping[str, str], home: str,
+        instance_id: str = "") -> int:
+    cfg = None
     try:
         session_id = payload.get("session_id")
         cwd = payload.get("cwd")
@@ -69,11 +56,14 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
             # must be able to send this id on its very first ping, even for
             # a session that starts and then sits idle with nothing to
             # export -- so this cannot wait on there being spans to send.
-            instance_id = st.get("instance_id")
-            if not instance_id:
-                instance_id = str(uuid.uuid4())
-                st["instance_id"] = instance_id
+            # hook.py mints it on SessionStart and passes it on argv, so
+            # normally this only re-reads what is already persisted.
+            stored = st.get("instance_id")
+            if not stored:
+                stored = instance_id or str(uuid.uuid4())
+                st["instance_id"] = stored
                 state.save(session_id, home, st)
+            instance_id = stored
 
             entries, new_offset = transcript.read_from(transcript_path, st.get("offset", 0))
 
@@ -130,9 +120,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
             return len(out)
     except BaseException as exc:  # never raise out of run()
         try:
-            _log(home, config.Config(False, "exception", None, "", "", True,
-                                      config.DEFAULT_MAX_ATTR_BYTES, True),
-                 "exception in run(): %r" % (exc,))
+            # force=True deliberately: an unhandled crash is logged even with
+            # RIUS_CLAUDE_DEBUG off. A crash you cannot see is the exact
+            # failure mode this plugin has to avoid. Documented in
+            # README > Settings. `cfg` is passed when it exists purely so the
+            # API key is still redacted out of the message.
+            _log(home, cfg, "exception in run(): %r" % (exc,), force=True)
         except BaseException:
             pass
         return 0
@@ -141,12 +134,13 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str) -> int:
 def main() -> None:
     try:
         payload_path = sys.argv[1]
+        instance_id = sys.argv[2] if len(sys.argv) > 2 else ""
         with open(payload_path) as fh:
             wrapper = json.load(fh)
         event = wrapper.get("event")
         payload = wrapper.get("payload") or {}
         home = os.environ.get("HOME", os.path.expanduser("~"))
-        run(event, payload, os.environ, home)
+        run(event, payload, os.environ, home, instance_id)
         try:
             os.remove(payload_path)
         except OSError:

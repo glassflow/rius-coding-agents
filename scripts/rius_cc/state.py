@@ -12,6 +12,9 @@ import fcntl
 import json
 import os
 import tempfile
+import time
+
+RETRY_INTERVAL_S = 0.05
 
 
 def new_state() -> dict:
@@ -75,15 +78,37 @@ def save(session_id: str, home: str, state: dict) -> None:
 
 
 @contextlib.contextmanager
-def session_lock(session_id: str, home: str):
+def session_lock(session_id: str, home: str, block_timeout: float = 0.0,
+                 clock=time.monotonic, sleep=time.sleep):
+    """Yield True if the per-session lock was acquired, False otherwise.
+
+    Non-blocking by default: for a mid-session event a later hook re-reads the
+    same transcript lines, so losing the lock is free. `block_timeout` gives
+    callers whose event is the LAST one for the session (SessionEnd, Stop) a
+    bounded wait -- if they lose the lock, nothing ever finalises the session
+    and the root span stays pending forever.
+
+    The yield deliberately sits OUTSIDE the try/except: an OSError raised
+    inside the caller's `with` body propagates back into this generator, and
+    a yield in the handler would make it resume and yield a second time,
+    raising RuntimeError("generator didn't stop after throw()") and masking
+    the real error.
+    """
     path = lock_path(session_id, home)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            yield True
-        except OSError:
-            yield False
+        deadline = clock() + max(0.0, block_timeout)
+        acquired = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if clock() >= deadline:
+                    break
+                sleep(RETRY_INTERVAL_S)
+        yield acquired
     finally:
         os.close(fd)

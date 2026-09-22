@@ -176,6 +176,22 @@ class Pinger:
             pass
         return True
 
+    def clear_stop_file(self) -> None:
+        """Remove a stop file left over from a previous run of this session.
+
+        Only ever called AFTER the pid lock is won, and only at startup: at
+        that instant this session cannot yet have ended, so any stop file
+        present is stale (hook.py wrote it on a previous SessionEnd and
+        nothing else deletes it). Clearing it after winning the lock also
+        means a duplicate pinger cannot swallow the signal meant for the
+        live one.
+        """
+        try:
+            os.remove(self.stop_path())
+            self._log("cleared a stale stop file at startup")
+        except OSError:
+            pass
+
     def release_pid_lock(self) -> None:
         try:
             os.remove(self.pid_path())
@@ -192,8 +208,10 @@ class Pinger:
 
     def run(self) -> None:
         if not self.acquire_pid_lock():
+            self._log("another live pinger already owns this session")
             return
         try:
+            self.clear_stop_file()
             start = self.clock()
             self._send(stopped=False)
             last_ping = self.clock()
@@ -219,26 +237,37 @@ def main() -> None:
     if len(sys.argv) < 5:
         return
     session_id, cwd, home, watch_pid_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    # hook.py mints the instance id before spawning anything and passes it
+    # here; state is only a fallback (a hook from an older install, say).
+    argv_instance_id = sys.argv[5] if len(sys.argv) > 5 else ""
     try:
         watch_pid = int(watch_pid_s)
     except ValueError:
         return
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from rius_cc import config, state
+    from rius_cc import config, log as rius_log, state
 
     cfg = config.resolve(session_id, cwd, os.environ, home)
+
+    def log(message: str) -> None:
+        rius_log.write(home, cfg, "heartbeat %s: %s" % (session_id, message))
+
     if not cfg.enabled or not cfg.api_key:
+        log("not starting: %s" % cfg.reason)
         return
 
-    st = state.load(session_id, home)
-    instance_id = st.get("instance_id")
+    instance_id = argv_instance_id or state.load(session_id, home).get("instance_id")
     if not instance_id:
-        return  # never invent one -- it must match spans' service.instance.id
+        # Never invent one -- it must match spans' service.instance.id.
+        log("not starting: no instance_id on argv and none in state")
+        return
 
     url = heartbeat_url(cfg.endpoint)
     transport = http_transport(url, cfg.api_key)
-    pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport, watch_pid)
+    log("starting: watching pid %d, posting to %s" % (watch_pid, url))
+    pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport,
+                    watch_pid, log=log)
     pinger.run()
 
 
