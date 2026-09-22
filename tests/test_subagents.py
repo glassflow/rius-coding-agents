@@ -297,3 +297,50 @@ def test_capture_off_withholds_every_subagent_content_attribute(fixtures_dir):
     assert "def resolve" not in blob
     # nor may it be persisted to the plaintext state file
     assert "explore the fixture tree" not in json.dumps(st)
+
+
+def test_the_subagent_brief_is_never_written_to_the_state_file(fixtures_dir):
+    """state.save writes this dict to ~/.claude/rius/state/<sid>.json in
+    plaintext, on every hook event, for the whole session. The brief goes on
+    the span and is re-read from the subagent's file when the span closes;
+    caching it would both persist content and rewrite it every event."""
+    out, st, _ = _run(_main_path(fixtures_dir), SID)
+    agent = [s for s in out
+             if s.span_id == spans.span_id_for("subagent:agent-aaa111")
+             and not s.pending][0]
+    assert agent.attributes["input.value"] == "explore the fixture tree"
+    assert "explore the fixture tree" not in json.dumps(st)
+    assert "Explore the fixture tree" not in json.dumps(st)   # the description
+
+
+def test_the_brief_scan_is_bounded(fixtures_dir, monkeypatch):
+    path = str(fixtures_dir / "subagent_files" / SID / "subagents"
+               / "agent-aaa111.jsonl")
+    assert subagents.first_prompt(path) == "explore the fixture tree"
+    monkeypatch.setattr(subagents, "PROMPT_SCAN_LINES", 0)
+    assert subagents.first_prompt(path) == ""
+    assert subagents.first_prompt(str(fixtures_dir / "nope.jsonl")) == ""
+
+
+def test_session_end_closes_a_subagent_that_never_reported_back(fixtures_dir):
+    """The session died mid-subagent: no tool_result ever arrives, so the
+    AGENT span would stay pending forever -- the same failure the session
+    root has, for the same reason."""
+    path = _main_path(fixtures_dir)
+    st = state.new_state()
+    ctx = _ctx(SID)
+    entries, _ = transcript.read_from(path, 0)
+    spans.build(entries[:2], st, ctx)          # tool_use seen, no tool_result
+    subdir = subagents.dir_for(path, SID)
+    out = subagents.expand(st, ctx, subdir)
+    agent_id = spans.span_id_for("subagent:agent-aaa111")
+    assert [s.pending for s in out if s.span_id == agent_id] == [True]
+
+    now = 1_790_071_200_000_000_000
+    final = subagents.finalize(st, ctx, subdir, now)
+    closed = [s for s in final if s.span_id == agent_id]
+    assert len(closed) == 1
+    assert closed[0].pending is False
+    assert closed[0].end_ns == now
+    # and it is not closed twice
+    assert subagents.finalize(st, ctx, subdir, now) == []

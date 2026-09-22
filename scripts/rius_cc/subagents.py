@@ -101,23 +101,53 @@ def _scope_for(state: dict, agent_id: str) -> dict:
     return scope
 
 
-def _first_prompt(entries: List[Any]) -> str:
-    for entry in entries:
-        if entry.kind == "user" and not entry.tool_results():
-            text = entry.text()
-            if text:
-                return text
+# The brief is the first user entry of the subagent's file; the lines after
+# it are attachments and system reminders. Bounded so a malformed file costs
+# a few reads, not a walk of a 300 KB transcript.
+PROMPT_SCAN_LINES = 20
+
+
+def first_prompt(path: str) -> str:
+    """The subagent's brief, read back from its file on demand.
+
+    Deliberately NOT kept in state: state.save writes that dict to
+    ~/.claude/rius/state/<sid>.json in plaintext and on every hook event, so
+    caching one brief per subagent would both persist content the capture
+    gate is supposed to control and rewrite it on every event for the rest of
+    the session.
+    """
+    try:
+        with open(path, "rb") as fh:
+            for _ in range(PROMPT_SCAN_LINES):
+                raw = fh.readline()
+                if not raw:
+                    break
+                entry = transcript.parse_line(raw.decode("utf-8", "replace"))
+                if entry is None or entry.kind != "user":
+                    continue
+                if entry.tool_results():
+                    continue
+                text = entry.text()
+                if text:
+                    return text
+    except OSError:
+        return ""
     return ""
 
 
-def _agent_span(ctx, trace_id, link, agent_id, meta, scope, end_ns, pending):
+def _agent_span(ctx, trace_id, link, agent_id, meta, path, end_ns, pending):
+    # A pending span carries no content, so the file is not even opened for
+    # one -- and with capture off it is never opened for this at all.
+    prompt = ""
+    if not pending and ctx.capture_content:
+        prompt = first_prompt(path)
     return spans.subagent_span(
         ctx, trace_id,
         span_id=spans.span_id_for("subagent:" + agent_id),
         parent_span_id=link["span_id"], meta=meta, agent_id=agent_id,
         depth=link.get("depth") or 1,
         start_ns=link.get("start_ns") or 0, end_ns=end_ns,
-        prompt=scope.get("prompt") or "", pending=pending,
+        prompt=prompt, pending=pending,
     )
 
 
@@ -134,18 +164,12 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
         # Pending first, exactly like the session root and every tool span:
         # a subagent that is still running should draw as in-progress rather
         # than appear only once it finishes.
-        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, scope,
+        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
                                end_ns=start_ns, pending=True))
 
     offset = state["sub_offsets"].get(agent_id) or 0
     entries, new_offset = transcript.read_from(path, offset)
     state["sub_offsets"][agent_id] = new_offset
-
-    if entries and offset == 0 and ctx.capture_content and not scope.get("prompt"):
-        # The subagent's brief. Truncated before it is stored: state.save
-        # writes this dict to disk in plaintext.
-        scope["prompt"] = spans.truncate(_first_prompt(entries),
-                                         ctx.max_attr_bytes)
 
     out += spans.emit_entries(
         entries, scope, ctx, trace_id, agent_span_id, state["sub_links"],
@@ -160,7 +184,7 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
     end_ns = link.get("end_ns")
     if end_ns is not None and not link.get("closed"):
         link["closed"] = True
-        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, scope,
+        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
                                end_ns=end_ns, pending=False))
     return out
 
@@ -226,11 +250,11 @@ def finalize(state: dict, ctx, subdir: str, now_ns: int) -> List[Any]:
         found = index.get(tool_use_id)
         if found is None:
             continue
-        agent_id, meta, _path = found
+        agent_id, meta, path = found
         scope = _scope_for(state, agent_id)
         if not scope.get("started"):
             continue
         link["closed"] = True
-        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, scope,
+        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
                                end_ns=now_ns, pending=False))
     return out

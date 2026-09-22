@@ -179,7 +179,7 @@ def new_scope() -> dict:
     only -- all of it is persisted between hook invocations.
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
-            "last_ns": 0, "started": False, "start_ns": 0, "prompt": ""}
+            "last_ns": 0, "started": False, "start_ns": 0}
 
 
 def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
