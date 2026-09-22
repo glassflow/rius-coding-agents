@@ -2040,3 +2040,233 @@ without which the plugin cannot be installed at all. Added in Task 8.
 Tasks 3, 6 and 10. `state` keys are identical in Tasks 3, 5 and 7. `Ctx` fields
 match between Tasks 3 and 7. `config.Config` fields match between Tasks 4, 7
 and 9.
+
+---
+
+### Task 12: Heartbeat pinger
+
+**Added 2026-09-22, after the plan was written**, at the user's request. Scope
+addition, not a defect fix.
+
+**Files:**
+- Create: `scripts/heartbeat.py`
+- Test: `tests/test_heartbeat.py`
+- Modify: `scripts/hook.py` (spawn on `SessionStart`, stop on `SessionEnd`)
+
+**Interfaces:**
+- Consumes: `config` (Task 4), `state` (Task 5).
+- Produces:
+  - `build_payload(instance_id, agent_name, open_traces, stopped=False) -> dict`
+  - `ping(endpoint, api_key, payload, timeout) -> bool`
+  - `run(session_id, home, env, parent_pid) -> None` — the loop
+  - `stop_path(session_id, home) -> str`, `pid_path(session_id, home) -> str`
+
+**Why a separate process, when nothing else here has one.** Spans only export
+when they finish, so an idle or wedged agent is indistinguishable from a healthy
+quiet one — that gap is the whole reason the SDK has heartbeats. Emitting pings
+opportunistically from the existing hooks was the obvious way to avoid a
+background process, and it does not work: **no hook fires between `PreToolUse`
+and `PostToolUse`**, so a tool call longer than 60s would cross the backend's
+"gone" threshold and report the agent as dead precisely while it is working
+hardest. A false "gone" is worse than no heartbeat at all.
+
+The pinger is therefore deliberately minimal: it holds no span state, parses no
+transcript, and if it dies you lose liveness only — never trace data. That is a
+materially smaller blast radius than the per-session tailer daemon rejected in
+spec §12.
+
+**Contract — verified against `glassflow-python/src/rius/heartbeat.py` and
+`argus-core/packages/argus-core/heartbeat`. Do not improvise these.**
+
+- `POST <endpoint>/v1/heartbeat`, `Content-Type: application/json` — note this
+  endpoint takes JSON, unlike `/v1/traces` which is protobuf-only.
+- Payload v1, exactly these keys:
+  ```json
+  {"v": 1, "instance_id": "<uuid>", "agent_name": "<service name>",
+   "sent_at": "2026-09-22T10:00:00.000Z", "sdk_language": "python",
+   "sdk_version": "rius-claude-code/<version>",
+   "open_traces": ["<trace id>"], "open_trace_count": 1}
+  ```
+  `sent_at` is RFC3339 UTC with millisecond precision and a `Z` suffix.
+  `open_traces` is capped at 32 entries.
+- `"stopped": true` appears ONLY on the final ping. `false` is never sent.
+- Timings: interval **15s**; the backend marks an instance stale at **30s** and
+  gone at **60s**. Ping timeout 3s; the final stopped ping gets 1s.
+- **Never retry a failed ping.** Liveness is only true fresh — a late heartbeat
+  is misinformation. Log once, drop it, continue the loop.
+- `instance_id` MUST be the same value the exporter puts in `service.instance.id`
+  on its spans (persisted in `state` by Task 7). That equality is the only thing
+  joining heartbeats to traces in the backend; a fresh uuid here silently breaks
+  it while appearing to work.
+
+**Lifetime.** Started by `hook.py` on `SessionStart` only, and only when config
+resolves enabled. It exits on the first of:
+1. the stop file appearing (written by `hook.py` on `SessionEnd`) — sends the
+   final `stopped: true` ping first;
+2. the parent Claude Code PID no longer existing (`os.kill(ppid, 0)` raising) —
+   the backstop for a killed terminal, which never runs `SessionEnd`;
+3. a 12-hour absolute cap, so no bug can leave a pinger running forever.
+
+A pid file prevents duplicates: if one exists and that process is alive, exit
+immediately rather than starting a second pinger for one session.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+import json
+import os
+import time
+
+import pytest
+
+import heartbeat
+
+
+def test_payload_shape_matches_contract():
+    p = heartbeat.build_payload("inst-1", "claude-code", ["abc"], stopped=False)
+    assert p["v"] == 1
+    assert p["instance_id"] == "inst-1"
+    assert p["agent_name"] == "claude-code"
+    assert p["sdk_language"] == "python"
+    assert p["open_traces"] == ["abc"]
+    assert p["open_trace_count"] == 1
+    assert "stopped" not in p          # false is NEVER sent
+    assert p["sent_at"].endswith("Z")
+    assert p["sent_at"].count(".") == 1
+    # RFC3339 UTC, millisecond precision
+    assert len(p["sent_at"]) == len("2026-09-22T10:00:00.000Z")
+
+
+def test_stopped_only_on_final_ping():
+    p = heartbeat.build_payload("i", "a", [], stopped=True)
+    assert p["stopped"] is True
+
+
+def test_open_traces_capped_at_32():
+    p = heartbeat.build_payload("i", "a", ["t%d" % i for i in range(100)])
+    assert len(p["open_traces"]) == 32
+    assert p["open_trace_count"] == 100     # the COUNT is not capped
+
+
+def test_ping_never_raises_on_transport_failure(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("network down")
+    monkeypatch.setattr(heartbeat.urllib.request, "urlopen", boom)
+    assert heartbeat.ping("http://127.0.0.1:1", "k", {"v": 1}, 0.1) is False
+
+
+def test_ping_posts_json_to_heartbeat_path():
+    sent = {}
+
+    class FakeResp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request as u
+    real = u.urlopen
+
+    def fake(req, timeout=None):
+        sent["url"] = req.full_url
+        sent["ctype"] = req.headers.get("Content-type")
+        sent["auth"] = req.headers.get("Authorization")
+        sent["body"] = json.loads(req.data.decode())
+        return FakeResp()
+
+    u.urlopen = fake
+    try:
+        assert heartbeat.ping("https://ingest.test", "glassflow_k", {"v": 1}, 1.0) is True
+    finally:
+        u.urlopen = real
+    assert sent["url"] == "https://ingest.test/v1/heartbeat"
+    assert sent["ctype"] == "application/json"
+    assert sent["auth"] == "Bearer glassflow_k"
+    assert sent["body"] == {"v": 1}
+
+
+def test_pid_file_prevents_a_second_pinger(tmp_path):
+    home = str(tmp_path)
+    os.makedirs(os.path.join(home, ".claude", "rius", "state"), exist_ok=True)
+    with open(heartbeat.pid_path("s1", home), "w") as fh:
+        fh.write(str(os.getpid()))          # a PID that is definitely alive
+    assert heartbeat.already_running("s1", home) is True
+
+
+def test_stale_pid_file_does_not_block(tmp_path):
+    home = str(tmp_path)
+    os.makedirs(os.path.join(home, ".claude", "rius", "state"), exist_ok=True)
+    with open(heartbeat.pid_path("s1", home), "w") as fh:
+        fh.write("999999")                  # almost certainly not a live PID
+    assert heartbeat.already_running("s1", home) is False
+
+
+def test_parent_death_is_detected():
+    assert heartbeat.parent_alive(os.getpid()) is True
+    assert heartbeat.parent_alive(999999) is False
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `.venv/bin/python -m pytest tests/test_heartbeat.py -q`
+Expected: FAIL — `ModuleNotFoundError: No module named 'heartbeat'`
+
+- [ ] **Step 3: Write `scripts/heartbeat.py`**
+
+Implement to satisfy the tests and the contract above. The loop:
+
+```
+if already_running(session_id, home): return
+write pid file
+send first ping IMMEDIATELY (the agent appears without waiting an interval)
+while True:
+    sleep up to 15s, waking early to check the stop file
+    if stop file exists: send stopped ping, clean up, return
+    if not parent_alive(parent_pid): clean up WITHOUT a stopped ping, return
+    if elapsed > 12h: clean up, return
+    send ping
+```
+
+Exiting without a stopped ping on parent death is correct, not a gap — the
+backend's stale→gone path exists for exactly that case, and claiming a clean
+stop for a killed process would be a lie.
+
+`instance_id` and the open trace id are read from the session state file written
+by Task 7. If state has no instance id yet (the pinger started before the first
+export), ping with the id it finds once it appears, and skip `open_traces` until
+then — never invent one.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `.venv/bin/python -m pytest tests/test_heartbeat.py -q`
+Expected: 8 passed.
+
+- [ ] **Step 5: Wire into `scripts/hook.py`**
+
+On `SessionStart` (after the config check passes), spawn `heartbeat.py` detached
+exactly as the exporter is spawned, passing the session id and `os.getppid()`.
+On `SessionEnd`, write the stop file before spawning the final exporter run.
+
+Add to `tests/test_hook.py`:
+
+```python
+def test_session_end_writes_the_stop_file(tmp_path):
+    # with tracing enabled for tmp_path, SessionEnd must create the stop marker
+    # so a running pinger sends its final stopped ping and exits.
+    ...
+```
+
+Fill this in against the real `hook.py` structure — enable a folder via a path
+rule in a temp HOME, run the hook with `SessionEnd`, and assert the stop file
+exists afterwards.
+
+- [ ] **Step 6: Run the whole suite**
+
+Run: `.venv/bin/python -m pytest -q`
+Expected: everything passes.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add scripts/heartbeat.py scripts/hook.py tests/test_heartbeat.py tests/test_hook.py
+git commit -m "feat: heartbeat pinger for agent liveness"
+```
