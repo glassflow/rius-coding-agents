@@ -86,6 +86,65 @@ def test_tool_left_open_across_two_builds(fixtures_dir):
     assert st["open_tools"] == {}
 
 
+# --- subagent sidechains (spec section 10 fixture; open_task_spans) -------
+
+def test_sidechain_spans_hang_off_the_task_tool_span(fixtures_dir):
+    """I8: the README drew an AGENT span for the subagent. The code emits no
+    such span -- sidechain entries become ordinary LLM spans RE-PARENTED to
+    the open Task tool span."""
+    entries, _ = transcript.read_from(str(fixtures_dir / "subagent.jsonl"), 0)
+    st = _new_state()
+    out = spans.build(entries, st, _ctx(entries[0].session_id))
+
+    task_span_id = spans.span_id_for("toolu_task")
+    by_id = {s.span_id: s for s in out}
+
+    sidechain_llm = by_id[spans.span_id_for("s1")]
+    assert sidechain_llm.kind_oi == "LLM"
+    assert sidechain_llm.parent_span_id == task_span_id
+
+    # the subagent's own tool call hangs off the subagent's generation
+    sub_tool = [s for s in out
+                if s.span_id == spans.span_id_for("toolu_sub") and not s.pending][0]
+    assert sub_tool.parent_span_id == sidechain_llm.span_id
+    assert sub_tool.attributes["gen_ai.tool.name"] == "Read"
+
+    # exactly one AGENT span: the session root. No subagent AGENT span exists.
+    agents = [s for s in out if s.kind_oi == "AGENT"]
+    assert len(agents) == 1
+    assert agents[0].span_id == spans.span_id_for("session:" + entries[0].session_id)
+
+    # the main-thread generation is NOT re-parented
+    assert by_id[spans.span_id_for("a1")].parent_span_id == \
+        spans.span_id_for("turn:p1")
+
+
+def test_task_span_is_tracked_and_released(fixtures_dir):
+    entries, _ = transcript.read_from(str(fixtures_dir / "subagent.jsonl"), 0)
+    st = _new_state()
+    ctx = _ctx(entries[0].session_id)
+
+    # build in two batches, the real hook cadence: the Task span must survive
+    # in persisted state across invocations.
+    spans.build(entries[:2], st, ctx)
+    assert st["open_task_spans"] == [spans.span_id_for("toolu_task")]
+
+    spans.build(entries[2:5], st, ctx)
+    assert st["open_task_spans"] == [spans.span_id_for("toolu_task")], \
+        "a nested non-Task tool must not release the Task span"
+
+    spans.build(entries[5:], st, ctx)
+    assert st["open_task_spans"] == []
+    assert st["open_tools"] == {}
+
+
+def test_a_sidechain_user_entry_does_not_open_a_turn(fixtures_dir):
+    entries, _ = transcript.read_from(str(fixtures_dir / "subagent.jsonl"), 0)
+    st = _new_state()
+    spans.build(entries, st, _ctx(entries[0].session_id))
+    assert list(st["open_turns"]) == ["p1"]
+
+
 def test_span_ids_identical_across_replay(fixtures_dir):
     entries, _ = transcript.read_from(str(fixtures_dir / "tool_call.jsonl"), 0)
     a = spans.build(entries, _new_state(), _ctx(entries[0].session_id))

@@ -1,0 +1,3 @@
+{"type":"summary","summary":"Earlier: read a file","leafUuid":"u2"}
+{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"c1","timestamp":"2026-09-22T11:00:00.000Z","sessionId":"22222222-2222-2222-2222-222222222222","promptId":"p2","cwd":"/tmp/proj","message":{"role":"user","content":[{"type":"text","text":"go on"}]}}
+{"parentUuid":"c1","isSidechain":false,"type":"assistant","uuid":"c2","timestamp":"2026-09-22T11:00:01.000Z","sessionId":"22222222-2222-2222-2222-222222222222","cwd":"/tmp/proj","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1}}}

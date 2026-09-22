@@ -102,6 +102,37 @@ def test_good_lines_are_not_counted_as_skipped(fixtures_dir):
     assert stats["skipped"] == 0
 
 
+def test_compaction_resets_the_offset_and_re_reads(fixtures_dir, tmp_path):
+    """I8: `if offset > size: offset = 0` had zero coverage. Claude Code
+    rewrites the transcript in place when it compacts, so a stored offset
+    from before the compaction points past the end of the new, shorter file.
+    Without the reset, read_from seeks past EOF and the session goes quiet
+    for good."""
+    long_src = (fixtures_dir / "tool_call.jsonl").read_bytes()
+    short_src = (fixtures_dir / "compacted.jsonl").read_bytes()
+    assert len(short_src) < len(long_src)
+
+    p = tmp_path / "t.jsonl"
+    p.write_bytes(long_src)
+    _, offset = transcript.read_from(str(p), 0)
+    assert offset == len(long_src)
+
+    p.write_bytes(short_src)              # compacted in place
+    entries, new_offset = transcript.read_from(str(p), offset)
+    assert [e.uuid for e in entries] == ["c1", "c2"]
+    assert new_offset == len(short_src)
+
+    # and the next read is a no-op again, from the new offset
+    more, again = transcript.read_from(str(p), new_offset)
+    assert more == [] and again == new_offset
+
+
+def test_a_summary_line_is_not_counted_as_a_skip(fixtures_dir):
+    stats = {}
+    transcript.read_from(str(fixtures_dir / "compacted.jsonl"), 0, stats=stats)
+    assert stats["skipped"] == 0
+
+
 def test_tool_use_and_result_blocks(fixtures_dir):
     entries, _ = transcript.read_from(str(fixtures_dir / "tool_call.jsonl"), 0)
     asst = entries[1]

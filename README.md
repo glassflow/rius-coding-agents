@@ -125,7 +125,13 @@ and project `.claude/settings.json`/`settings.local.json`).
 | `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
 | `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content; structure, models, tokens, cost, and timing are kept either way. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. Truncated values carry an explicit `…[truncated N bytes]` marker. |
-| `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`. |
+| `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
+
+Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of
+`RIUS_CLAUDE_DEBUG`**. This is deliberate. Every hook exits 0 and the exporter
+swallows its exceptions by design, so a crash that left no trace would be
+invisible to everyone, forever; a log line is the only thing that isn't.
+Normal operation writes nothing there unless debug is on.
 
 Resolution order (first decision wins): a per-session `/rius on`/`/rius off`
 override, then `RIUS_CLAUDE_ENABLED` from the environment, then the path rules
@@ -142,8 +148,15 @@ AGENT   session root
 └─ CHAIN  turn (one user prompt and everything it caused)
    └─ LLM   generation (one assistant message: model, token counts, cache reads)
       └─ TOOL  tool call (input and output)
-         └─ AGENT  subagent, nested under the Task tool span that spawned it
+      └─ TOOL  Task (the call that spawned a subagent)
+         └─ LLM   the subagent's own generation
+            └─ TOOL  a tool the subagent called
 ```
+
+A subagent does not get a span of its own. Its work appears as ordinary `LLM`
+and `TOOL` spans re-parented under the `Task` tool span that spawned it, so a
+subagent's generations and tool calls sit inside the Task call's bar in the
+waterfall rather than beside it.
 
 Spans appear while the session is still running, not only after it ends: each
 hook event emits a "pending" snapshot at span start (session start, prompt

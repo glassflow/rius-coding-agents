@@ -148,6 +148,33 @@ def test_spans_exported_counter_accumulates_on_success_only(home, captured, fixt
     assert st["spans_exported"] == before
 
 
+def test_spans_keep_flowing_after_a_compaction(home, captured, fixtures_dir, tmp_path):
+    """End to end for the offset>size reset: the stored offset outlives the
+    transcript it referred to."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    t = tmp_path / "t.jsonl"
+    t.write_bytes((fixtures_dir / "tool_call.jsonl").read_bytes())
+    p = {"session_id": sid, "transcript_path": str(t), "cwd": "/tmp/proj"}
+    assert exporter.run("PostToolUse", p, ENV, home) > 0
+    stale = state.load(sid, home)["offset"]
+    assert stale > 0
+
+    short = (fixtures_dir / "compacted.jsonl").read_bytes()
+    t.write_bytes(short)
+    assert len(short) < stale
+    n = exporter.run("PostToolUse", p, ENV, home)
+    assert n > 0, "session went silent after the transcript was compacted"
+    assert state.load(sid, home)["offset"] == len(short)
+
+
+def test_a_subagent_session_exports_without_an_agent_span_per_subagent(
+        home, captured, fixtures_dir):
+    sid = "44444444-4444-4444-4444-444444444444"
+    p = _payload(fixtures_dir, "subagent.jsonl", sid, "PostToolUse")
+    assert exporter.run("PostToolUse", p, ENV, home) > 0
+    assert state.load(sid, home)["open_task_spans"] == []
+
+
 def test_unparseable_transcript_lines_are_counted_and_logged_once(home, captured, tmp_path):
     """I3: a transcript the parser cannot read at all looks EXACTLY like an
     idle session -- zero spans, zero errors, a happy /rius status."""
