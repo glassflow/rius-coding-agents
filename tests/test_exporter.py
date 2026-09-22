@@ -348,3 +348,60 @@ def test_instance_id_is_stable_across_invocations(home, captured, fixtures_dir):
     exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"), ENV, home)
     second = state.load(sid, home)["instance_id"]
     assert first == second
+
+
+# --- subagent drilldown (N2) --------------------------------------------
+
+SUB_SID = "55555555-5555-5555-5555-555555555555"
+
+
+def _sub_payload(fixtures_dir, event):
+    return {"session_id": SUB_SID,
+            "transcript_path": str(fixtures_dir / "subagent_files"
+                                   / (SUB_SID + ".jsonl")),
+            "cwd": "/tmp/proj", "hook_event_name": event}
+
+
+def test_subagent_spans_reach_the_wire(home, captured, fixtures_dir):
+    """58% of the tokens in the acceptance session were inside subagents,
+    written to their own transcript files. The exporter has to open them."""
+    from rius_cc import spans as _spans
+
+    n = exporter.run("Stop", _sub_payload(fixtures_dir, "Stop"), ENV, home)
+    assert n > 0
+    body = captured[0][2]
+    # span ids go on the wire as raw bytes, not as their hex spelling
+    assert bytes.fromhex(_spans.span_id_for("subagent:agent-aaa111")) in body
+    assert bytes.fromhex(_spans.span_id_for("subagent:agent-bbb222")) in body
+    assert b"gen_ai.agent.name" in body and b"general-purpose" in body
+    assert b"claude-haiku-4-5-20251001" in body   # the subagent's own model
+
+    st = state.load(SUB_SID, home)
+    assert st["sub_offsets"]["agent-aaa111"] > 0
+    assert st["sub_offsets"]["agent-bbb222"] > 0
+    assert st["sub_links"]["toolu_agent1"]["agent_id"] == "agent-aaa111"
+
+
+def test_a_second_run_re_exports_no_subagent_span(home, captured, fixtures_dir):
+    """Per-agent offsets: a subagent's spans stream once, like the main
+    transcript's."""
+    exporter.run("PostToolUse", _sub_payload(fixtures_dir, "PostToolUse"), ENV, home)
+    captured.clear()
+    assert exporter.run("PostToolUse", _sub_payload(fixtures_dir, "PostToolUse"),
+                        ENV, home) == 0
+    assert captured == []
+
+
+def test_a_transient_failure_rewinds_the_subagent_offsets(home, captured,
+                                                          fixtures_dir,
+                                                          monkeypatch):
+    """The main offset is rewound on a retryable failure so the same lines
+    are rebuilt. Subagent offsets are part of that same state and must rewind
+    with it, or the retry re-sends the main spans and drops the subagent's."""
+    monkeypatch.setattr(exporter.otlp, "export",
+                        lambda ep, key, body, timeout=5.0: 503)
+    exporter.run("PostToolUse", _sub_payload(fixtures_dir, "PostToolUse"), ENV, home)
+    st = state.load(SUB_SID, home)
+    assert st["offset"] == 0
+    assert st["sub_offsets"] == {}
+    assert st["consecutive_export_failures"] == 1

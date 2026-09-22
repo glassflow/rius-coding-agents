@@ -12,6 +12,34 @@ from typing import Any, Dict, List, Optional
 
 PROVIDER_NAME = "anthropic"
 
+# The tool that spawns a subagent. It is "Agent" in Claude Code 2.1.x and was
+# "Task" before that; matching only one of them means every subagent in that
+# version is invisible, which is exactly what happened. Both, always.
+SUBAGENT_TOOL_NAMES = ("Agent", "Task")
+
+# Status.message for a failed tool when content capture is off. Spelled out
+# rather than a bare "tool error" so a viewer can tell "we deliberately did
+# not send you the detail" from "the detail went missing".
+TOOL_ERROR_WITHHELD = "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+
+# A "user" entry whose text opens with one of these was injected by the
+# harness, not typed by the user: a slash-command caveat, a background-task
+# notification, a subagent's report, a bash-mode command. They are real work
+# and keep their turn span, but the span says where the text came from.
+SYSTEM_TURN_PREFIXES = (
+    "<local-command-caveat",
+    "<local-command-stdout",
+    "<command-name",
+    "<command-message",
+    "<task-notification",
+    "<agent-message",
+    "<bash-input",
+    "<bash-stdout",
+    "<bash-stderr",
+    "<system-reminder",
+    "<user-prompt-submit-hook",
+)
+
 _OPERATION_BY_KIND = {
     "AGENT": "invoke_agent",
     "LLM": "chat",
@@ -30,6 +58,13 @@ _PENDING_ALLOWED_KEYS = {
     "gen_ai.tool.name",
     "session.id",
     "glassflow.span.pending",
+    # Identity, not content: which named agent this is and where a turn's
+    # text came from. The UI filters on these while the span is still
+    # running, and neither can carry a prompt or a tool's output.
+    "gen_ai.agent.name",
+    "cc.turn.source",
+    "cc.subagent.id",
+    "cc.subagent.depth",
 }
 
 
@@ -123,35 +158,59 @@ def _current_turn_parent(state: dict, root_span_id: str) -> str:
     return root_span_id
 
 
-def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
+def turn_source_for(text: str) -> str:
+    """"user" or "system" for a turn's opening text.
+
+    Anchored at the start, never a substring search: a prompt that merely
+    mentions <bash-input> is still something the user typed.
+    """
+    stripped = (text or "").lstrip()
+    for prefix in SYSTEM_TURN_PREFIXES:
+        if stripped.startswith(prefix):
+            return "system"
+    return "user"
+
+
+def new_scope() -> dict:
+    """The per-transcript bookkeeping build() mutates.
+
+    The main session's scope IS the session state dict; a subagent gets one
+    of these, kept under state["sub_scopes"][agent_id]. Plain JSON types
+    only -- all of it is persisted between hook invocations.
+    """
+    return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
+            "last_ns": 0, "started": False, "start_ns": 0, "prompt": ""}
+
+
+def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
+                 root_span_id: str, links: dict, depth: int = 0,
+                 key_prefix: str = "", make_turns: bool = True,
+                 inline_sidechains: bool = True) -> List[Any]:
+    """Entries of ONE transcript -> spans, parented under `root_span_id`.
+
+    Used for both the main transcript (scope == the session state, root ==
+    the session span) and each subagent transcript (scope == that agent's
+    scope, root == that agent's AGENT span). `links` collects every
+    subagent-spawning tool_use seen, so subagents.expand() can find the
+    transcript each one wrote -- including the ones a subagent spawns.
+    """
     out: List[Span] = []
-    trace_id = trace_id_for(ctx.session_id)
-    root_span_id = span_id_for("session:" + ctx.session_id)
-
     for entry in entries:
-        if not state["root_started"]:
-            state["root_started"] = True
-            state["root_start_ns"] = entry.timestamp_ns
-            attrs = _base_attrs(ctx, "AGENT")
-            attrs["glassflow.span.pending"] = True
-            out.append(Span(
-                trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
-                name="claude-code session", kind_oi="AGENT",
-                start_ns=entry.timestamp_ns, end_ns=entry.timestamp_ns,
-                attributes=attrs, status_code="UNSET", status_message="",
-                pending=True,
-            ))
-
         if entry.kind == "user":
             tool_results = entry.tool_results()
             if tool_results:
                 for tr in tool_results:
                     tool_use_id = tr.get("tool_use_id")
-                    open_tool = state["open_tools"].pop(tool_use_id, None)
+                    link = links.get(tool_use_id)
+                    if link is not None and link.get("end_ns") is None:
+                        # The tool_result is the only record that the subagent
+                        # finished; its own transcript has no closing entry.
+                        link["end_ns"] = entry.timestamp_ns
+                    open_tool = scope["open_tools"].pop(tool_use_id, None)
                     if open_tool is None:
                         continue  # tool started before instrumentation was enabled
-                    if open_tool["span_id"] in state["open_task_spans"]:
-                        state["open_task_spans"].remove(open_tool["span_id"])
+                    if open_tool["span_id"] in scope["open_task_spans"]:
+                        scope["open_task_spans"].remove(open_tool["span_id"])
                     is_error = bool(tr.get("is_error"))
                     content = tr.get("content")
                     content_str = content if isinstance(content, str) else json.dumps(content)
@@ -170,7 +229,7 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                     elif ctx.capture_content:
                         status_message = truncate(content_str, ctx.max_attr_bytes)
                     else:
-                        status_message = "tool error"
+                        status_message = TOOL_ERROR_WITHHELD
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
                         parent_span_id=open_tool["parent_span_id"], name=open_tool["tool_name"],
@@ -178,13 +237,18 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                         attributes=attrs, status_code=status_code, status_message=status_message,
                         pending=False,
                     ))
-            else:
-                if entry.prompt_id and entry.prompt_id not in state["open_turns"]:
-                    turn_span_id = span_id_for("turn:" + entry.prompt_id)
-                    state["open_turns"][entry.prompt_id] = {
+            elif make_turns:
+                if entry.prompt_id and entry.prompt_id not in scope["open_turns"]:
+                    # Namespaced by scope: a subagent transcript carries the
+                    # PARENT's promptId, so "turn:" + promptId alone would
+                    # collide with the main session's turn span.
+                    turn_span_id = span_id_for(key_prefix + "turn:" + entry.prompt_id)
+                    source = turn_source_for(entry.text())
+                    scope["open_turns"][entry.prompt_id] = {
                         "span_id": turn_span_id,
                         "parent_span_id": root_span_id,
                         "start_ns": entry.timestamp_ns,
+                        "source": source,
                         # state.save writes this dict to
                         # ~/.claude/rius/state/<sid>.json in plaintext, so
                         # keeping the prompt here would persist it to disk
@@ -193,6 +257,7 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                         "text": entry.text() if ctx.capture_content else "",
                     }
                     attrs = _base_attrs(ctx, "CHAIN")
+                    attrs["cc.turn.source"] = source
                     attrs["glassflow.span.pending"] = True
                     out.append(Span(
                         trace_id=trace_id, span_id=turn_span_id, parent_span_id=root_span_id,
@@ -202,16 +267,21 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                     ))
 
         elif entry.kind == "assistant":
-            if entry.is_sidechain and state["open_task_spans"]:
-                parent_span_id = state["open_task_spans"][-1]
+            if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
+                # Only the main transcript: a Claude Code version that wrote
+                # sidechain entries inline still nests them under the tool
+                # call. Inside a subagent's own file every entry is a
+                # sidechain entry and belongs to that subagent, not to the
+                # nested tool call it happens to follow.
+                parent_span_id = scope["open_task_spans"][-1]
             else:
-                parent_span_id = _current_turn_parent(state, root_span_id)
+                parent_span_id = _current_turn_parent(scope, root_span_id)
 
             model = entry.message.get("model") or ""
             usage = entry.message.get("usage") or {}
             stop_reason = entry.message.get("stop_reason")
             llm_span_id = span_id_for(entry.uuid)
-            start_ns = state["last_ns"] or entry.timestamp_ns
+            start_ns = scope["last_ns"] or entry.timestamp_ns
 
             attrs = _base_attrs(ctx, "LLM")
             if model:
@@ -241,15 +311,29 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                 tool_name = block.get("name") or ""
                 tool_span_id = span_id_for(tool_id)
                 input_json = json.dumps(block.get("input") or {})
-                state["open_tools"][tool_id] = {
+                scope["open_tools"][tool_id] = {
                     "span_id": tool_span_id,
                     "parent_span_id": llm_span_id,
                     "start_ns": entry.timestamp_ns,
                     "tool_name": tool_name,
                     "input_json": input_json,
                 }
-                if tool_name == "Task":
-                    state["open_task_spans"].append(tool_span_id)
+                if tool_name in SUBAGENT_TOOL_NAMES:
+                    scope["open_task_spans"].append(tool_span_id)
+                    if tool_id and tool_id not in links:
+                        # The subagent's own transcript is a separate file,
+                        # found later by matching this tool_use id against
+                        # subagents/*.meta.json. Recorded even if that file
+                        # does not exist yet: it is written as the subagent
+                        # runs, long after this tool_use appears.
+                        links[tool_id] = {
+                            "span_id": tool_span_id,
+                            "start_ns": entry.timestamp_ns,
+                            "end_ns": None,
+                            "depth": depth + 1,
+                            "agent_id": None,
+                            "closed": False,
+                        }
 
                 attrs = _base_attrs(ctx, "TOOL")
                 attrs["gen_ai.tool.name"] = tool_name
@@ -261,9 +345,75 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                     status_message="", pending=True,
                 ))
 
-        state["last_ns"] = entry.timestamp_ns
+        scope["last_ns"] = entry.timestamp_ns
 
     return out
+
+
+def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
+    """The MAIN transcript. Subagent transcripts are separate files; see
+    subagents.expand(), which feeds them through emit_entries() too."""
+    out: List[Span] = []
+    trace_id = trace_id_for(ctx.session_id)
+    root_span_id = span_id_for("session:" + ctx.session_id)
+    if "sub_links" not in state:
+        state["sub_links"] = {}
+
+    if entries and not state.get("root_started"):
+        state["root_started"] = True
+        state["root_start_ns"] = entries[0].timestamp_ns
+        attrs = _base_attrs(ctx, "AGENT")
+        attrs["glassflow.span.pending"] = True
+        out.append(Span(
+            trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
+            name="claude-code session", kind_oi="AGENT",
+            start_ns=entries[0].timestamp_ns, end_ns=entries[0].timestamp_ns,
+            attributes=attrs, status_code="UNSET", status_message="",
+            pending=True,
+        ))
+
+    out += emit_entries(entries, state, ctx, trace_id, root_span_id,
+                        state["sub_links"], depth=0, key_prefix="",
+                        make_turns=True, inline_sidechains=True)
+    return out
+
+
+def subagent_span(ctx: Ctx, trace_id: str, span_id: str, parent_span_id: str,
+                  meta: Dict[str, Any], agent_id: str, depth: int,
+                  start_ns: int, end_ns: int, prompt: str,
+                  pending: bool) -> Span:
+    """The AGENT span for one subagent run, stamped from its meta.json.
+
+    `gen_ai.agent.name` is the key argus-core's sink filters on
+    (docs/spans-query.md): it is what makes a subagent addressable as a
+    named agent in the UI instead of an anonymous span. The description and
+    the prompt are content and go through the capture gate; the agent's
+    name, model and depth are identity and do not.
+    """
+    attrs = _base_attrs(ctx, "AGENT")
+    agent_type = meta.get("agentType") or ""
+    if agent_type:
+        attrs["gen_ai.agent.name"] = agent_type
+    model = meta.get("model") or ""
+    if model:
+        attrs["gen_ai.request.model"] = model
+    if agent_id:
+        attrs["cc.subagent.id"] = agent_id
+    attrs["cc.subagent.depth"] = depth
+    description = meta.get("description") or ""
+    if description:
+        _content_attr(ctx, attrs, "gen_ai.agent.description", description)
+    if prompt:
+        _content_attr(ctx, attrs, "input.value", prompt)
+    if pending:
+        attrs["glassflow.span.pending"] = True
+    return Span(
+        trace_id=trace_id, span_id=span_id, parent_span_id=parent_span_id,
+        name=agent_type or "subagent", kind_oi="AGENT", start_ns=start_ns,
+        end_ns=end_ns, attributes=attrs,
+        status_code="UNSET" if pending else "OK", status_message="",
+        pending=pending,
+    )
 
 
 def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
@@ -271,6 +421,7 @@ def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     trace_id = trace_id_for(ctx.session_id)
     for prompt_id, turn in list(state["open_turns"].items()):
         attrs = _base_attrs(ctx, "CHAIN")
+        attrs["cc.turn.source"] = turn.get("source") or "user"
         _content_attr(ctx, attrs, "input.value", turn.get("text", ""))
         out.append(Span(
             trace_id=trace_id, span_id=turn["span_id"], parent_span_id=turn["parent_span_id"],

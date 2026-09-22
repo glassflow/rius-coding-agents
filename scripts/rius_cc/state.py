@@ -26,6 +26,14 @@ def new_state() -> dict:
         "root_start_ns": 0,
         "last_ns": 0,
         "open_task_spans": [],
+        # Subagent drilldown. A subagent's transcript is a separate file, so
+        # each one needs its own byte offset and its own span bookkeeping,
+        # keyed by agent id; sub_links maps the spawning tool_use id to the
+        # tool span its work hangs under. All plain JSON -- this dict is
+        # written to disk between hook invocations.
+        "sub_links": {},
+        "sub_offsets": {},
+        "sub_scopes": {},
         "spans_exported": 0,
         # Diagnostics. These exist so that "nothing was exported" is never
         # the whole story /rius status can tell.

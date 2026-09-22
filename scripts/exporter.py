@@ -12,7 +12,8 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import config, log as rius_log, otlp, spans, state, transcript
+from rius_cc import (config, log as rius_log, otlp, spans, state, subagents,
+                     transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -216,10 +217,26 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
 
             out = spans.build(entries, st, ctx)
 
+            # Subagents write their own transcripts; without this the 58% of
+            # tokens that live in them never reach the trace. Guarded on its
+            # own: a surprise in those files must not cost the main
+            # transcript's spans, which are already built by this point.
+            sub_dir = subagents.dir_for(transcript_path, session_id)
+            try:
+                out += subagents.expand(st, ctx, sub_dir)
+            except Exception as exc:
+                _log(home, cfg, "session %s: subagent expansion failed: %r"
+                     % (session_id, exc), force=True)
+
             now_ns = _now_ns()
             if event == "Stop":
                 out += spans.finalize_turn(st, ctx, now_ns)
             elif event == "SessionEnd":
+                try:
+                    out += subagents.finalize(st, ctx, sub_dir, now_ns)
+                except Exception as exc:
+                    _log(home, cfg, "session %s: subagent finalize failed: %r"
+                         % (session_id, exc), force=True)
                 out += spans.finalize_session(st, ctx, now_ns)
 
             if out:

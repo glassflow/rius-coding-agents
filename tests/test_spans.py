@@ -189,7 +189,11 @@ def test_capture_content_false_strips_content(fixtures_dir):
             "tool error output leaked into Status.message with capture off"
     tool = [s for s in out if s.kind_oi == "TOOL" and not s.pending][0]
     assert tool.status_code == "ERROR"          # structure survives
-    assert tool.status_message == "tool error"  # fixed string, no content
+    # Fixed string, no content -- and self-explanatory, so a viewer reading
+    # the span knows the detail was withheld on purpose rather than lost.
+    assert tool.status_message == \
+        "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+    assert tool.status_message == spans.TOOL_ERROR_WITHHELD
     # structure survives
     assert any(s.attributes.get("gen_ai.tool.name") == "Read" for s in out)
 
@@ -287,3 +291,46 @@ def test_finalize_session_closes_root(fixtures_dir):
     assert root.parent_span_id is None
     assert root.end_ns > root.start_ns
     assert root.span_id == spans.span_id_for("session:" + ctx.session_id)
+
+
+# --- N3: harness-injected turns are not user prompts ---------------------
+
+def test_system_injected_turns_are_marked_not_dropped(fixtures_dir):
+    """N3: of 10 turn spans in the live session, several had an input.value
+    of <local-command-caveat>, <task-notification>, <agent-message ...> or
+    <bash-input>. Those are harness-injected, not things the user typed, and
+    a turn list that cannot tell them apart is misleading. They are still
+    real work, so they are marked rather than dropped."""
+    entries, _ = transcript.read_from(str(fixtures_dir / "system_turns.jsonl"), 0)
+    st = _new_state()
+    ctx = _ctx(entries[0].session_id)
+    out = spans.build(entries, st, ctx)
+
+    turns = [s for s in out if s.kind_oi == "CHAIN"]
+    assert len(turns) == 6, "a system turn must be marked, never dropped"
+
+    by_prompt = dict((p, t["source"]) for p, t in st["open_turns"].items())
+    assert by_prompt == {"p1": "user", "p2": "system", "p3": "system",
+                         "p4": "system", "p5": "system", "p6": "user"}
+
+    # the marker is on the pending span too -- it is not content, and the UI
+    # needs it while the turn is still running
+    sources = dict((s.attributes["session.id"] and
+                    s.start_ns, s.attributes.get("cc.turn.source"))
+                   for s in turns)
+    assert set(sources.values()) == {"user", "system"}
+
+    final = spans.finalize_turn(st, ctx, now_ns=st["last_ns"] + 1)
+    marks = sorted(s.attributes["cc.turn.source"] for s in final)
+    assert marks == ["system", "system", "system", "system", "user", "user"]
+
+
+def test_turn_source_detection_is_anchored_to_the_start_of_the_text():
+    """A prompt that merely MENTIONS one of the wrappers is still a user
+    prompt. Substring matching would have mislabelled it."""
+    assert spans.turn_source_for("<bash-input>ls</bash-input>") == "system"
+    assert spans.turn_source_for("  <task-notification>x") == "system"
+    assert spans.turn_source_for('<agent-message agent="x">hi') == "system"
+    assert spans.turn_source_for("why does <bash-input> show up?") == "user"
+    assert spans.turn_source_for("hello") == "user"
+    assert spans.turn_source_for("") == "user"
