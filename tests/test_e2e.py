@@ -45,14 +45,7 @@ def server():
     received.clear()
     srv = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    # config.resolve treats RIUS_ENDPOINT as the exact URL posted to (see
-    # rius_cc/otlp.py export() and config.py) -- there is no path-joining
-    # in the shipped code, so the fixture endpoint must already include
-    # /v1/traces. The brief's literal `server` string (bare origin, no
-    # path) would make every request land on "/", not "/v1/traces", and
-    # the path assertion below would fail. This is the one deviation from
-    # the brief's literal test code.
-    yield "http://127.0.0.1:%d/v1/traces" % srv.server_address[1]
+    yield "http://127.0.0.1:%d" % srv.server_address[1]
     srv.shutdown()
 
 

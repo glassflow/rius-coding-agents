@@ -94,9 +94,10 @@ def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0) -> in
         "Content-Type": "application/x-protobuf",
         "Authorization": "Bearer " + api_key,
     }
+    url = endpoint.rstrip("/") + "/v1/traces"
     last_status = 0
     for _attempt in range(2):
-        req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 status = resp.getcode()

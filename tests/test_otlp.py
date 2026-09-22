@@ -1,4 +1,5 @@
 import struct
+from unittest import mock
 
 from rius_cc import otlp, spans
 
@@ -42,3 +43,25 @@ def test_attribute_types_encode_distinctly():
 
 def test_empty_span_list_is_empty_body():
     assert otlp.encode({}, []) == b""
+
+
+def _fake_urlopen(status=200):
+    resp = mock.MagicMock()
+    resp.getcode.return_value = status
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    return resp
+
+
+def test_export_appends_v1_traces_to_bare_endpoint():
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen()) as m:
+        otlp.export("https://ingest.example.com", "key", b"body")
+        req = m.call_args[0][0]
+        assert req.full_url == "https://ingest.example.com/v1/traces"
+
+
+def test_export_does_not_double_slash_trailing_slash_endpoint():
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen()) as m:
+        otlp.export("https://ingest.example.com/", "key", b"body")
+        req = m.call_args[0][0]
+        assert req.full_url == "https://ingest.example.com/v1/traces"
