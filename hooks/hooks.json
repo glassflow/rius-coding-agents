@@ -1,0 +1,23 @@
+{
+  "description": "Stream this Claude Code session to Rius as OTLP traces",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" SessionStart", "shell": "bash" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" UserPromptSubmit", "shell": "bash" } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" PreToolUse", "shell": "bash" } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" PostToolUse", "shell": "bash" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" Stop", "shell": "bash" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" SessionEnd", "shell": "bash" } ] }
+    ]
+  }
+}

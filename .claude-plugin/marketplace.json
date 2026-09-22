@@ -1,0 +1,15 @@
+{
+  "name": "rius-coding-agents",
+  "description": "Rius observability for coding agents",
+  "owner": { "name": "GlassFlow", "url": "https://glassflow.dev" },
+  "plugins": [
+    {
+      "name": "rius-claude-code",
+      "description": "Stream Claude Code sessions to Rius as OTLP GenAI traces",
+      "source": "./",
+      "version": "0.1.0",
+      "category": "monitoring",
+      "tags": ["observability", "otel", "tracing", "rius"]
+    }
+  ]
+}
