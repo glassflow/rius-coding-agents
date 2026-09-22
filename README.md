@@ -1,5 +1,9 @@
 # rius-claude-code
 
+[![CI](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
+![Zero runtime deps](https://img.shields.io/badge/dependencies-zero-6b7280?style=flat-square)
+
 A Claude Code plugin that streams Claude Code sessions to [Rius](https://glassflow.dev)
 as OTLP GenAI traces: one trace per session, with turns, model generations
 (including token counts), tool calls, and subagents laid out as a waterfall.
@@ -32,7 +36,7 @@ output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
 ### Local development
 
 ```
-/plugin marketplace add /opt/glass0/claude-observe
+/plugin marketplace add /path/to/rius-coding-agents
 /plugin install rius-claude-code@rius-coding-agents
 ```
 
@@ -139,7 +143,7 @@ in `~/.claude/rius/config.json`, then the global default of off. If
 `RIUS_API_KEY` is unset, tracing is forced off no matter what the above
 resolves to.
 
-## What a trace looks like
+## How it works
 
 One trace per Claude Code session, shaped as a waterfall:
 
@@ -182,7 +186,7 @@ dies mid-run leaves those pending spans unresolved -- that's intentional, it's
 what "the agent died while running" is supposed to look like in the UI, not a
 bug to be papered over.
 
-## Generation timing is approximate
+### Generation timing is approximate
 
 Tool span durations are accurate: start and end come from real transcript
 timestamps (the entry carrying the `tool_use` and the matching
