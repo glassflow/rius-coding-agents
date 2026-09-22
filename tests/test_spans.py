@@ -105,15 +105,56 @@ def test_pending_spans_never_carry_content(fixtures_dir):
 
 
 def test_capture_content_false_strips_content(fixtures_dir):
-    entries, _ = transcript.read_from(str(fixtures_dir / "tool_call.jsonl"), 0)
+    """C3: uses the ERROR fixture deliberately. The non-error fixture could
+    never have caught status_message, which bypassed the capture gate
+    entirely and carried a failed command's stdout+stderr off the machine."""
+    entries, _ = transcript.read_from(str(fixtures_dir / "tool_error.jsonl"), 0)
     ctx = _ctx(entries[0].session_id)
     ctx.capture_content = False
     out = spans.build(entries, _new_state(), ctx)
     for s in out:
         assert "input.value" not in s.attributes
         assert "output.value" not in s.attributes
+        assert "ENOENT" not in (s.status_message or ""), \
+            "tool error output leaked into Status.message with capture off"
+    tool = [s for s in out if s.kind_oi == "TOOL" and not s.pending][0]
+    assert tool.status_code == "ERROR"          # structure survives
+    assert tool.status_message == "tool error"  # fixed string, no content
     # structure survives
     assert any(s.attributes.get("gen_ai.tool.name") == "Read" for s in out)
+
+
+def test_capture_content_true_keeps_the_tool_error_message(fixtures_dir):
+    entries, _ = transcript.read_from(str(fixtures_dir / "tool_error.jsonl"), 0)
+    out = spans.build(entries, _new_state(), _ctx(entries[0].session_id))
+    tool = [s for s in out if s.kind_oi == "TOOL" and not s.pending][0]
+    assert tool.status_message == "ENOENT"
+
+
+def test_prompt_text_is_not_persisted_when_capture_is_off(fixtures_dir):
+    """I6: open_turns is written verbatim to ~/.claude/rius/state/<sid>.json
+    by state.save. The text was only SENT when capture was on, but it was
+    always WRITTEN to disk in plaintext."""
+    import json as _json
+    entries, _ = transcript.read_from(str(fixtures_dir / "simple.jsonl"), 0)
+    ctx = _ctx(entries[0].session_id)
+    ctx.capture_content = False
+    st = _new_state()
+    spans.build(entries, st, ctx)
+    assert st["open_turns"], "expected an open turn to have been recorded"
+    assert "hello" not in _json.dumps(st), "prompt text was persisted to state"
+    for turn in st["open_turns"].values():
+        assert turn["text"] == ""
+
+
+def test_prompt_text_is_persisted_when_capture_is_on(fixtures_dir):
+    entries, _ = transcript.read_from(str(fixtures_dir / "simple.jsonl"), 0)
+    st = _new_state()
+    ctx = _ctx(entries[0].session_id)
+    spans.build(entries, st, ctx)
+    assert [t["text"] for t in st["open_turns"].values()] == ["hello"]
+    out = spans.finalize_turn(st, ctx, now_ns=st["last_ns"] + 1)
+    assert out[0].attributes["input.value"] == "hello"
 
 
 def test_truncate_marks_what_it_removed():

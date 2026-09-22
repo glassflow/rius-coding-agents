@@ -152,7 +152,17 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
                     _content_attr(ctx, attrs, "output.value", content_str)
                     status_code = "ERROR" if is_error else "OK"
-                    status_message = truncate(content_str, ctx.max_attr_bytes) if is_error else ""
+                    # Status.message is content too: for a failed Bash call
+                    # it is the command's stdout+stderr. It must honour the
+                    # capture gate exactly like input.value/output.value do,
+                    # or RIUS_CAPTURE_CONTENT=false is not the guarantee the
+                    # README makes it out to be.
+                    if not is_error:
+                        status_message = ""
+                    elif ctx.capture_content:
+                        status_message = truncate(content_str, ctx.max_attr_bytes)
+                    else:
+                        status_message = "tool error"
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
                         parent_span_id=open_tool["parent_span_id"], name=open_tool["tool_name"],
@@ -167,7 +177,12 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
                         "span_id": turn_span_id,
                         "parent_span_id": root_span_id,
                         "start_ns": entry.timestamp_ns,
-                        "text": entry.text(),
+                        # state.save writes this dict to
+                        # ~/.claude/rius/state/<sid>.json in plaintext, so
+                        # keeping the prompt here would persist it to disk
+                        # even with capture off. It is only ever read back to
+                        # fill input.value, which the gate drops anyway.
+                        "text": entry.text() if ctx.capture_content else "",
                     }
                     attrs = _base_attrs(ctx, "CHAIN")
                     attrs["glassflow.span.pending"] = True
