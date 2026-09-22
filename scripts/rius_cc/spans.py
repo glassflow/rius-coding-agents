@@ -391,8 +391,8 @@ def subagent_span(ctx: Ctx, trace_id: str, span_id: str, parent_span_id: str,
                   pending: bool) -> Span:
     """The AGENT span for one subagent run, stamped from its meta.json.
 
-    `gen_ai.agent.name` is the key argus-core's sink filters on
-    (docs/spans-query.md): it is what makes a subagent addressable as a
+    `gen_ai.agent.name` is the key the Rius backend's sink filters on:
+    it is what makes a subagent addressable as a
     named agent in the UI instead of an anonymous span. The description and
     the prompt are content and go through the capture gate; the agent's
     name, model and depth are identity and do not.

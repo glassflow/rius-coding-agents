@@ -81,7 +81,7 @@ Staging credentials: received from user, written to .env.local (0600, gitignored
   Probe POST to $RIUS_ENDPOINT/v1/traces with Content-Type: application/json returned
   415 "unsupported media type: want application/x-protobuf" => key AUTHENTICATES, endpoint is
   correct, and the protobuf-only constraint is now confirmed against the LIVE receiver, not just
-  against argus-core source. Acceptance gate de-risked ahead of time.
+  against the backend source. Acceptance gate de-risked ahead of time.
 
 Ruling 4: real Rius keys are `ri_<id>.<secret>`, NOT `glassflow_...` as the plan assumed.
   config.redact() must be format-agnostic: render everything up to and including the first
@@ -203,7 +203,7 @@ Task 10: fix round 1/5 (endpoint defect + test restoration; commit c9272ab). 86 
   waterfall AGENT root -> LLM (claude-opus-5, 1234/567/89012 cache-read) -> TOOL (Read).
   This validates the ENTIRE chain against the real receiver: hand-rolled protobuf encoding, span
   model, semconv attribute keys, bearer auth, and URL construction. Not a fake receiver.
-  Spec 13.3 (is claude-opus-5 priced in argus-core?) is now answerable by looking at this trace's
+  Spec 13.3 (is claude-opus-5 priced in the Rius backend?) is now answerable by looking at this trace's
   cost in the UI -- pending user confirmation.
 Task 11: README + .env.example (commit 0cbc251). Controller verified the content-capture warning
   is the SECOND section, blunt and concrete ("if a session happens to cat a .env file..."), with

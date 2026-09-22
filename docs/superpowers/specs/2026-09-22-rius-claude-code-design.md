@@ -41,9 +41,10 @@ These are deliberate exclusions, not oversights:
   Not this project.
 - **Claude Code's native OTEL path** (`CLAUDE_CODE_ENABLE_TELEMETRY=1`). It emits
   metrics and log events, not spans; Rius ingests `/v1/traces`. Using it would
-  mean backend work in `argus-core`.
-- **Any change to `argus-core`.** This is a pure client. If it turns out to need
-  a backend change, that is a separate ticket, raised rather than worked around.
+  mean backend work in the Rius backend, not this plugin.
+- **Any change to the Rius backend.** This is a pure client. If it turns out to
+  need a backend change, that is a separate ticket, raised rather than worked
+  around.
 - **Support for any other coding agent**, and any abstraction anticipating one.
   See §14 for why, and for what the second adapter would cost.
 
@@ -88,10 +89,10 @@ AGENT   claude-code session          parent=''
 ```
 
 - **Root (`AGENT`)** — the session. `ParentSpanId` is empty, which is what makes
-  it a root to the backend (`packages/clickhouse-db/spans/reader.go:82`:
-  `rootSpanPredicate = "(ParentSpanId = '0000000000000000' OR ParentSpanId = '')"`).
-  A trace whose root never arrives will not appear in the traces list, so the
-  root is emitted as a pending span at `SessionStart` (see §5).
+  it a root: the Rius backend identifies a trace root by an empty parent span
+  id, so a root whose parent is set will not appear in the traces list at all.
+  The root is therefore emitted as a pending span at `SessionStart` (see §5),
+  so a trace is always visible from the moment a session starts.
 - **Turn (`CHAIN`)** — one user prompt and everything it caused. Grouped by
   `promptId` on user entries.
 - **Generation (`LLM`)** — one assistant message.
@@ -149,7 +150,7 @@ here, and not the upstream OTel GenAI spelling where the two differ.
 | `gen_ai.usage.cache_creation.input_tokens` | `cache_creation_input_tokens` |
 | `gen_ai.response.finish_reasons` | `[message.stop_reason]` |
 | `gen_ai.tool.name` | tool name |
-| `gen_ai.agent.name` | subagent `agentType` — the key argus-core's sink filters on (`docs/spans-query.md`) |
+| `gen_ai.agent.name` | subagent `agentType` — the key the Rius backend's sink filters on |
 | `gen_ai.agent.description` | subagent `description` (content, see §7) |
 | `cc.subagent.id` / `cc.subagent.depth` | which subagent file, and how deep it sits |
 | `cc.turn.source` | `user` or `system` for a turn (§3.4) |
@@ -357,9 +358,9 @@ can drift. §10 covers how that is defended.
 
 ### 6.3 Wire format: protobuf, hand-encoded
 
-**Resolved 2026-09-22.** The receiver is protobuf-only. `apps/receiver/internal/handler/handler.go:182`
-rejects any `Content-Type` that is not `application/x-protobuf` with 415:
-*"OTLP/JSON is deferred; anything non-protobuf is unsupported."*
+**Resolved 2026-09-22.** The receiver is protobuf-only. The ingest endpoint
+accepts OTLP protobuf only and rejects any other `Content-Type` with 415 --
+confirmed against the live receiver, not just inferred from a spec.
 
 So the exporter encodes OTLP protobuf itself, in stdlib Python. This is
 tractable because it is **encode-only**: no parsing, no unknown fields, no
@@ -379,7 +380,7 @@ problem worth ~200 lines.
 
 **Separately worth raising:** OTLP/JSON support is required by the OTLP
 specification, so the receiver has a compliance gap that will affect other
-integrations. That is an `argus-core` ticket, not this project's work.
+integrations. That is a Rius backend ticket, not this project's work.
 
 ## 7. Content
 
@@ -577,8 +578,8 @@ nothing of spans, `spans.py` nothing of HTTP, `otlp.py` nothing of Claude Code.
    running for hours, or does it need an end to look right? Resolve during
    manual acceptance (§10).
 3. **Cost attribution.** The sink resolves `Cost` from token counts and model.
-   Confirm `claude-opus-5` and the cache-token split are priced in
-   `packages/argus-core/pricing`, or costs read as zero.
+   Confirm `claude-opus-5` and the cache-token split are priced in the Rius
+   backend's pricing table, or costs read as zero.
 
 ## 14. Other coding agents
 

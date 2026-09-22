@@ -91,8 +91,8 @@ def test_subagent_spans_carry_the_parent_session_trace_id(fixtures_dir):
 
 
 def test_subagent_agent_span_is_stamped_from_meta_json(fixtures_dir):
-    """gen_ai.agent.name is the key argus-core's sink filters on
-    (docs/spans-query.md), so this is what makes a subagent addressable as a
+    """gen_ai.agent.name is the key the Rius backend's sink filters on,
+    so this is what makes a subagent addressable as a
     named agent in the UI rather than an anonymous span."""
     out, _, _ = _run(_main_path(fixtures_dir), SID)
     agent = [s for s in out

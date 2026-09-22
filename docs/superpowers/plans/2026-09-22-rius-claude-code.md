@@ -872,9 +872,9 @@ def test_env_beats_path_rules(tmp_path):
 def test_path_rule_enables_folder_and_subfolders(tmp_path):
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:
-        json.dump({"enabled_paths": ["/opt/glass0"]}, fh)
-    assert config.resolve("s1", "/opt/glass0", BASE_ENV, home).enabled is True
-    assert config.resolve("s1", "/opt/glass0/deep/dir", BASE_ENV, home).enabled is True
+        json.dump({"enabled_paths": ["/opt/example"]}, fh)
+    assert config.resolve("s1", "/opt/example", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/opt/example/deep/dir", BASE_ENV, home).enabled is True
     assert config.resolve("s1", "/opt/other", BASE_ENV, home).enabled is False
 
 
@@ -927,7 +927,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'rius_cc.config'`
 
 Implement `scripts/rius_cc/config.py` to satisfy the tests. Notes that are easy to get wrong:
 
-- Path matching: a rule matches when `cwd == rule`, when `cwd.startswith(rule.rstrip("/") + "/")`, or when `fnmatch.fnmatch(cwd, rule)`. The first two are what make `"/opt/glass0"` cover `/opt/glass0/deep/dir`; the third is what makes `"/x/*"` work.
+- Path matching: a rule matches when `cwd == rule`, when `cwd.startswith(rule.rstrip("/") + "/")`, or when `fnmatch.fnmatch(cwd, rule)`. The first two are what make `"/opt/example"` cover `/opt/example/deep/dir`; the third is what makes `"/x/*"` work.
 - Every file read is wrapped — a corrupt rules file resolves to the default, never an exception.
 - `max_attr_bytes` parses with a fallback to 32768 on a non-integer value.
 - `redact` returns `"<unset>"` for `None` and otherwise `"glassflow_…"`, never any part of the secret.
@@ -1979,7 +1979,7 @@ like, the generation-timing approximation (spec §4), and how to uninstall.
 
 ```bash
 # in Claude Code:
-#   /plugin marketplace add /opt/glass0/claude-observe
+#   /plugin marketplace add /path/to/rius-coding-agents
 #   /plugin install rius-claude-code@rius-coding-agents
 #   /reload-plugins          (after any later edit -- there is no file watcher)
 ```
@@ -2006,7 +2006,7 @@ At `https://staging.rius.glassflow.xyz`, confirm all of:
 3. Token counts on a generation match that assistant message's `usage` in the transcript.
 4. Tool spans show the tool name, and a failed tool is red.
 5. `session.id` matches the Claude Code session id.
-6. Cost is non-zero — if it is zero, the model is unpriced in `packages/argus-core/pricing` (spec §13.3), which is an argus-core finding to report, not a plugin bug.
+6. Cost is non-zero — if it is zero, the model is unpriced in the Rius backend's pricing table (spec §13.3), which is a backend finding to report, not a plugin bug.
 
 Report any of these that fail rather than working around them.
 
@@ -2076,7 +2076,7 @@ materially smaller blast radius than the per-session tailer daemon rejected in
 spec §12.
 
 **Contract — verified against `glassflow-python/src/rius/heartbeat.py` and
-`argus-core/packages/argus-core/heartbeat`. Do not improvise these.**
+the Rius backend's heartbeat handler. Do not improvise these.**
 
 - `POST <endpoint>/v1/heartbeat`, `Content-Type: application/json` — note this
   endpoint takes JSON, unlike `/v1/traces` which is protobuf-only.

@@ -62,9 +62,9 @@ def test_env_beats_path_rules(tmp_path):
 def test_path_rule_enables_folder_and_subfolders(tmp_path):
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:
-        json.dump({"enabled_paths": ["/opt/glass0"]}, fh)
-    assert config.resolve("s1", "/opt/glass0", BASE_ENV, home).enabled is True
-    assert config.resolve("s1", "/opt/glass0/deep/dir", BASE_ENV, home).enabled is True
+        json.dump({"enabled_paths": ["/opt/example"]}, fh)
+    assert config.resolve("s1", "/opt/example", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/opt/example/deep/dir", BASE_ENV, home).enabled is True
     assert config.resolve("s1", "/opt/other", BASE_ENV, home).enabled is False
 
 
@@ -84,10 +84,10 @@ def test_degenerate_enabled_path_rules_never_match_anything(tmp_path):
     enabled_paths would silently trace every folder on the machine, with
     full content capture."""
     home = _home(tmp_path)
-    for bad in ["", "/", " ", "//", "*", "**", "opt/glass0", "?"]:
+    for bad in ["", "/", " ", "//", "*", "**", "opt/example", "?"]:
         with open(config.path_rules_path(home), "w") as fh:
             json.dump({"enabled_paths": [bad]}, fh)
-        c = config.resolve("s1", "/opt/glass0/anything", BASE_ENV, home)
+        c = config.resolve("s1", "/opt/example/anything", BASE_ENV, home)
         assert c.enabled is False, "rule %r enabled an unrelated folder" % (bad,)
         assert c.enabled is False
         c = config.resolve("s1", "/", BASE_ENV, home)
@@ -99,17 +99,17 @@ def test_degenerate_disabled_path_rules_are_ignored_too(tmp_path):
     still silently kills tracing everywhere. Same rule: skip it."""
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:
-        json.dump({"enabled_paths": ["/opt/glass0"], "disabled_paths": [""]}, fh)
-    assert config.resolve("s1", "/opt/glass0/x", BASE_ENV, home).enabled is True
+        json.dump({"enabled_paths": ["/opt/example"], "disabled_paths": [""]}, fh)
+    assert config.resolve("s1", "/opt/example/x", BASE_ENV, home).enabled is True
 
 
 def test_real_path_rules_still_match(tmp_path):
     """The skip must not eat legitimate rules, including globs."""
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:
-        json.dump({"enabled_paths": ["/opt/glass0", "/srv/*/checkout"]}, fh)
-    assert config.resolve("s1", "/opt/glass0", BASE_ENV, home).enabled is True
-    assert config.resolve("s1", "/opt/glass0/deep", BASE_ENV, home).enabled is True
+        json.dump({"enabled_paths": ["/opt/example", "/srv/*/checkout"]}, fh)
+    assert config.resolve("s1", "/opt/example", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/opt/example/deep", BASE_ENV, home).enabled is True
     assert config.resolve("s1", "/srv/a/checkout", BASE_ENV, home).enabled is True
     assert config.resolve("s1", "/srv/a/other", BASE_ENV, home).enabled is False
 
