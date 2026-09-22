@@ -239,3 +239,26 @@ def test_ctl_launcher_says_so_when_no_python_can_be_found(tmp_path):
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0
     assert "python" in r.stdout.lower()
+
+
+def test_ctl_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_path):
+    """Minor 1. Same misdiagnosis as hook.sh: if scripts/_find_python.sh is
+    absent, the guard must not silently leave rius_candidates unset -- that
+    prints "tried: ()" and blames PATH for what is really a packaging fault.
+    Copy rius_ctl.sh alone into a directory with no _find_python.sh."""
+    import shutil
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    bare = tmp_path / "bare_scripts"
+    bare.mkdir()
+    shutil.copy(CTL_SH, str(bare / "rius_ctl.sh"))
+    # deliberately no rius_ctl.py, no _find_python.sh copied alongside
+    env = {"HOME": str(home), "PATH": os.environ["PATH"]}
+    r = subprocess.run(["/bin/bash", str(bare / "rius_ctl.sh"), "status",
+                       "--cwd", "/x"],
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0
+    assert "_find_python.sh" in r.stdout, (
+        "output did not name the missing file: %r" % r.stdout)
+    assert "tried: ()" not in r.stdout, (
+        "output still shows the empty-candidate-list PATH misdiagnosis")

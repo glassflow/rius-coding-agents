@@ -34,6 +34,12 @@ esac
 # the one thing a hook may never do.
 if [ -n "$dir" ] && [ -r "$dir/_find_python.sh" ]; then
     . "$dir/_find_python.sh"
+elif [ -n "$dir" ]; then
+    # _find_python.sh is missing or unreadable: this is a packaging fault,
+    # not the PATH problem the fallback message below otherwise implies.
+    # Say so distinctly, or the breadcrumb blames PATH with an empty
+    # candidate list as the only tell.
+    rius_candidates="<scripts/_find_python.sh missing or unreadable>"
 fi
 
 if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then

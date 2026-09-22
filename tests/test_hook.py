@@ -578,6 +578,34 @@ def test_launcher_with_no_usable_python_exits_zero_and_says_so(tmp_path):
     assert "no Python" in crumb.read_text()
 
 
+def test_launcher_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_path):
+    """Minor 1. If scripts/_find_python.sh is absent (a packaging fault, not
+    a PATH problem), the guard around sourcing it must not silently leave
+    rius_candidates unset -- that produces "tried: " with an empty list and
+    misdiagnoses a missing file as a PATH problem. Copy hook.sh alone into a
+    directory with no _find_python.sh and assert the breadcrumb names the
+    real fault, with exit 0 preserved."""
+    home = tmp_path / "home"
+    home.mkdir()
+    bare = tmp_path / "bare_scripts"
+    bare.mkdir()
+    import shutil
+    shutil.copy(HOOK_SH, str(bare / "hook.sh"))
+    # deliberately no hook.py, no _find_python.sh copied alongside
+    r = subprocess.run(["/bin/sh", str(bare / "hook.sh"), "Stop"], input="{}",
+                       capture_output=True, text=True, timeout=30,
+                       env={"PATH": os.environ["PATH"], "HOME": str(home)})
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    log = home / ".claude" / "rius" / "log" / "bootstrap.log"
+    assert log.exists()
+    contents = log.read_text()
+    assert "_find_python.sh" in contents, (
+        "breadcrumb did not name the missing file: %r" % contents)
+    assert "tried: )" not in contents, (
+        "breadcrumb still shows the empty-candidate-list PATH misdiagnosis")
+
+
 def test_launcher_does_not_guess_its_directory(tmp_path):
     """M4. `dir=.` was a silent wrong answer: with $0 carrying no separator
     the launcher would run whatever `./hook.py` happens to be, or nothing,

@@ -393,9 +393,9 @@ def _windows_try_lock(fd: int, msvcrt_mod=None) -> bool:
     behaviour that the caller cannot control, which is the opposite of the
     bounded, caller-supplied deadline state.session_lock promises.
     """
-    if msvcrt_mod is None:  # pragma: no cover - Windows only
-        import msvcrt as msvcrt_mod  # noqa: F811
     try:
+        if msvcrt_mod is None:  # pragma: no cover - Windows only
+            import msvcrt as msvcrt_mod  # noqa: F811
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt_mod.locking(fd, msvcrt_mod.LK_NBLCK, 1)
     except OSError:
@@ -419,9 +419,9 @@ def try_lock(fd: int) -> bool:
 
 
 def _windows_unlock(fd: int, msvcrt_mod=None) -> None:
-    if msvcrt_mod is None:  # pragma: no cover - Windows only
-        import msvcrt as msvcrt_mod  # noqa: F811
     try:
+        if msvcrt_mod is None:  # pragma: no cover - Windows only
+            import msvcrt as msvcrt_mod  # noqa: F811
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt_mod.locking(fd, msvcrt_mod.LK_UNLCK, 1)
     except OSError:

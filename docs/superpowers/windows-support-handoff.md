@@ -427,3 +427,26 @@ without bash (minimal Alpine, NixOS) hooks that work today would stop. `hook.sh`
 is `#!/bin/sh`-clean, so `sh "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh"` would work
 everywhere — but it may interact with Claude Code's `"shell": "bash"` field, so
 verify before changing. Very low likelihood; noted for the regression sweep.
+
+**Minor 3 — POSIX latency cost of the interpreter probe, and its mitigation.**
+`scripts/_find_python.sh:24` (`uname -s`) and `:50` (the `candidate -c ""`
+probe) now run on every hook event on macOS/Linux, including `PreToolUse` and
+`PostToolUse`, which fire per tool call. On plain CPython this is roughly
+20-40ms per event; under a `pyenv`/`asdf` shim, where `python3` is itself a
+shell script, the probe roughly doubles the shim's own cost. This sits on the
+session's critical path.
+
+This is an accepted trade for platform-independent correctness, not a defect.
+Before the probe, a broken or masquerading interpreter (e.g. the Windows
+Store's `python3` alias, or a shim pointing at nothing) caused a non-zero hook
+exit — which a hook must never do. The probe turns that failure mode into "try
+the next candidate", at the cost of one extra process per candidate per hook
+event, on every platform, forever.
+
+Cheap mitigation if this ever bites in practice: skip the `uname -s` call
+(`_find_python.sh:24`) when `$OS`, `$WINDIR` or `$windir` have already settled
+the platform question (i.e. only fall through to `uname` when all three are
+unset) — it is the one call of the two that is not load-bearing for
+correctness, only for ordering the candidate list. The `-c ""` probe itself
+should not be weakened; it is what makes the difference between "no
+interpreter" and "silently traced nothing."

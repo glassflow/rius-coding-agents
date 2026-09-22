@@ -134,6 +134,13 @@ jobs:
           assert named, "no hook command names a file"
           for rel in sorted(named):
               assert os.path.exists(rel), "hooks.json runs a missing file: %s" % rel
+          # scripts/_find_python.sh is sourced by hook.sh and rius_ctl.sh, not
+          # named in hooks.json (it never appears as a ${CLAUDE_PLUGIN_ROOT}
+          # command), so the loop above would never catch its absence. Check
+          # it explicitly, or a missing file here silently degrades both
+          # entry points into misreporting a PATH problem.
+          assert os.path.exists("scripts/_find_python.sh"), \
+              "scripts/_find_python.sh is missing (sourced by hook.sh/rius_ctl.sh)"
           # hook.py is deliberately NOT in this list: it carries no shebang
           # (see the comment at the top of it) and is only ever run as an
           # argument to an interpreter. rius_ctl.py keeps its shebang, so a
