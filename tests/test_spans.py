@@ -164,6 +164,28 @@ def test_truncate_marks_what_it_removed():
     assert spans.truncate("short", 100) == "short"
 
 
+def test_finalize_session_emits_no_root_if_one_never_started():
+    """I5: open a session in an enabled folder, type nothing, quit. build()
+    never ran, so root_start_ns is 0 and the closing root span started at the
+    Unix epoch -- a 56-year span in the waterfall."""
+    st = _new_state()
+    ctx = _ctx("s-empty")
+    out = spans.finalize_session(st, ctx, now_ns=1_790_071_200_000_000_000)
+    assert [s for s in out if s.kind_oi == "AGENT"] == []
+
+
+def test_finalize_session_never_emits_an_epoch_start():
+    """Belt and braces: a state that says a root started but has no start
+    timestamp must still not date the span to 1970."""
+    st = _new_state()
+    st["root_started"] = True          # started, start_ns somehow lost
+    ctx = _ctx("s-odd")
+    now = 1_790_071_200_000_000_000
+    root = [s for s in spans.finalize_session(st, ctx, now_ns=now)
+            if s.kind_oi == "AGENT"][0]
+    assert root.start_ns == now
+
+
 def test_finalize_session_closes_root(fixtures_dir):
     entries, _ = transcript.read_from(str(fixtures_dir / "simple.jsonl"), 0)
     st = _new_state()

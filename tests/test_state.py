@@ -1,6 +1,6 @@
-import multiprocessing
 import os
-import time
+
+import pytest
 
 from rius_cc import state
 
@@ -61,3 +61,74 @@ def test_different_sessions_do_not_block_each_other(tmp_path):
     with state.session_lock("s1", home) as a:
         with state.session_lock("s2", home) as b:
             assert a is True and b is True
+
+
+class _FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
+def test_block_timeout_retries_then_gives_up(tmp_path):
+    """I4: SessionEnd is the LAST event for a session. If it loses the lock
+    to a still-running Stop exporter -- and Stop and SessionEnd fire close
+    together -- finalize_session never runs and the root span stays pending
+    forever. A bounded wait, never an unbounded one."""
+    home = str(tmp_path)
+    clock, sleeps = _FakeClock(), []
+
+    def sleep(dt):
+        sleeps.append(dt)
+        clock.advance(dt)
+
+    with state.session_lock("s1", home):
+        with state.session_lock("s1", home, block_timeout=2.0,
+                                clock=clock, sleep=sleep) as got:
+            assert got is False
+    assert sleeps, "gave up without waiting at all"
+    assert sum(sleeps) <= 2.0 + state.RETRY_INTERVAL_S, "waited longer than asked"
+
+
+def test_block_timeout_acquires_when_the_holder_releases(tmp_path):
+    home = str(tmp_path)
+    clock, holder = _FakeClock(), {}
+
+    def sleep(dt):
+        clock.advance(dt)
+        # the other exporter finishes partway through the wait
+        if clock.t >= 0.2 and "cm" in holder:
+            holder.pop("cm").__exit__(None, None, None)
+
+    cm = state.session_lock("s1", home)
+    cm.__enter__()
+    holder["cm"] = cm
+    with state.session_lock("s1", home, block_timeout=2.0,
+                            clock=clock, sleep=sleep) as got:
+        assert got is True
+
+
+def test_default_is_non_blocking(tmp_path):
+    home = str(tmp_path)
+    clock, sleeps = _FakeClock(), []
+    with state.session_lock("s1", home):
+        with state.session_lock("s1", home, clock=clock,
+                                sleep=sleeps.append) as got:
+            assert got is False
+    assert sleeps == []
+
+
+def test_an_oserror_inside_the_with_body_is_not_masked(tmp_path):
+    """The yield used to sit inside `except OSError`, so an OSError raised in
+    the caller's body resumed the generator and yielded a second time ->
+    RuntimeError("generator didn't stop after throw()"), hiding the real
+    error."""
+    home = str(tmp_path)
+    with pytest.raises(OSError) as exc:
+        with state.session_lock("s1", home):
+            raise OSError("the real problem")
+    assert "the real problem" in str(exc.value)

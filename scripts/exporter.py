@@ -15,6 +15,49 @@ from typing import Mapping
 from rius_cc import config, log as rius_log, otlp, spans, state, transcript
 
 
+# A 5xx or a transport failure may well clear up, so the same lines are
+# retried on the next hook event -- but not forever: every retry re-encodes a
+# batch that has grown by everything since, so an endpoint that is down for
+# an hour has the same unbounded-growth problem as a permanent failure, just
+# slower. After this many consecutive failures the batch is dropped.
+MAX_CONSECUTIVE_EXPORT_FAILURES = 5
+
+# Events after which nothing else will run for this session. Losing the lock
+# here means finalize_session never happens and the root span (plus any open
+# turn) stays pending forever, so these wait briefly for it.
+FINAL_EVENTS = ("Stop", "SessionEnd")
+FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
+
+
+def _export_error_reason(status: int) -> str:
+    """Short, actionable, and free of anything secret."""
+    if not status:
+        return ("could not reach the endpoint at all (DNS, TLS, network or a "
+                "wrong RIUS_ENDPOINT)")
+    if status in (401, 403):
+        return "rejected the API key (HTTP %d) -- check RIUS_API_KEY" % status
+    if status == 404:
+        return ("no OTLP receiver at that URL (HTTP 404) -- RIUS_ENDPOINT "
+                "must be a BASE url; /v1/traces is appended")
+    if status == 429:
+        return "rate limited (HTTP 429)"
+    if 400 <= status < 500:
+        return "rejected the payload (HTTP %d)" % status
+    return "server error (HTTP %d)" % status
+
+
+def _is_permanent(status: int) -> bool:
+    """4xx means the receiver understood us and said no. Retrying the exact
+    same bytes cannot change that -- except for 429, which is a 'later'."""
+    return bool(status) and 400 <= status < 500 and status != 429
+
+
+def _now_rfc3339() -> str:
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
 def _now_ns() -> int:
     try:
         return time.time_ns()
@@ -24,6 +67,80 @@ def _now_ns() -> int:
 
 def _log(home: str, cfg, message: str, force: bool = False) -> None:
     rius_log.write(home, cfg, message, force=force)
+
+
+def _note_skipped_lines(home, cfg, session_id, st, read_stats) -> None:
+    """Count unreadable transcript lines into state, and log the first one.
+
+    Dropping lines silently is how a TOTAL parse failure hides: if the
+    timestamp format ever shifts, every line is skipped, no span is ever
+    built, and the result is indistinguishable from an idle session. The
+    counter is what makes it visible; the log says what was wrong.
+    """
+    skipped = read_stats.get("skipped") or 0
+    if not skipped:
+        return
+    st["lines_skipped"] = st.get("lines_skipped", 0) + skipped
+    if st.get("skip_logged"):
+        return
+    st["skip_logged"] = True
+    _log(home, cfg, "session %s: skipped %d unparseable transcript line(s); "
+                    "first reason: %s (logged once per session)"
+         % (session_id, skipped, read_stats.get("first_skipped_reason")))
+
+
+def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
+                           status) -> int:
+    """Record WHY the export failed, and decide whether to keep the lines.
+
+    Two things must be true afterwards. (1) The user can find out: /rius
+    status shows last_export_error, so "Spans exported: 0" is never the whole
+    story. (2) The batch cannot grow without bound: a permanent rejection, or
+    enough consecutive transient ones, drops these lines by advancing the
+    offset. Holding the offset forever against a wrong API key means every
+    later hook re-reads from the same place and re-encodes a bigger payload,
+    burning CPU on a POST that will never succeed.
+    """
+    reason = _export_error_reason(status)
+    permanent = _is_permanent(status)
+
+    if permanent:
+        # Dropping the batch: keep the built state, whose offset now moves
+        # past these lines.
+        st = built_state
+        failures = 0
+        st["offset"] = new_offset
+        _log(home, cfg, "session %s: PERMANENT export failure, dropping %d "
+                        "transcript bytes' worth of spans: %s"
+                        % (session_id, new_offset, reason))
+    else:
+        # Re-read the state as it was BEFORE spans.build() mutated it. The
+        # offset is not advancing, so those same lines will be rebuilt next
+        # time and the builder's bookkeeping (root_started, open_tools, ...)
+        # must not have been persisted in the meantime.
+        st = state.load(session_id, home)
+        failures = st.get("consecutive_export_failures", 0) + 1
+        if failures >= MAX_CONSECUTIVE_EXPORT_FAILURES:
+            st = built_state
+            st["offset"] = new_offset
+            failures = 0
+            _log(home, cfg, "session %s: %d consecutive export failures, "
+                            "giving up on this batch: %s"
+                            % (session_id, MAX_CONSECUTIVE_EXPORT_FAILURES, reason))
+        else:
+            _log(home, cfg, "session %s: transient export failure %d/%d, will "
+                            "retry the same lines: %s"
+                            % (session_id, failures,
+                               MAX_CONSECUTIVE_EXPORT_FAILURES, reason))
+
+    st["consecutive_export_failures"] = failures
+    st["last_export_error"] = {
+        "status": status,
+        "reason": reason,
+        "at": _now_rfc3339(),
+    }
+    state.save(session_id, home, st)
+    return 0
 
 
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
@@ -44,9 +161,13 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
 
-        with state.session_lock(session_id, home) as acquired:
+        block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                         if event in FINAL_EVENTS else 0.0)
+        with state.session_lock(session_id, home,
+                                block_timeout=block_timeout) as acquired:
             if not acquired:
-                _log(home, cfg, "session %s: lock held, skipping" % session_id)
+                _log(home, cfg, "session %s: lock held, skipping %s"
+                     % (session_id, event))
                 return 0
 
             st = state.load(session_id, home)
@@ -65,7 +186,10 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 state.save(session_id, home, st)
             instance_id = stored
 
-            entries, new_offset = transcript.read_from(transcript_path, st.get("offset", 0))
+            read_stats = {}
+            entries, new_offset = transcript.read_from(
+                transcript_path, st.get("offset", 0), stats=read_stats)
+            _note_skipped_lines(home, cfg, session_id, st, read_stats)
 
             first_cwd = cwd
             first_git_branch = ""
@@ -107,12 +231,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                      % (session_id, len(out), status))
 
                 if not (status and 200 <= status < 300):
-                    # Export failed: do NOT advance the offset and do NOT
-                    # count these spans as exported, so the next hook
-                    # invocation retries these same transcript lines.
-                    return 0
+                    return _handle_export_failure(
+                        session_id, home, cfg, st, new_offset, status)
 
                 st["spans_exported"] = st.get("spans_exported", 0) + len(out)
+                st["consecutive_export_failures"] = 0
+                st.pop("last_export_error", None)
 
             st["offset"] = new_offset
             state.save(session_id, home, st)

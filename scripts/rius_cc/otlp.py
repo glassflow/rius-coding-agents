@@ -8,6 +8,7 @@ opentelemetry-proto library to guarantee correctness.
 """
 from __future__ import annotations
 
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List
@@ -15,6 +16,7 @@ from typing import Any, Dict, List
 from . import proto
 
 SCOPE_NAME = "glassflow"
+RETRY_DELAY_S = 0.5
 
 
 def _any_value(value: Any) -> bytes:
@@ -89,14 +91,25 @@ def encode(resource_attrs: Dict[str, object], span_list: List[Any]) -> bytes:
     return resource_spans
 
 
-def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0) -> int:
+def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0,
+           retry_delay: float = RETRY_DELAY_S, sleep=time.sleep) -> int:
+    """POST to <endpoint>/v1/traces. Returns the HTTP status, or 0 for a
+    transport failure. One retry, and only for 5xx/transport.
+
+    The retry waits `retry_delay` first (spec section 9). Retrying instantly
+    spends both attempts inside the same instant of an outage -- a receiver
+    that is restarting or briefly overloaded is exactly the case the retry
+    exists for, and it needs a moment.
+    """
     headers = {
         "Content-Type": "application/x-protobuf",
         "Authorization": "Bearer " + api_key,
     }
     url = endpoint.rstrip("/") + "/v1/traces"
     last_status = 0
-    for _attempt in range(2):
+    for attempt in range(2):
+        if attempt:
+            sleep(retry_delay)
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:

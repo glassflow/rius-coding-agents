@@ -65,3 +65,31 @@ def test_export_does_not_double_slash_trailing_slash_endpoint():
         otlp.export("https://ingest.example.com/", "key", b"body")
         req = m.call_args[0][0]
         assert req.full_url == "https://ingest.example.com/v1/traces"
+
+
+def test_the_single_retry_waits_first(monkeypatch):
+    """Spec section 9: one retry with a SHORT BACKOFF. Retrying instantly
+    against a receiver that is restarting just burns both attempts inside
+    the same outage."""
+    slept = []
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(503)) as m:
+        status = otlp.export("https://ingest.example.com", "key", b"body",
+                             sleep=slept.append)
+    assert status == 503
+    assert m.call_count == 2            # exactly one retry
+    assert slept == [otlp.RETRY_DELAY_S]
+
+
+def test_a_4xx_is_not_retried_at_all(monkeypatch):
+    slept = []
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(401)) as m:
+        otlp.export("https://ingest.example.com", "key", b"body", sleep=slept.append)
+    assert m.call_count == 1
+    assert slept == []
+
+
+def test_a_success_does_not_sleep():
+    slept = []
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(200)):
+        otlp.export("https://ingest.example.com", "key", b"body", sleep=slept.append)
+    assert slept == []

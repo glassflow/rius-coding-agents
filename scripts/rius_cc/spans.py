@@ -275,12 +275,19 @@ def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
 
 def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     out = finalize_turn(state, ctx, now_ns)
+    if not state.get("root_started"):
+        # build() never saw an entry: the user opened a session in an enabled
+        # folder, typed nothing and quit. There is no root span to close --
+        # closing one anyway emits a span starting at root_start_ns == 0, the
+        # Unix epoch, which draws as a 56-year bar.
+        return out
     trace_id = trace_id_for(ctx.session_id)
     root_span_id = span_id_for("session:" + ctx.session_id)
     attrs = _base_attrs(ctx, "AGENT")
     out.append(Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
-        name="claude-code session", kind_oi="AGENT", start_ns=state["root_start_ns"],
+        name="claude-code session", kind_oi="AGENT",
+        start_ns=state.get("root_start_ns") or now_ns,
         end_ns=now_ns, attributes=attrs, status_code="OK", status_message="",
         pending=False,
     ))

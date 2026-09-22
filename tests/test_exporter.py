@@ -74,6 +74,33 @@ def test_never_raises_on_a_garbage_payload(home, captured):
     assert exporter.run("Stop", {}, ENV, home) == 0
 
 
+def test_final_events_wait_briefly_for_the_lock(home, captured, fixtures_dir, monkeypatch):
+    """I4: losing the lock is free for PostToolUse -- a later hook re-reads
+    the same lines. It is not free for SessionEnd or Stop: nothing runs
+    after them, so the root span and any open turn stay pending forever."""
+    import contextlib
+    seen = []
+    real = state.session_lock
+
+    @contextlib.contextmanager
+    def recording(session_id, h, block_timeout=0.0, **kw):
+        seen.append(block_timeout)
+        with real(session_id, h, block_timeout=block_timeout, **kw) as got:
+            yield got
+
+    monkeypatch.setattr(exporter.state, "session_lock", recording)
+    sid = "11111111-1111-1111-1111-111111111111"
+    for event in ("PostToolUse", "UserPromptSubmit"):
+        exporter.run(event, _payload(fixtures_dir, "simple.jsonl", sid, event), ENV, home)
+    assert seen == [0.0, 0.0]
+
+    seen[:] = []
+    for event in ("Stop", "SessionEnd"):
+        exporter.run(event, _payload(fixtures_dir, "simple.jsonl", sid, event), ENV, home)
+    assert seen == [exporter.FINAL_EVENT_LOCK_TIMEOUT_S] * 2
+    assert all(t > 0 for t in seen)
+
+
 def test_lock_contention_is_a_no_op(home, captured, fixtures_dir):
     sid = "11111111-1111-1111-1111-111111111111"
     with state.session_lock(sid, home):
@@ -96,7 +123,8 @@ def test_api_key_never_appears_in_the_log(home, captured, fixtures_dir):
     assert config.redact("glassflow_k") in text
 
 
-def test_spans_exported_counter_accumulates_on_success_only(home, captured, fixtures_dir):
+def test_spans_exported_counter_accumulates_on_success_only(home, captured, fixtures_dir,
+                                                            monkeypatch):
     sid = "11111111-1111-1111-1111-111111111111"
     p = _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse")
     n1 = exporter.run("PostToolUse", p, ENV, home)
@@ -109,13 +137,152 @@ def test_spans_exported_counter_accumulates_on_success_only(home, captured, fixt
     st = state.load(sid, home)
     assert st["spans_exported"] == n1 + n2
 
-    # A failed export must not increment the counter.
+    # A failed export must not increment the counter. monkeypatch, not a bare
+    # module assignment: the old version leaked a broken exporter into every
+    # test that ran after it.
     before = st["spans_exported"]
-    import exporter as exporter_mod
-    exporter_mod.otlp.export = lambda ep, key, body, timeout=5.0: 500
+    monkeypatch.setattr(exporter.otlp, "export",
+                        lambda ep, key, body, timeout=5.0: 500)
     exporter.run("PostToolUse", _payload(fixtures_dir, "tool_call.jsonl", sid, "PostToolUse"), ENV, home)
     st = state.load(sid, home)
     assert st["spans_exported"] == before
+
+
+def test_unparseable_transcript_lines_are_counted_and_logged_once(home, captured, tmp_path):
+    """I3: a transcript the parser cannot read at all looks EXACTLY like an
+    idle session -- zero spans, zero errors, a happy /rius status."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    t = tmp_path / "bad.jsonl"
+    t.write_bytes(b'{"type":"user","uuid":"u1","timestamp":"not-a-timestamp"}\n'
+                  b'{"type":"user","uuid":"u2","timestamp":"also-bad"}\n')
+    p = {"session_id": sid, "transcript_path": str(t), "cwd": "/tmp/proj"}
+    env = dict(ENV, RIUS_CLAUDE_DEBUG="true")
+
+    exporter.run("PostToolUse", p, env, home)
+    st = state.load(sid, home)
+    assert st["lines_skipped"] == 2
+
+    import pathlib
+    logs = list(pathlib.Path(home, ".claude", "rius", "log").glob("*.log"))
+    text = "\n".join(log.read_text() for log in logs)
+    assert "skipped" in text.lower()
+    assert text.lower().count("unparseable") == 1, "should log once, not per line"
+
+    # a second batch of bad lines accumulates the count but does not re-log
+    with open(str(t), "ab") as fh:
+        fh.write(b'{"type":"user","uuid":"u3","timestamp":"bad-again"}\n')
+    exporter.run("PostToolUse", p, env, home)
+    assert state.load(sid, home)["lines_skipped"] == 3
+    text = "\n".join(log.read_text() for log in
+                     pathlib.Path(home, ".claude", "rius", "log").glob("*.log"))
+    assert text.lower().count("unparseable") == 1
+
+
+# --- I2: an export failure must not grow an unbounded batch in silence ----
+
+def _failing(monkeypatch, status):
+    calls = []
+
+    def fake(ep, key, body, timeout=5.0):
+        calls.append(body)
+        return status
+
+    monkeypatch.setattr(exporter.otlp, "export", fake)
+    return calls
+
+
+def test_permanent_4xx_advances_the_offset_and_records_why(home, monkeypatch, fixtures_dir):
+    """A wrong API key is permanent. Holding the offset means every later
+    hook re-reads from the same place and re-encodes an ever larger batch,
+    forever: growing CPU, growing payload, nothing exported, nothing said."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    sent = _failing(monkeypatch, 401)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+
+    st = state.load(sid, home)
+    assert st["offset"] > 0, "a permanent failure must not re-read the same lines forever"
+    assert st["spans_exported"] == 0
+    err = st["last_export_error"]
+    assert err["status"] == 401
+    assert "RIUS_API_KEY" in err["reason"]
+    assert err["at"]
+
+    # and the next batch is genuinely a NEW batch, not the same one again
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    assert len(sent) == 1, "nothing new to send, so nothing should have been sent"
+
+
+def test_transient_5xx_holds_the_offset_but_still_records_why(home, monkeypatch, fixtures_dir):
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 503)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    st = state.load(sid, home)
+    assert st["offset"] == 0, "a transient failure should retry the same lines"
+    assert st["consecutive_export_failures"] == 1
+    assert st["last_export_error"]["status"] == 503
+
+
+def test_429_is_treated_as_transient(home, monkeypatch, fixtures_dir):
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 429)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    assert state.load(sid, home)["offset"] == 0
+
+
+def test_repeated_transient_failures_are_capped(home, monkeypatch, fixtures_dir):
+    """Otherwise an endpoint that 500s for an hour has the same unbounded
+    growth as a permanent failure, just more slowly."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 500)
+    p = _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse")
+    for _ in range(exporter.MAX_CONSECUTIVE_EXPORT_FAILURES):
+        assert state.load(sid, home)["offset"] == 0
+        exporter.run("PostToolUse", p, ENV, home)
+    st = state.load(sid, home)
+    assert st["offset"] > 0, "gave up but kept re-reading the same lines"
+    assert st["consecutive_export_failures"] == 0     # fresh budget for the next batch
+
+
+def test_a_transport_failure_is_transient_and_named(home, monkeypatch, fixtures_dir):
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 0)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    st = state.load(sid, home)
+    assert st["offset"] == 0
+    assert "RIUS_ENDPOINT" in st["last_export_error"]["reason"]
+
+
+def test_a_failure_does_not_persist_half_built_span_state(home, monkeypatch, fixtures_dir):
+    """Recording the error must not smuggle the span builder's mutations
+    into state: the offset has not moved, so those lines get rebuilt."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 503)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "tool_call.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    st = state.load(sid, home)
+    assert st["root_started"] is False
+    assert st["open_tools"] == {}
+
+
+def test_a_later_success_clears_the_recorded_error(home, captured, monkeypatch, fixtures_dir):
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 503)
+    p = _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse")
+    exporter.run("PostToolUse", p, ENV, home)
+    assert state.load(sid, home)["last_export_error"]
+
+    monkeypatch.setattr(exporter.otlp, "export",
+                        lambda ep, key, body, timeout=5.0: 200)
+    exporter.run("PostToolUse", p, ENV, home)
+    st = state.load(sid, home)
+    assert not st.get("last_export_error")
+    assert st["consecutive_export_failures"] == 0
+    assert st["spans_exported"] > 0
 
 
 def test_instance_id_is_minted_on_session_start_even_with_no_spans(home, captured):
