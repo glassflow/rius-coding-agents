@@ -27,6 +27,11 @@ def new_state() -> dict:
         "last_ns": 0,
         "open_task_spans": [],
         "spans_exported": 0,
+        # Diagnostics. These exist so that "nothing was exported" is never
+        # the whole story /rius status can tell.
+        "lines_skipped": 0,
+        "consecutive_export_failures": 0,
+        "last_export_error": None,
     }
 
 

@@ -119,6 +119,11 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
         # time and the builder's bookkeeping (root_started, open_tools, ...)
         # must not have been persisted in the meantime.
         st = state.load(session_id, home)
+        # ...except the "already complained about unreadable lines" flag: the
+        # same lines are about to be re-read and re-skipped, and the log is
+        # supposed to say so once, not once per retry.
+        if built_state.get("skip_logged"):
+            st["skip_logged"] = True
         failures = st.get("consecutive_export_failures", 0) + 1
         if failures >= MAX_CONSECUTIVE_EXPORT_FAILURES:
             st = built_state

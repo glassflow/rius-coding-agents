@@ -284,6 +284,22 @@ def test_a_transport_failure_is_transient_and_named(home, monkeypatch, fixtures_
     assert "RIUS_ENDPOINT" in st["last_export_error"]["reason"]
 
 
+def test_skipped_lines_are_logged_once_even_across_export_failures(home, monkeypatch, tmp_path):
+    sid = "11111111-1111-1111-1111-111111111111"
+    t = tmp_path / "bad.jsonl"
+    t.write_bytes(b'{"type":"user","uuid":"u1","timestamp":"bad"}\n'
+                  b'{"type":"user","uuid":"u2","timestamp":"2026-09-22T10:00:00.000Z"}\n')
+    p = {"session_id": sid, "transcript_path": str(t), "cwd": "/tmp/proj"}
+    env = dict(ENV, RIUS_CLAUDE_DEBUG="true")
+    _failing(monkeypatch, 503)
+    for _ in range(3):
+        exporter.run("PostToolUse", p, env, home)
+    import pathlib
+    text = "\n".join(f.read_text() for f in
+                     pathlib.Path(home, ".claude", "rius", "log").glob("*.log"))
+    assert text.lower().count("unparseable") == 1
+
+
 def test_a_failure_does_not_persist_half_built_span_state(home, monkeypatch, fixtures_dir):
     """Recording the error must not smuggle the span builder's mutations
     into state: the offset has not moved, so those lines get rebuilt."""
