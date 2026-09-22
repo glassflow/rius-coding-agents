@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+*.egg-info/
+.coverage
+htmlcov/
+
+# never commit credentials or captured session data
+.env
+.env.*
+!.env.example
+*.jsonl
+!tests/fixtures/**/*.jsonl
