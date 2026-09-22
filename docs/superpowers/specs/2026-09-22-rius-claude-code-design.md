@@ -49,8 +49,9 @@ These are deliberate exclusions, not oversights:
 
 ## 2. Source of truth
 
-The session transcript, `~/.claude/projects/<slug>/<sessionId>.jsonl`, is the
-only data source. Hook payloads are used for *timing and control* — which hook
+The session transcript, `~/.claude/projects/<slug>/<sessionId>.jsonl`, plus the
+per-subagent transcripts beside it in `<sessionId>/subagents/` (§3.3), are the
+only data sources. Hook payloads are used for *timing and control* — which hook
 fired, for which session, with which `transcript_path` — never as a second,
 divergent copy of the data.
 
@@ -79,8 +80,11 @@ One trace per session.
 AGENT   claude-code session          parent=''
 └─ CHAIN  turn N
    ├─ LLM   assistant message
-   │  └─ TOOL  Read / Bash / mcp__…
-   │     └─ AGENT  subagent
+   │  ├─ TOOL  Read / Bash / mcp__…
+   │  └─ TOOL  Agent            (the call that spawned a subagent)
+   │     └─ AGENT  subagent     (its own transcript file -- see §3.3)
+   │        └─ LLM   the subagent's generation
+   │           └─ TOOL  a tool the subagent called
 ```
 
 - **Root (`AGENT`)** — the session. `ParentSpanId` is empty, which is what makes
@@ -93,8 +97,10 @@ AGENT   claude-code session          parent=''
 - **Generation (`LLM`)** — one assistant message.
 - **Tool (`TOOL`)** — one `tool_use` block, child of the generation that
   requested it, ended by the matching `tool_result`.
-- **Subagent (`AGENT`)** — entries with `isSidechain: true`, nested under the
-  `Task` tool span that spawned them.
+- **Subagent (`AGENT`)** — one subagent run, nested under the `Agent`/`Task`
+  tool span that spawned it, with that subagent's own generations and tool
+  calls beneath it. Its entries live in a **separate transcript file**, not
+  inline in the session transcript; see §3.3.
 
 Relationships come from real fields, never from positional inference:
 `tool_use.id` ↔ `tool_result.tool_use_id`, `sourceToolAssistantUUID`,
@@ -143,6 +149,10 @@ here, and not the upstream OTel GenAI spelling where the two differ.
 | `gen_ai.usage.cache_creation.input_tokens` | `cache_creation_input_tokens` |
 | `gen_ai.response.finish_reasons` | `[message.stop_reason]` |
 | `gen_ai.tool.name` | tool name |
+| `gen_ai.agent.name` | subagent `agentType` — the key argus-core's sink filters on (`docs/spans-query.md`) |
+| `gen_ai.agent.description` | subagent `description` (content, see §7) |
+| `cc.subagent.id` / `cc.subagent.depth` | which subagent file, and how deep it sits |
+| `cc.turn.source` | `user` or `system` for a turn (§3.4) |
 | `input.value` / `output.value` | content (see §7) |
 
 Note the cache-token keys are **Rius-specific spellings**
@@ -156,6 +166,76 @@ Resource attributes: `service.name` (default `claude-code`, overridable),
 value is wire-visible and the backend keys on it; it stayed `glassflow` through
 the Rius rebrand on purpose. Emitting anything else risks spans being ignored
 downstream. A test asserts this literal.
+
+### 3.3 Subagents live in their own transcript files
+
+**As-built, verified against a real session — an earlier draft of this spec
+said subagent entries appear inline in the session transcript as
+`isSidechain: true` lines. They do not.** The main transcript contains zero
+sidechain entries. Every subagent writes its own file:
+
+```
+~/.claude/projects/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl
+~/.claude/projects/<slug>/<sessionId>/subagents/agent-<agentId>.meta.json
+```
+
+The `.jsonl` is the same format as the session transcript (its entries carry
+`isSidechain: true`) and is read by the same parser. The `.meta.json` carries:
+
+| Field | Use |
+|---|---|
+| `toolUseId` | the exact `tool_use` id of the `Agent` call that spawned this subagent |
+| `agentType` | `gen_ai.agent.name` on the subagent's `AGENT` span |
+| `model` | `gen_ai.request.model` on that span |
+| `description` | `gen_ai.agent.description` (content; see §7) |
+| `spawnDepth` | how deep the subagent sits; subagents can spawn subagents |
+
+Why this matters: in the acceptance session, **58% of all tokens and 71% of
+all generations happened inside subagents** (main 799,702 tokens / 16
+generations; subagents 1,101,800 / 40). A trace that stops at the tool span
+reports less than half of what the session actually cost.
+
+Rules:
+
+1. **Exact linkage or none.** The spawning tool span is matched to a subagent
+   file by `toolUseId` ↔ `tool_use.id`, and by nothing else. No mtime, no
+   ordering, no "the only one that could be". If no `.meta.json` names a given
+   `tool_use`, the `TOOL` span is emitted alone and that is the end of it —
+   guessing files one agent's tokens under another agent's name, which is
+   worse than the gap it papers over.
+2. **Own offset, same streaming.** Each subagent file has its own byte offset,
+   `state["sub_offsets"][agentId]`, so its spans stream out per hook event
+   exactly like the main transcript's. Per-agent span bookkeeping lives in
+   `state["sub_scopes"]`, and the tool_use → tool span map in
+   `state["sub_links"]`. All of it is plain JSON; the whole state dict is
+   written to disk between hook invocations.
+3. **The subagent's `AGENT` span** starts pending when the `Agent` tool_use is
+   seen and closes when the matching `tool_result` arrives in the *main*
+   transcript — the subagent's own file has no closing entry. A session that
+   ends mid-subagent closes it at `SessionEnd`, like the root.
+4. **Recursion.** A subagent's own `Agent` tool_use registers another link
+   while its entries are being read, so nesting works to arbitrary depth,
+   capped by `subagents.MAX_DEPTH` (5) so that a cycle cannot turn one hook
+   event into an unbounded walk of the filesystem.
+5. **Same trace, derived ids.** A subagent's spans carry the parent session's
+   trace id — one trace per session — and its `AGENT` span id is
+   `sha256("subagent:" + agentId)`, so replay stays idempotent.
+6. **Turn spans are not created inside a subagent scope**; its generations
+   hang directly off its `AGENT` span. (A subagent transcript repeats the
+   *parent's* `promptId`, so any turn span built inside one must namespace its
+   key by agent id or it will collide with the main session's turn span.)
+7. The tool name is **`Agent`** in Claude Code 2.1.x and was `Task` before
+   that. Both are matched, via `spans.SUBAGENT_TOOL_NAMES`.
+
+### 3.4 Turn provenance
+
+Not every `user` entry is something the user typed. The harness injects turns
+whose text opens with `<local-command-caveat>`, `<task-notification>`,
+`<agent-message …>`, `<bash-input>` and friends. They are real work, so they
+keep their turn span rather than being dropped, and carry
+`cc.turn.source = "system"`; a genuine prompt carries `"user"`. The match is
+anchored at the start of the text, never a substring search — a prompt that
+merely mentions `<bash-input>` is still a prompt.
 
 ## 4. Timing
 
@@ -295,6 +375,13 @@ Controls:
 Content attribute keys are exactly the SDK's `CONTENT_ATTRIBUTES` set, so
 "content" means the same thing in both codebases.
 
+A subagent's brief, its `description` and its tools' output are content and go
+through the same gate; with capture off, a failed tool's `Status.message`
+reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)` rather than
+carrying the failure's output — the point being that a reader can tell a
+deliberate omission from a missing value. Nothing content-bearing is written
+to the state file either: it lives in plaintext under `~/.claude/rius/state/`.
+
 ## 8. Configuration and scoping
 
 ### 8.1 Resolution
@@ -374,10 +461,19 @@ Dropping spans is always preferred over delaying or breaking the session.
 
 ## 10. Testing
 
-- **Fixture transcripts.** Sanitized real transcripts checked into
+- **Fixture transcripts.** Sanitized transcripts checked into
   `tests/fixtures/`, covering: a plain text turn, a tool call, a failed tool call
-  (`is_error`), a subagent sidechain, a compacted session, and a truncated
-  trailing line.
+  (`is_error`), an inline sidechain (older Claude Code versions), a compacted
+  session, a truncated trailing line, and harness-injected turns
+  (`system_turns.jsonl`, §3.4).
+- **Subagent fixture set.** `tests/fixtures/subagent_files/` is a whole session
+  directory: a main transcript with an `Agent` tool_use, plus
+  `<sessionId>/subagents/agent-*.jsonl` and their `.meta.json`, including a
+  depth-2 subagent spawned by a subagent. `tests/fixtures/subagent_orphan/` is
+  the same shape with no `.meta.json` naming the tool_use, for the
+  tool-span-alone fallback. Covered in `tests/test_subagents.py`: nesting under
+  the right `TOOL` span, subagent token usage reaching the trace, incremental
+  streaming via per-agent offsets, the depth cap, and the capture-off gate.
 - **Golden payloads.** Fixture → expected OTLP JSON, asserted whole. This is the
   main defence against semconv drift, because a change in any attribute key
   fails visibly.
@@ -403,6 +499,7 @@ scripts/rius_cc/
     config.py                # §8 resolution
     transcript.py            # JSONL → entries
     spans.py                 # entries → span tree, §3
+    subagents.py             # subagent transcript files → nested spans, §3.3
     proto.py                 # protobuf wire primitives + OTLP encoding, §6.3
     otlp.py                  # span tree → OTLP payload, export, §6
     state.py                 # offset + open_spans, flock

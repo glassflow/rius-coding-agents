@@ -123,7 +123,7 @@ and project `.claude/settings.json`/`settings.local.json`).
 | `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
 | `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
-| `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content; structure, models, tokens, cost, and timing are kept either way. |
+| `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
@@ -147,16 +147,32 @@ One trace per Claude Code session, shaped as a waterfall:
 AGENT   session root
 └─ CHAIN  turn (one user prompt and everything it caused)
    └─ LLM   generation (one assistant message: model, token counts, cache reads)
-      └─ TOOL  tool call (input and output)
-      └─ TOOL  Task (the call that spawned a subagent)
-         └─ LLM   the subagent's own generation
-            └─ TOOL  a tool the subagent called
+      ├─ TOOL  tool call (input and output)
+      └─ TOOL  Agent (the call that spawned a subagent)
+         └─ AGENT  the subagent, named by its agent type
+            └─ LLM   the subagent's own generation
+               └─ TOOL  a tool the subagent called
 ```
 
-A subagent does not get a span of its own. Its work appears as ordinary `LLM`
-and `TOOL` spans re-parented under the `Task` tool span that spawned it, so a
-subagent's generations and tool calls sit inside the Task call's bar in the
-waterfall rather than beside it.
+**Subagents are drilled into.** Claude Code does not write a subagent's work
+into the session transcript -- each subagent gets its own file under
+`~/.claude/projects/<project>/<session-id>/subagents/`, and the sibling
+`.meta.json` names the exact tool call that spawned it. The plugin follows
+that link and emits the subagent as an `AGENT` span under the tool span, with
+its generations and tool calls beneath. This is not a detail: in the session
+this was built against, **58% of all tokens and 71% of all model calls were
+inside subagents**, and a trace that stopped at the tool call reported less
+than half of what the session cost.
+
+The subagent's span carries `gen_ai.agent.name` (its agent type, e.g.
+`general-purpose`), its own model and its description, so each subagent is
+filterable as a named agent in the Rius UI rather than an anonymous span.
+Subagents that spawn subagents nest the same way, to a bounded depth.
+
+Turns the harness injected rather than you typing them -- a slash command's
+caveat, a background task's notification, a subagent's report -- keep their
+span but are marked `cc.turn.source = system`, so the turn list can tell them
+apart from your prompts.
 
 Spans appear while the session is still running, not only after it ends: each
 hook event emits a "pending" snapshot at span start (session start, prompt
