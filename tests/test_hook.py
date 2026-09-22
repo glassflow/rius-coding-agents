@@ -194,6 +194,126 @@ def test_session_start_spawns_heartbeat_pinger(tmp_path):
     assert not os.path.exists(pid_path), "heartbeat pinger never exited"
 
 
+def test_resume_mints_a_fresh_instance_id_different_from_state(tmp_path, monkeypatch):
+    """A resume is a new process lifetime. SessionEnd already sent a
+    `stopped: true` ping for the old instance id, so reusing it would make
+    the backend see a stopped instance start pinging again."""
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-resume-1"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "old-instance-id"
+        state.save(sid, home, st)
+
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "resume",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    new_id = state.load(sid, home).get("instance_id")
+    assert new_id
+    assert new_id != "old-instance-id"
+
+
+def test_compact_keeps_the_existing_instance_id(tmp_path, monkeypatch):
+    """Compaction is the same process continuing with a compacted context --
+    not a new process lifetime."""
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-compact-1"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "same-instance-id"
+        state.save(sid, home, st)
+
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "compact",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    assert state.load(sid, home).get("instance_id") == "same-instance-id"
+
+
+def test_clear_keeps_the_existing_instance_id(tmp_path, monkeypatch):
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-clear-1"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "same-instance-id"
+        state.save(sid, home, st)
+
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "clear",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    assert state.load(sid, home).get("instance_id") == "same-instance-id"
+
+
+def test_startup_keeps_existing_id_or_mints_if_absent(tmp_path, monkeypatch):
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-startup-1"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "same-instance-id"
+        state.save(sid, home, st)
+
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "startup",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+    assert state.load(sid, home).get("instance_id") == "same-instance-id"
+
+    sid2 = "hb-startup-2"
+    assert not state.load(sid2, home).get("instance_id")
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid2, "cwd": str(tmp_path), "source": "startup",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+    assert state.load(sid2, home).get("instance_id")
+
+
+def test_resume_hands_both_spawned_children_the_new_instance_id(tmp_path, monkeypatch):
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-resume-2"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "old-instance-id"
+        state.save(sid, home, st)
+
+    calls = _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "resume",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    new_id = state.load(sid, home).get("instance_id")
+    assert new_id and new_id != "old-instance-id"
+    assert len(calls) == 2
+    for call in calls:
+        assert "old-instance-id" not in call["argv"]
+        assert new_id in call["argv"]
+        assert call["instance_id_in_state"] == new_id
+
+
+def test_resume_does_not_change_the_session_id(tmp_path, monkeypatch):
+    """The session id (and therefore the trace id) is unchanged across a
+    resume -- only the instance changes."""
+    env, home = _enabled_env(tmp_path)
+    sid = "hb-resume-3"
+    with state.session_lock(sid, home):
+        st = state.load(sid, home)
+        st["instance_id"] = "old-instance-id"
+        state.save(sid, home, st)
+
+    _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path), "source": "resume",
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    # the session id in state is still the same key -- a resume never
+    # migrates content to a new session id, so the trace id is unchanged.
+    assert state.load(sid, home).get("instance_id")
+
+
 def test_session_end_writes_stop_file(tmp_path):
     env, home = _enabled_env(tmp_path)
     sid = "hb-session-2"

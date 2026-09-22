@@ -288,6 +288,37 @@ A session killed mid-flight leaves pending spans unresolved. That is the correct
 outcome — it is what "this agent died while running" looks like — not a bug to
 paper over with a synthetic end.
 
+### 5.1 Heartbeat pinger and instance identity
+
+A separate detached process (`heartbeat.py`) pings the endpoint every 15
+seconds for the life of the session, independent of span activity, so a long
+tool call or a quiet agent turn doesn't read as dead. Each ping carries the
+session's `instance_id`, the same value stamped onto spans as
+`service.instance.id` (§3.2). Per the Rius SDK's contract (`rius/heartbeat.py`),
+an `instance_id` covers exactly one process lifetime, so that one identity
+never speaks for two processes.
+
+`hook.py` mints and persists the `instance_id` on `SessionStart`, before
+either child is spawned, keyed off the hook payload's `source` field:
+
+| `source` | Behaviour |
+|---|---|
+| `startup` (or absent) | mint only if state has none yet |
+| `resume` | **mint a fresh id**, replacing whatever is in state |
+| `compact` | keep the existing id |
+| `clear` | keep the existing id |
+
+A resumed session is a genuinely new OS process, so it gets a new
+`instance_id` — the prior process's `SessionEnd` already sent a
+`stopped: true` ping for the old identity, and reusing it would make this
+new process contradict that ping by announcing itself alive under a name
+the backend was just told had stopped. `session_id` (and therefore the
+trace id) is untouched by a resume, so the trace continues unbroken; only
+the reported instance changes. Compaction and `/clear` are the *same*
+process continuing (with a compacted or cleared context, not a new one), so
+their `instance_id` is left alone — churning it there would fragment one
+process's identity for no reason.
+
 ## 6. Runtime
 
 ### 6.1 Two processes

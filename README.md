@@ -206,6 +206,16 @@ UI just because no span has closed recently. It starts when the session
 starts and exits on its own once the session ends or Claude Code exits --
 nothing is left running in the background afterward.
 
+Each ping carries an `instance_id` that covers exactly one Claude Code
+process lifetime -- never two. A **resumed** session is a new process, so it
+gets a fresh `instance_id` even though it continues the same session (and
+therefore the same trace): the old instance already sent its
+`stopped: true` ping when the prior process exited, so reusing its id would
+have this new process contradict it by pinging as "already stopped."
+**Compacting** or **clearing** context, by contrast, happens inside the
+same running process, so the existing `instance_id` is kept. In short: a
+resumed session continues the same trace but reports as a new instance.
+
 ## Privacy and security posture
 
 - Zero runtime dependencies: the plugin is Python standard library only,

@@ -19,19 +19,28 @@ import uuid
 MINT_LOCK_TIMEOUT_S = 1.0
 
 
-def _mint_instance_id(state, session_id: str, home: str) -> str:
+def _mint_instance_id(state, session_id: str, home: str, source: str = "") -> str:
     """Return this session's instance id, minting and persisting it if new.
 
     This MUST happen before either child is spawned. The heartbeat pinger
     cannot invent an instance id -- it has to match the one the spans carry --
     so if it starts before the id exists it exits immediately and the session
     produces no heartbeats at all, silently, forever.
+
+    `source` distinguishes why SessionStart fired (per the hook payload):
+    a "resume" is a NEW process lifetime -- the old instance id already had
+    its `stopped: true` ping sent by the prior SessionEnd, so reusing it
+    would make the backend see a stopped instance start pinging again. A
+    fresh id is minted and replaces whatever is in state. "compact" and
+    "clear" are the SAME process continuing (with a compacted context, or a
+    cleared transcript) and must keep the existing id. "startup" or an
+    absent source keeps today's behaviour: mint only if none exists yet.
     """
     with state.session_lock(session_id, home,
                             block_timeout=MINT_LOCK_TIMEOUT_S):
         st = state.load(session_id, home)
         instance_id = st.get("instance_id")
-        if instance_id:
+        if instance_id and source != "resume":
             return instance_id
         instance_id = str(uuid.uuid4())
         st["instance_id"] = instance_id
@@ -95,7 +104,8 @@ def main() -> None:
         # same id and neither has to race the other for it.
         instance_id = ""
         if event == "SessionStart":
-            instance_id = _mint_instance_id(state, session_id, home)
+            source = payload.get("source", "")
+            instance_id = _mint_instance_id(state, session_id, home, source)
             _clear_stop_file(state, session_id, home)
 
         fd, path = tempfile.mkstemp(prefix="rius-hook-", suffix=".json")
