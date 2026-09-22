@@ -235,8 +235,8 @@ wait) and exit 0. Target: under ~30 ms.
 
 ### 6.2 Dependencies
 
-Stdlib only: `json`, `hashlib`, `urllib.request`, `fcntl`, `os`, `subprocess`.
-No `glassflow-rius`, no OpenTelemetry SDK.
+Stdlib only: `json`, `hashlib`, `struct`, `urllib.request`, `fcntl`, `os`,
+`subprocess`. No `glassflow-rius`, no OpenTelemetry SDK, no `protobuf`.
 
 This is forced by the packaging choice — a Claude Code plugin cannot bring its
 own virtualenv, so it may only use a runtime the user already has. It also keeps
@@ -244,10 +244,31 @@ hook latency off the OTel SDK's import time. The cost is real and acknowledged:
 a slice of the SDK's wire format and its semconv is reimplemented here, and it
 can drift. §10 covers how that is defended.
 
-**Open risk to verify first.** Stdlib-only assumes the receiver accepts
-**OTLP/HTTP JSON**. If it is protobuf-only, §6.2 does not hold and the design
-needs revisiting (a vendored encoder, or a different packaging choice) — this is
-raised, not silently worked around. This is the first implementation task.
+### 6.3 Wire format: protobuf, hand-encoded
+
+**Resolved 2026-09-22.** The receiver is protobuf-only. `apps/receiver/internal/handler/handler.go:182`
+rejects any `Content-Type` that is not `application/x-protobuf` with 415:
+*"OTLP/JSON is deferred; anything non-protobuf is unsupported."*
+
+So the exporter encodes OTLP protobuf itself, in stdlib Python. This is
+tractable because it is **encode-only**: no parsing, no unknown fields, no
+schema evolution. The subset needed is `TracesData` → `ResourceSpans` →
+`ScopeSpans` → `Span`, plus `KeyValue`/`AnyValue`, `Status` and `Event` — a
+fixed, public, stable schema requiring only varint, length-delimited and
+fixed64 encoding.
+
+Correctness is not assumed. CI encodes every fixture with our encoder and
+decodes it with the real `opentelemetry-proto` package — a **test-only**
+dependency, never shipped — asserting field-for-field equality. The plugin
+keeps zero runtime dependencies; the real library supplies the guarantee.
+
+The alternative, switching to a pip package that depends on the OTel SDK, was
+rejected because it reverses the packaging decision and its install story for a
+problem worth ~200 lines.
+
+**Separately worth raising:** OTLP/JSON support is required by the OTLP
+specification, so the receiver has a compliance gap that will affect other
+integrations. That is an `argus-core` ticket, not this project's work.
 
 ## 7. Content
 
@@ -376,7 +397,8 @@ scripts/rius_cc/
     config.py                # §8 resolution
     transcript.py            # JSONL → entries
     spans.py                 # entries → span tree, §3
-    otlp.py                  # span tree → OTLP JSON, export, §6
+    proto.py                 # protobuf wire primitives + OTLP encoding, §6.3
+    otlp.py                  # span tree → OTLP payload, export, §6
     state.py                 # offset + open_spans, flock
 commands/rius.md
 tests/
@@ -402,8 +424,8 @@ nothing of spans, `spans.py` nothing of HTTP, `otlp.py` nothing of Claude Code.
 
 ## 13. Open questions
 
-1. **Does the receiver accept OTLP/HTTP JSON, or protobuf only?** Blocks §6.2.
-   First implementation task.
+1. ~~Does the receiver accept OTLP/HTTP JSON?~~ **Resolved:** protobuf only.
+   See §6.3.
 2. **Does the Rius UI render an unresolved pending root usefully** for a session
    running for hours, or does it need an end to look right? Resolve during
    manual acceptance (§10).
@@ -420,7 +442,7 @@ adapter interface is written until a second agent exists.
 
 | Module | Agent-specific? |
 |---|---|
-| `otlp.py` | No — span tree to OTLP JSON, and export |
+| `otlp.py` | No — span tree to OTLP protobuf, and export |
 | `state.py` | No — offset, open spans, flock |
 | `spans.py` | No in concept — session → turn → generation → tool is every coding agent's shape; the Rius semconv mapping is shared |
 | `config.py` | Partly — the resolution ladder is generic, layers 2–3 read Claude Code's settings files |
