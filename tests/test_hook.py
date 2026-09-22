@@ -385,10 +385,19 @@ def test_claude_code_pid_never_falls_back_to_the_dying_shell(monkeypatch):
     produces no heartbeats, which is a bug this code path has had before. A
     recycled pid would be worse still: the pinger would watch a stranger.
     0 means 'unwatched', and the pinger says so."""
-    monkeypatch.setattr(platform_compat, "parent_pid_of", lambda _pid: 0)
-    got = hook_mod._claude_code_pid()
-    assert got == 0
-    assert got != os.getppid()
+    walked_from = []
+
+    def unknown(pid):
+        walked_from.append(pid)
+        return 0
+
+    monkeypatch.setattr(platform_compat, "parent_pid_of", unknown)
+    assert hook_mod._claude_code_pid() == 0
+    # Not entailed by the line above, and the part that actually breaks: the
+    # walk has to START at this process's parent. hook.sh `exec`s hook.py, so
+    # this pid is the launcher's; one level up is the shell Claude Code
+    # spawned, and parent_pid_of takes it from there.
+    assert walked_from == [os.getppid()]
 
 
 def test_claude_code_pid_uses_the_grandparent_when_known(monkeypatch):
@@ -435,6 +444,156 @@ def test_launcher_runs_the_hook_end_to_end(tmp_path):
     assert r.stdout.strip() == "", "the launcher wrote to the hook control channel"
     assert os.path.exists(os.path.join(state.state_dir(home),
                                        sid + ".heartbeat.stop"))
+
+
+def _fakebin(tmp_path, **stubs):
+    """A PATH directory of stub interpreters, one per keyword.
+
+    ``real`` execs the interpreter running this test; ``fail`` exits
+    non-zero without being a Python, which is what the Microsoft Store's
+    App Execution Alias amounts to here -- something `command -v` finds,
+    that is not Python, and that opens the Store instead of running code.
+    """
+    d = tmp_path / "fakebin"
+    d.mkdir(exist_ok=True)
+    for name, kind in stubs.items():
+        body = ('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable
+                if kind == "real" else '#!/bin/sh\nexit 1\n')
+        stub = d / name
+        stub.write_text(body)
+        stub.chmod(0o755)
+    return str(d)
+
+
+def _run_launcher(env, sid, tmp_path, event="SessionEnd"):
+    return subprocess.run(
+        ["/bin/bash", HOOK_SH, event],
+        input=_json.dumps({"session_id": sid, "cwd": str(tmp_path),
+                           "transcript_path": "/nonexistent.jsonl"}),
+        capture_output=True, text=True, env=env, timeout=30)
+
+
+def _stopped(home, sid):
+    return os.path.exists(os.path.join(state.state_dir(home),
+                                       sid + ".heartbeat.stop"))
+
+
+def test_hook_py_must_not_carry_a_shebang():
+    """C1. `hook.sh` picks `py` on Windows precisely to dodge the Store
+    alias -- and then hands it a script whose first line is
+    `#!/usr/bin/env python3`. The PEP 397 launcher honours that shebang by
+    PATH-searching for `python3` BEFORE consulting its own registered
+    interpreters, and the only `python3` on a default Windows PATH is the
+    Store alias. So `py` re-dispatches straight back into the stub the
+    candidate order exists to avoid: a Store window per hook event, hook.py
+    never running, and a non-zero exit. Nothing invokes this file by
+    shebang any more -- hooks.json goes through hook.sh and the suite uses
+    sys.executable -- so the line has no upside left."""
+    first = pathlib.Path(HOOK).read_text().splitlines()[0]
+    assert not first.startswith("#!"), (
+        "hook.py carries a shebang: on Windows `py` will honour it and "
+        "re-dispatch to the Microsoft Store alias -- %r" % first)
+
+
+def test_launcher_prefers_py_over_the_store_alias_on_windows(tmp_path):
+    """I3. Windows candidate order, exercised without a Windows.
+
+    `py` is a real binary or absent; `python`/`python3` are usually the
+    Store aliases. If the order ever flips, this is the only thing that
+    notices before a user does."""
+    env, home = _enabled_env(tmp_path)
+    env.update({"OS": "Windows_NT",
+                "PATH": _fakebin(tmp_path, py="real", python="fail",
+                                 python3="fail")})
+    sid = "win-launcher-1"
+    r = _run_launcher(env, sid, tmp_path)
+    assert r.returncode == 0
+    assert r.stdout.strip() == "", "the launcher wrote to the hook control channel"
+    assert _stopped(home, sid), "the launcher did not reach hook.py through `py`"
+
+
+def test_launcher_detects_windows_without_OS_in_the_environment(tmp_path):
+    """I1. `$OS` was the sole gate, and nothing guarantees Claude Code hands
+    a hook shell a full environment. A missing `$OS` on Windows took the
+    POSIX branch, put the Store alias first and skipped the probe that would
+    have rejected it -- silently, because it did find "a Python"."""
+    env, home = _enabled_env(tmp_path)
+    env.pop("OS", None)
+    env.update({"WINDIR": "C:\\WINDOWS",
+                "PATH": _fakebin(tmp_path, py="real", python="fail",
+                                 python3="fail")})
+    sid = "win-launcher-2"
+    r = _run_launcher(env, sid, tmp_path)
+    assert r.returncode == 0
+    assert _stopped(home, sid), "$OS is still the only Windows signal"
+
+
+def test_launcher_probes_every_candidate_on_every_platform(tmp_path):
+    """I1. The probe used to be Windows-only, so a `python3` on PATH that is
+    not a Python was exec'd on its name alone. One `python -c ''` in a path
+    that is about to spawn a Python anyway buys correctness that does not
+    depend on guessing the platform right."""
+    env, home = _enabled_env(tmp_path)
+    env.pop("OS", None)
+    env["PATH"] = _fakebin(tmp_path, python3="fail", python="real")
+    sid = "probe-1"
+    r = _run_launcher(env, sid, tmp_path)
+    assert r.returncode == 0
+    assert _stopped(home, sid), "a non-Python `python3` was exec'd instead of skipped"
+
+
+def test_launcher_probe_does_not_eat_the_hook_payload(tmp_path):
+    """M6. The probe runs a candidate that may be anything at all; without
+    `< /dev/null` it inherits the hook payload on stdin and can drain it,
+    leaving the real interpreter with nothing to parse."""
+    env, home = _enabled_env(tmp_path)
+    env.pop("OS", None)
+    drain = tmp_path / "fakebin"
+    drain.mkdir(exist_ok=True)
+    stub = drain / "python3"
+    stub.write_text("#!/bin/sh\ncat >/dev/null\nexit 1\n")
+    stub.chmod(0o755)
+    real = drain / "python"
+    real.write_text('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable)
+    real.chmod(0o755)
+    env["PATH"] = str(drain)
+    sid = "drain-1"
+    r = _run_launcher(env, sid, tmp_path)
+    assert r.returncode == 0
+    assert _stopped(home, sid), "the probe swallowed the hook payload"
+
+
+def test_launcher_with_no_usable_python_exits_zero_and_says_so(tmp_path):
+    """Silence is the failure mode this plugin exists to avoid, and a hook
+    may not exit non-zero to complain."""
+    env, home = _enabled_env(tmp_path)
+    env.pop("OS", None)
+    env["PATH"] = (_fakebin(tmp_path, python3="fail", python="fail")
+                   + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+    r = _run_launcher(env, "nopython-1", tmp_path)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    crumb = pathlib.Path(home) / ".claude" / "rius" / "log" / "bootstrap.log"
+    assert crumb.exists(), "no interpreter and no breadcrumb either"
+    assert "no Python" in crumb.read_text()
+
+
+def test_launcher_does_not_guess_its_directory(tmp_path):
+    """M4. `dir=.` was a silent wrong answer: with $0 carrying no separator
+    the launcher would run whatever `./hook.py` happens to be, or nothing,
+    and say neither. Not knowing where you are is a breadcrumb, not a
+    fallback."""
+    env, home = _enabled_env(tmp_path)
+    r = subprocess.run(
+        ["/bin/bash", "hook.sh", "SessionEnd"],
+        cwd=str(pathlib.Path(HOOK_SH).parent),
+        input=_json.dumps({"session_id": "bare-argv0", "cwd": str(tmp_path),
+                           "transcript_path": "/nonexistent.jsonl"}),
+        capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    crumb = pathlib.Path(home) / ".claude" / "rius" / "log" / "bootstrap.log"
+    assert crumb.exists() and "hook.sh" in crumb.read_text()
 
 
 def test_launcher_exits_zero_and_silent_on_garbage(tmp_path):

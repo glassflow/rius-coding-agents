@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+# No shebang, deliberately. This file is only ever run as an
+# ARGUMENT to an interpreter -- scripts/hook.sh execs it, and the
+# test suite uses sys.executable. A `#!/usr/bin/env python3` line
+# here is not merely unused on Windows: the `py` launcher honours
+# it by PATH-searching for `python3` BEFORE consulting its own
+# registered interpreters, and the only `python3` on a default
+# Windows PATH is the Microsoft Store alias -- the exact stub
+# hook.sh picks `py` to avoid. See scripts/_find_python.sh.
 """Claude Code hook entry point. Runs in the session's critical path.
 
 Does as little as possible: resolve config, and if enabled, hand off to a

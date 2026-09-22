@@ -109,7 +109,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           python - <<'PY'
-          import json, os, stat
+          import json, os, re, stat
           plugin = json.load(open(".claude-plugin/plugin.json"))
           market = json.load(open(".claude-plugin/marketplace.json"))
           hooks = json.load(open("hooks/hooks.json"))
@@ -121,12 +121,29 @@ jobs:
           wired = set(hooks["hooks"])
           missing = required - wired
           assert not missing, "hook events not wired: %s" % sorted(missing)
-          # Files Claude Code invokes DIRECTLY must be executable, and a missing
-          # +x is invisible to the test suite (which uses sys.executable).
-          for path in ("scripts/hook.py", "scripts/rius_ctl.py"):
-              mode = os.stat(path).st_mode
-              assert mode & stat.S_IXUSR, "%s is not executable" % path
-          print("manifests valid; %d hook events wired; entry points executable" % len(wired))
+          # Every command hooks.json names has to exist. A typo here is
+          # invisible to the test suite AND to Claude Code, which runs the
+          # command through a shell that exits without running anything.
+          named = set()
+          for groups in hooks["hooks"].values():
+              for group in groups:
+                  for entry in group["hooks"]:
+                      for rel in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)",
+                                            entry["command"]):
+                          named.add(rel.lstrip("/"))
+          assert named, "no hook command names a file"
+          for rel in sorted(named):
+              assert os.path.exists(rel), "hooks.json runs a missing file: %s" % rel
+          # hook.py is deliberately NOT in this list: it carries no shebang
+          # (see the comment at the top of it) and is only ever run as an
+          # argument to an interpreter. rius_ctl.py keeps its shebang, so a
+          # missing +x there is a real break the suite cannot see.
+          mode = os.stat("scripts/rius_ctl.py").st_mode
+          assert mode & stat.S_IXUSR, "scripts/rius_ctl.py is not executable"
+          assert not open("scripts/hook.py").readline().startswith("#!"), \
+              "hook.py has a shebang again: `py` will honour it and re-dispatch"
+          print("manifests valid; %d hook events wired; %d commands on disk"
+                % (len(wired), len(named)))
           PY
 
   secrets:

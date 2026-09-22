@@ -17,40 +17,54 @@
 # mode this whole plugin exists to avoid.
 
 # Parameter expansion, not `dirname`: this must still work when PATH is
-# broken enough that no external command resolves.
+# broken enough that no external command resolves. Both separators, because
+# $0 can arrive as C:\...\scripts\hook.sh on a native Windows shell.
+#
+# No `dir=.` fallback. A $0 with no separator at all means this script does
+# not know where its own directory is, and "." is a guess that runs whatever
+# ./hook.py happens to be -- or nothing -- without saying either. Fall
+# through to the breadcrumb instead.
 case "$0" in
-    */*) dir=${0%/*} ;;
-    *)   dir=. ;;
+    */*)  dir=${0%/*} ;;
+    *\\*) dir=${0%\\*} ;;
+    *)    dir= ;;
 esac
 
-# On Windows, `py` (the PEP 397 launcher) is tried first and deliberately.
-# `python3` there is usually the Microsoft Store's App Execution Alias: a
-# stub that `command -v` finds, that is not Python, and that opens the Store
-# when run. `py` is a real binary or absent.
-if [ "$OS" = "Windows_NT" ]; then
-    candidates="py python python3"
-    probe=1
-else
-    candidates="python3 python"
-    probe=0
+# Guarded, not bare: a failed `.` would end this shell non-zero, which is
+# the one thing a hook may never do.
+if [ -n "$dir" ] && [ -r "$dir/_find_python.sh" ]; then
+    . "$dir/_find_python.sh"
 fi
 
-for py in $candidates; do
-    command -v "$py" >/dev/null 2>&1 || continue
-    # Only paid on Windows, and only to rule out the Store stub described
-    # above -- a POSIX `python3` on PATH is the same thing the shebang
-    # resolved to, so it is taken at its word.
-    if [ "$probe" = "1" ]; then
-        "$py" -c "" >/dev/null 2>&1 || continue
-    fi
-    exec "$py" "$dir/hook.py" "$@"
-done
+if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then
+    # `exec` is load-bearing, not a micro-optimisation. Because this shell
+    # is REPLACED, hook.py keeps the launcher's pid, so hook.py's parent is
+    # still the shell Claude Code spawned and `_claude_code_pid()`'s
+    # one-level walk up still lands on Claude Code. Drop the exec and that
+    # walk lands one level short, on a shell that is already exiting: the
+    # pinger would see a dead process on its first iteration and quit,
+    # producing zero heartbeats -- silently, as ever.
+    exec "$rius_py" "$dir/hook.py" "$@"
+fi
 
-# No interpreter. Leave a breadcrumb, then exit 0 like every other path here.
+# Nothing to run. Leave a breadcrumb, then exit 0 like every other path here.
+# ${HOME:-$USERPROFILE} deliberately duplicates, rather than calls,
+# `platform_compat.home_dir` -- there is no Python here to ask. The two can
+# disagree on a non-standard Git Bash install (where $HOME is an MSYS path
+# like /c/Users/me that home_dir rejects as non-native), so this file may
+# land under a different root than the plugin's own logs. It is a last-
+# resort message written when nothing else can run; a second location for
+# it is a far smaller problem than no message at all.
 log_dir="${HOME:-$USERPROFILE}/.claude/rius/log"
+if [ -n "$dir" ]; then
+    reason="no Python interpreter found on PATH (tried: $rius_candidates).
+Install Python 3.9+ and make sure one of those names is on PATH."
+else
+    reason="cannot locate its own directory: \$0 was \"$0\", which names no
+directory. Claude Code should invoke it by path via \${CLAUDE_PLUGIN_ROOT}."
+fi
 mkdir -p "$log_dir" 2>/dev/null && cat >>"$log_dir/bootstrap.log" 2>/dev/null <<EOF
-$(date -u +%Y-%m-%dT%H:%M:%SZ) rius hook "$1": no Python interpreter found on
-PATH (tried: $candidates). The Rius plugin cannot run and is tracing nothing.
-Install Python 3.9+ and make sure one of those names is on PATH.
+$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) rius hook "$1": $reason
+The Rius plugin cannot run and is tracing nothing.
 EOF
 exit 0

@@ -160,3 +160,82 @@ def test_unknown_action_exits_zero_with_usage(tmp_path):
     r = _run(["wat", "--session", "s1", "--cwd", "/x"], home)
     assert r.returncode == 0
     assert "usage" in r.stdout.lower()
+
+
+# --- TRAP 4, second entry point: how /rius is invoked at all ----------------
+#
+# `/rius status` is the ONLY surface that tells a user why tracing is off, so
+# a /rius that cannot run on Windows is the worst thing to lose there.
+
+import os      # noqa: E402
+import re      # noqa: E402
+
+ROOT = pathlib.Path(__file__).parent.parent
+COMMAND_MD = ROOT / "commands" / "rius.md"
+CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
+
+
+def _command_line():
+    """The one `!`...`` bash substitution Claude Code runs for /rius."""
+    m = re.search(r"^!`(.+)`\s*$", COMMAND_MD.read_text(), re.M)
+    assert m, "commands/rius.md has no bash substitution line"
+    return m.group(1)
+
+
+def test_slash_command_does_not_rely_on_the_shebang():
+    """Windows has no shebang support, so a command file that executes
+    rius_ctl.py directly is a /rius that does nothing there -- the same
+    mechanism that broke the hook, on the one command that would have
+    explained it."""
+    line = _command_line()
+    assert "rius_ctl.sh" in line, line
+    assert not re.search(r"rius_ctl\.py", line), \
+        "/rius still invokes the .py directly and relies on its shebang"
+
+
+def test_slash_command_target_exists_on_disk():
+    line = _command_line()
+    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)", line)
+    assert named, line
+    for rel in named:
+        assert (ROOT / rel.lstrip("/")).exists(), rel
+
+
+def test_slash_command_is_permitted_by_its_own_frontmatter():
+    """allowed-tools still naming the .py would make the launcher prompt."""
+    front = COMMAND_MD.read_text().split("---")[1]
+    assert "rius_ctl.sh" in front, front
+
+
+def test_slash_command_line_runs_end_to_end(tmp_path):
+    """Mirrors test_launcher_runs_the_hook_end_to_end: run the literal line
+    from the command file, not an approximation of it."""
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    env = {"HOME": str(home), "PATH": os.environ["PATH"],
+           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
+    r = subprocess.run(["/bin/bash", "-c", _command_line()],
+                       cwd=str(tmp_path), capture_output=True, text=True,
+                       env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert "off" in r.stdout.lower()
+    assert "glassflow_k" not in r.stdout
+
+
+def test_ctl_launcher_says_so_when_no_python_can_be_found(tmp_path):
+    """Unlike hook.sh this one MAY write to stdout -- its stdout is the
+    slash command's output -- so the failure that hook.sh can only put in a
+    log file goes where the user is already looking."""
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    for name in ("python", "python3"):
+        stub = fake / name
+        stub.write_text("#!/bin/sh\nexit 1\n")
+        stub.chmod(0o755)
+    env = {"HOME": str(home), "PATH": str(fake)}
+    r = subprocess.run(["/bin/bash", CTL_SH, "status", "--cwd", "/x"],
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0
+    assert "python" in r.stdout.lower()
