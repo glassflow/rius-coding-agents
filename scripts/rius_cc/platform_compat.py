@@ -109,6 +109,44 @@ def home_dir(env=None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Breadcrumbs from the seam itself
+# ---------------------------------------------------------------------------
+
+_WARNED = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    """Append one line to the debug log, at most once per `key` per process.
+
+    ``rius_cc.log`` cannot be used here: it imports ``config``, which imports
+    this module. So this writes the same file directly.
+
+    At most once because the callers are polled -- the heartbeat probes
+    liveness every 15 seconds for the life of the session, and a broken
+    probe would otherwise write a line each time. Unconditional (not gated
+    on ``cfg.debug``) for the same reason ``log.write(force=True)`` exists:
+    the failures routed here are ones that would otherwise be invisible.
+    """
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    try:
+        import datetime
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        d = os.path.join(home_dir(), ".claude", "rius", "log")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, now.strftime("%Y-%m-%d") + ".log")
+        with open(path, "a") as fh:
+            fh.write("%s platform_compat: %s\n"
+                     % (now.strftime("%Y-%m-%dT%H:%M:%SZ"), message))
+    except BaseException:
+        # A logger that can break the session it observes is worse than no
+        # logger. Same rule as rius_cc.log.
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Process liveness  (TRAP 1)
 # ---------------------------------------------------------------------------
 
@@ -162,7 +200,28 @@ def _windows_pid_alive(pid: int, kernel32=None, last_error=None) -> bool:
     OpenProcess + GetExitCodeProcess only reads. PROCESS_QUERY_LIMITED_-
     INFORMATION is the narrowest mask that answers the question and, unlike
     PROCESS_ALL_ACCESS, is granted across integrity levels.
+
+    ``_posix_pid_alive`` is total by construction -- every way ``os.kill``
+    can fail is an ``OSError``. This one is not: ``ctypes.WinDLL`` raises
+    ``OSError``, ``ctypes.ArgumentError`` is NOT an ``OSError`` subclass,
+    and either would propagate out of ``Pinger.run()`` into heartbeat.py's
+    module-tail ``except BaseException: pass`` -- killing the pinger
+    mid-session with no stopped ping and no log. So the whole body is
+    wrapped, and an unreadable answer means ALIVE: calling a healthy
+    session dead stops the heartbeat, which is the outage; calling a dead
+    one alive costs at most one interval and the backend's stale path
+    already handles it.
     """
+    try:
+        return _windows_pid_alive_inner(pid, kernel32, last_error)
+    except BaseException as exc:      # noqa: BLE001 - see the docstring
+        _warn_once("pid_alive",
+                   "pid_alive probe failed (%s: %s); assuming the watched "
+                   "process is alive" % (type(exc).__name__, exc))
+        return True
+
+
+def _windows_pid_alive_inner(pid: int, kernel32=None, last_error=None) -> bool:
     import ctypes
 
     if kernel32 is None:  # pragma: no cover - Windows only
@@ -340,6 +399,14 @@ def _windows_try_lock(fd: int, msvcrt_mod=None) -> bool:
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt_mod.locking(fd, msvcrt_mod.LK_NBLCK, 1)
     except OSError:
+        return False                  # contended: the expected failure
+    except BaseException as exc:      # noqa: BLE001
+        # Not an OSError (a bad descriptor reaches ctypes.ArgumentError, a
+        # missing msvcrt an ImportError). "Could not take the lock" is the
+        # honest answer and every caller already handles it; raising here
+        # would abort a hook instead.
+        _warn_once("try_lock", "lock attempt failed (%s: %s); treating the "
+                               "lock as contended" % (type(exc).__name__, exc))
         return False
     return True
 
@@ -359,6 +426,11 @@ def _windows_unlock(fd: int, msvcrt_mod=None) -> None:
         msvcrt_mod.locking(fd, msvcrt_mod.LK_UNLCK, 1)
     except OSError:
         pass
+    except BaseException as exc:      # noqa: BLE001
+        # unlock() promises never to raise, and closing the descriptor
+        # releases the lock anyway -- so there is nothing to escalate.
+        _warn_once("unlock", "unlock failed (%s: %s)"
+                             % (type(exc).__name__, exc))
 
 
 def unlock(fd: int) -> None:

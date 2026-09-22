@@ -130,10 +130,17 @@ def test_windows_liveness_never_calls_os_kill(monkeypatch, as_windows):
 def test_windows_liveness_uses_a_read_only_access_mask(as_windows):
     k32 = FakeKernel32()
     pc._windows_pid_alive(99, kernel32=k32)
-    access, _inherit, pid = k32.open_calls[0]
+    assert len(k32.open_calls) == 1
+    access, inherit, pid = k32.open_calls[0]
+    # PROCESS_QUERY_LIMITED_INFORMATION and nothing else: not
+    # PROCESS_ALL_ACCESS (0x1F0FFF), which carries PROCESS_TERMINATE and is
+    # refused across integrity levels anyway.
     assert access == pc.PROCESS_QUERY_LIMITED_INFORMATION
-    assert access != 0x1F0FFF, "PROCESS_ALL_ACCESS is neither needed nor granted"
     assert pid == 99
+    # Not entailed by the mask: a probe has no business handing its handle
+    # to the children it spawns, and the exporter/pinger are spawned from
+    # processes that run this.
+    assert inherit == 0, "the process handle must not be inheritable"
 
 
 def test_windows_still_active_means_alive():
@@ -158,6 +165,110 @@ def test_windows_access_denied_means_alive():
     k32 = FakeKernel32(handle=0)
     assert pc._windows_pid_alive(
         1, kernel32=k32, last_error=lambda: pc.ERROR_ACCESS_DENIED) is True
+
+
+class BoomKernel32:
+    """kernel32 that fails the way ctypes actually fails.
+
+    `ctypes.ArgumentError` is NOT an OSError subclass, so nothing in the
+    heartbeat's `except OSError` vocabulary catches it. An escape from here
+    reaches `Pinger.run()`, is swallowed by heartbeat.py's module-tail
+    `except BaseException: pass`, and the pinger dies mid-session with no
+    stopped ping and no log -- this codebase's signature failure shape.
+    """
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def OpenProcess(self, *a):
+        raise self.exc
+
+    def GetExitCodeProcess(self, *a):
+        raise self.exc
+
+    def CloseHandle(self, *a):
+        raise self.exc
+
+
+@pytest.fixture
+def quiet_home(tmp_path, monkeypatch):
+    """Point the seam's own breadcrumb log at tmp, and reset its dedupe."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(pc, "_WARNED", set())
+    return tmp_path
+
+
+def _log_lines(home):
+    d = os.path.join(str(home), ".claude", "rius", "log")
+    lines = []
+    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        with open(os.path.join(d, name)) as fh:
+            lines += [ln for ln in fh.read().splitlines() if ln.strip()]
+    return lines
+
+
+def test_windows_liveness_survives_a_raising_kernel32(quiet_home):
+    """`_posix_pid_alive` is total by construction; this one must be too.
+
+    Conservative on failure: "alive". Reporting dead would stop the pinger
+    on a healthy session, which is the outage, not the safety.
+    """
+    import ctypes
+    boom = BoomKernel32(ctypes.ArgumentError("argument 3: wrong type"))
+    assert pc._windows_pid_alive(1, kernel32=boom) is True
+
+
+def test_windows_liveness_survives_a_windll_that_cannot_load(quiet_home,
+                                                             monkeypatch):
+    """ctypes.WinDLL("kernel32") itself can raise OSError."""
+    def no_kernel32():
+        raise OSError("cannot load kernel32")
+    monkeypatch.setattr(pc, "_kernel32", no_kernel32)
+    assert pc._windows_pid_alive(4321) is True
+
+
+def test_windows_liveness_leaves_a_breadcrumb_exactly_once(quiet_home):
+    """Returning True quietly forever would hide a permanently broken probe,
+    and the heartbeat would look healthy while measuring nothing. Once, not
+    every 15 seconds: this is polled for the life of the session."""
+    boom = BoomKernel32(ValueError("nope"))
+    for _ in range(5):
+        assert pc._windows_pid_alive(1, kernel32=boom) is True
+    lines = _log_lines(quiet_home)
+    assert len(lines) == 1, lines
+    assert "pid_alive" in lines[0]
+
+
+class BoomMsvcrt:
+    LK_NBLCK = 2
+    LK_LOCK = 1
+    LK_UNLCK = 0
+
+    def locking(self, fd, mode, nbytes):
+        import ctypes
+        raise ctypes.ArgumentError("not an OSError")
+
+
+def test_windows_try_lock_survives_a_non_oserror(tmp_path, quiet_home,
+                                                 monkeypatch):
+    """A raising lock attempt must read as "contended", not crash the hook."""
+    monkeypatch.setitem(sys.modules, "msvcrt", BoomMsvcrt())
+    fd = pc.open_lock_file(str(tmp_path / "s.lock"))
+    try:
+        assert pc._windows_try_lock(fd) is False
+    finally:
+        os.close(fd)
+
+
+def test_windows_unlock_survives_a_non_oserror(tmp_path, quiet_home,
+                                               monkeypatch):
+    monkeypatch.setitem(sys.modules, "msvcrt", BoomMsvcrt())
+    fd = pc.open_lock_file(str(tmp_path / "s.lock"))
+    try:
+        pc._windows_unlock(fd)      # must not raise
+    finally:
+        os.close(fd)
 
 
 def test_windows_invalid_pid_is_not_alive():
