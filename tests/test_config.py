@@ -77,6 +77,43 @@ def test_disabled_path_beats_enabled_path(tmp_path):
     assert config.resolve("s1", "/opt/secret", BASE_ENV, home).enabled is False
 
 
+def test_degenerate_enabled_path_rules_never_match_anything(tmp_path):
+    """SECURITY, fail-open. `cwd.startswith(rule.rstrip("/") + "/")` is true
+    for EVERY absolute path when rule is "" -- and fnmatch("*") matches
+    everything. A hand-edited or truncated config.json with a stray entry in
+    enabled_paths would silently trace every folder on the machine, with
+    full content capture."""
+    home = _home(tmp_path)
+    for bad in ["", "/", " ", "//", "*", "**", "opt/glass0", "?"]:
+        with open(config.path_rules_path(home), "w") as fh:
+            json.dump({"enabled_paths": [bad]}, fh)
+        c = config.resolve("s1", "/opt/glass0/anything", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled an unrelated folder" % (bad,)
+        assert c.enabled is False
+        c = config.resolve("s1", "/", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled the filesystem root" % (bad,)
+
+
+def test_degenerate_disabled_path_rules_are_ignored_too(tmp_path):
+    """A stray "" in disabled_paths fails closed rather than open, but it
+    still silently kills tracing everywhere. Same rule: skip it."""
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["/opt/glass0"], "disabled_paths": [""]}, fh)
+    assert config.resolve("s1", "/opt/glass0/x", BASE_ENV, home).enabled is True
+
+
+def test_real_path_rules_still_match(tmp_path):
+    """The skip must not eat legitimate rules, including globs."""
+    home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["/opt/glass0", "/srv/*/checkout"]}, fh)
+    assert config.resolve("s1", "/opt/glass0", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/opt/glass0/deep", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/srv/a/checkout", BASE_ENV, home).enabled is True
+    assert config.resolve("s1", "/srv/a/other", BASE_ENV, home).enabled is False
+
+
 def test_corrupt_path_rules_do_not_raise(tmp_path):
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:

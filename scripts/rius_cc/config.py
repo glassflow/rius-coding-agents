@@ -99,7 +99,28 @@ def _read_path_rules(home: str) -> dict:
     return data
 
 
+def _is_usable_rule(rule) -> bool:
+    """Reject rules that would match (almost) every path on the machine.
+
+    `cwd.startswith(rule.rstrip("/") + "/")` is true for EVERY absolute path
+    when rule is "" or "/", and fnmatch turns "*" into the same thing. A
+    hand-edited or truncated config.json with one stray entry would otherwise
+    silently enable tracing -- with full content capture -- for the whole
+    filesystem. A rule has to be an absolute path naming something below the
+    root to be worth honouring; anything else is a typo, not an intent.
+    """
+    if not isinstance(rule, str):
+        return False
+    if not rule.startswith("/"):
+        return False           # "", " ", "*", "**", "opt/proj"
+    if not rule.rstrip("/"):
+        return False           # "/", "//"
+    return True
+
+
 def _rule_matches(cwd: str, rule: str) -> bool:
+    if not _is_usable_rule(rule):
+        return False
     if cwd == rule:
         return True
     if cwd.startswith(rule.rstrip("/") + "/"):
@@ -115,11 +136,11 @@ def _path_rules_decision(cwd: str, home: str):
     enabled_paths = rules.get("enabled_paths") or []
 
     for rule in disabled_paths:
-        if isinstance(rule, str) and _rule_matches(cwd, rule):
+        if _rule_matches(cwd, rule):
             return False, "off: path rule %r disables %s" % (rule, cwd)
 
     for rule in enabled_paths:
-        if isinstance(rule, str) and _rule_matches(cwd, rule):
+        if _rule_matches(cwd, rule):
             return True, "on: path rule %r enables %s" % (rule, cwd)
 
     return None, None
