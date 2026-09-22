@@ -322,6 +322,28 @@ def test_the_brief_scan_is_bounded(fixtures_dir, monkeypatch):
     assert subagents.first_prompt(str(fixtures_dir / "nope.jsonl")) == ""
 
 
+def test_the_brief_is_absent_from_MID_FLIGHT_state_too(fixtures_dir):
+    """The dangerous window is while the subagent is RUNNING: the tool_use
+    has been seen, no tool_result has arrived, and state.save rewrites the
+    dict to ~/.claude/rius/state/<sid>.json on every hook event for the whole
+    duration of the run.
+
+    Asserting on the state AFTER a full build passes for the wrong reason --
+    the tool_result has already popped open_tools by then. For an
+    Agent tool_use the tool input IS the subagent's brief.
+    """
+    st = state.new_state()
+    ctx = _ctx(SID, capture=False)
+    entries, _ = transcript.read_from(_main_path(fixtures_dir), 0)
+    spans.build(entries[:2], st, ctx)      # tool_use seen, no tool_result yet
+    assert st["open_tools"], "expected the Agent tool call to be open"
+    blob = json.dumps(st)
+    assert "explore the fixture tree" not in blob
+    assert "subagent_type" not in blob
+    for tool in st["open_tools"].values():
+        assert tool["input_json"] == ""
+
+
 def test_session_end_closes_a_subagent_that_never_reported_back(fixtures_dir):
     """The session died mid-subagent: no tool_result ever arrives, so the
     AGENT span would stay pending forever -- the same failure the session

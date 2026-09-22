@@ -316,7 +316,14 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     "parent_span_id": llm_span_id,
                     "start_ns": entry.timestamp_ns,
                     "tool_name": tool_name,
-                    "input_json": input_json,
+                    # Same hazard as open_turns["text"] below: state.save
+                    # writes this dict to ~/.claude/rius/state/<sid>.json in
+                    # plaintext on every hook event, and an open tool sits
+                    # here for its whole run. A tool's input is content -- a
+                    # Bash command line, a Write body, and for an Agent call
+                    # the subagent's entire brief. It is only ever read back
+                    # to fill input.value, which the gate drops anyway.
+                    "input_json": input_json if ctx.capture_content else "",
                 }
                 if tool_name in SUBAGENT_TOOL_NAMES:
                     scope["open_task_spans"].append(tool_span_id)

@@ -379,8 +379,21 @@ A subagent's brief, its `description` and its tools' output are content and go
 through the same gate; with capture off, a failed tool's `Status.message`
 reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)` rather than
 carrying the failure's output — the point being that a reader can tell a
-deliberate omission from a missing value. Nothing content-bearing is written
-to the state file either: it lives in plaintext under `~/.claude/rius/state/`.
+deliberate omission from a missing value.
+
+**With capture off, nothing content-bearing is written to the state file
+either** — not the turn text, not a cached subagent brief, and not an open
+tool's input (for an `Agent` call that input *is* the subagent's brief). This
+matters because `state.save` writes that dict to
+`~/.claude/rius/state/<sessionId>.json` in plaintext on every hook event, and
+an open tool or a running subagent sits in it for the whole of its run; the
+values are only ever read back to fill `input.value`, which the gate drops
+anyway. Three defects of this exact shape have shipped, so the rule is
+enforced generically rather than per site: `tests/test_content_never_in_state.py`
+extracts every content string from every fixture transcript, replays it with
+`RIUS_CAPTURE_CONTENT=false`, and asserts none of them appears anywhere in the
+state — after each entry, mid-flight, not only at completion. A fixture added
+later is covered the day it lands.
 
 ## 8. Configuration and scoping
 

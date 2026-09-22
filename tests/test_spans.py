@@ -334,3 +334,18 @@ def test_turn_source_detection_is_anchored_to_the_start_of_the_text():
     assert spans.turn_source_for("why does <bash-input> show up?") == "user"
     assert spans.turn_source_for("hello") == "user"
     assert spans.turn_source_for("") == "user"
+
+
+def test_tool_input_is_still_captured_when_capture_is_on(fixtures_dir):
+    """The counterpart to the state-hygiene fix: open_tools no longer keeps
+    a tool's input when capture is off, so prove it still keeps it -- and
+    still fills input.value from it -- when capture is on."""
+    entries, _ = transcript.read_from(str(fixtures_dir / "tool_call.jsonl"), 0)
+    st = _new_state()
+    ctx = _ctx(entries[0].session_id)
+    spans.build(entries[:2], st, ctx)
+    assert st["open_tools"]["toolu_1"]["input_json"] == '{"file_path": "/tmp/x"}'
+    out = spans.build(entries[2:], st, ctx)
+    tool = [s for s in out if s.kind_oi == "TOOL" and not s.pending][0]
+    assert tool.attributes["input.value"] == '{"file_path": "/tmp/x"}'
+    assert tool.attributes["output.value"] == "file body"
