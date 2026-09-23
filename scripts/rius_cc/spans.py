@@ -294,6 +294,19 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
             if "cache_read_input_tokens" in usage:
                 attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
             if "cache_creation_input_tokens" in usage:
+                # Upstream OTel GenAI semconv renamed this attribute to
+                # gen_ai.usage.cache_write.input_tokens (semantic-
+                # conventions-genai#440). We emit BOTH keys with the same
+                # value, deliberately, not belt-and-braces: a Rius backend
+                # at migration 000011 (before 000013_spans_cache_write_
+                # rename) reads only the old key, and dropping it would
+                # silently zero its cache-write count -- this project's
+                # signature failure mode. A backend at 000013+ prefers the
+                # new key, so emitting it too means we stop depending on a
+                # compatibility fallback that will eventually be removed.
+                # Revisit and drop the legacy key once every deployment is
+                # known to be at 000013+.
+                attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
                 attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
             if stop_reason:
                 attrs["gen_ai.response.finish_reasons"] = [stop_reason]

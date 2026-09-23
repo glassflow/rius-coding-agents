@@ -147,7 +147,8 @@ here, and not the upstream OTel GenAI spelling where the two differ.
 | `gen_ai.request.model`, `gen_ai.response.model` | `message.model` |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | from `message.usage` |
 | `gen_ai.usage.cache_read.input_tokens` | `cache_read_input_tokens` |
-| `gen_ai.usage.cache_creation.input_tokens` | `cache_creation_input_tokens` |
+| `gen_ai.usage.cache_write.input_tokens` | `cache_creation_input_tokens` |
+| `gen_ai.usage.cache_creation.input_tokens` (legacy, kept alongside) | `cache_creation_input_tokens` |
 | `gen_ai.response.finish_reasons` | `[message.stop_reason]` |
 | `gen_ai.tool.name` | tool name |
 | `gen_ai.agent.name` | subagent `agentType` — the key the Rius backend's sink filters on |
@@ -158,6 +159,18 @@ here, and not the upstream OTel GenAI spelling where the two differ.
 
 Note the cache-token keys are **Rius-specific spellings**
 (`gen_ai.usage.cache_read.input_tokens`), not the upstream GenAI convention.
+
+The cache-write count is emitted under **both**
+`gen_ai.usage.cache_write.input_tokens` (current upstream OTel GenAI
+semconv name, following semantic-conventions-genai#440) and the legacy
+`gen_ai.usage.cache_creation.input_tokens`, with the same value on both.
+This is deliberate: a Rius backend at migration `000011` (before
+`000013_spans_cache_write_rename`) reads only the old key, and a backend at
+`000013`+ prefers the new key but still accepts the old one as a fallback.
+Emitting both is correct for every deployment in between, at the cost of
+one extra small integer attribute per LLM span. Drop the legacy key once
+every deployment is known to be at `000013`+. `gen_ai.usage.cache_read.input_tokens`
+was not renamed upstream and is unaffected.
 
 Resource attributes: `service.name` (default `claude-code`, overridable),
 `service.instance.id` (a UUID per session), plus `cc.version`, `cc.cwd`,
