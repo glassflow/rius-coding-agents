@@ -31,6 +31,21 @@ Two things bound this:
 Only enable a folder you're comfortable having its file reads and command
 output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
 
+## Quick start
+
+```
+/plugin marketplace add glassflow/rius-coding-agents
+/plugin install rius-claude-code@rius-coding-agents
+/rius enable-here
+/rius status
+```
+
+That is the whole flow once a Rius API key is in the environment Claude Code
+passes to hooks. If you don't have a key yet, or `/rius status` doesn't say
+`on`, the [getting started guide](docs/getting-started.md) covers the rest
+end to end: workspace, key and scopes, endpoints, where to put the key,
+first trace, the Rius MCP server, and troubleshooting.
+
 ## Install
 
 ### Local development
@@ -57,6 +72,24 @@ This works against a private `github.com/glassflow/rius-coding-agents` repo
 using your existing git credentials -- no extra auth step is needed if you can
 already `git clone` the repo.
 
+### Updating an installed plugin
+
+> **Claude Code caches the marketplace. Refresh it after every plugin
+> change.** A marketplace added from a directory or a git source is read
+> once and cached, not read live, so an updated plugin -- upstream or in
+> your own checkout -- does not reach your session until you run:
+>
+> ```
+> /plugin marketplace update rius-coding-agents
+> /reload-plugins
+> ```
+>
+> Skipping this is not a cosmetic problem. A stale cache is indistinguishable
+> from a change that did not work: the code on disk is new, the code being
+> run is old, and nothing says so. It invalidated a full round of testing
+> during development of this plugin, which is why it has a section of its
+> own rather than a footnote.
+
 ### Platform support
 
 macOS, Linux and Windows. The plugin is pure standard library, so the only
@@ -71,6 +104,37 @@ quietly. `/rius status` prints which platform implementation is live.
 If Claude Code on your machine falls back to PowerShell because Git Bash is
 not installed, the hooks will not run. That is the one configuration this
 plugin does not yet cover.
+
+CI runs the suite on Linux only, across Python 3.10 to 3.13 plus a 3.9
+runtime-floor job. There is no Windows CI job yet (tracked as RIUS-945), so
+the Windows code paths are covered by unit tests with fakes rather than by a
+native run.
+
+## Getting a Rius workspace and API key
+
+`RIUS_API_KEY` is the one thing the plugin cannot do without, and it comes
+from Rius, not from this repo. The short version:
+
+- Log in to the Rius console in a browser. A `Default` workspace is created
+  for an identity that has none the first time it lists workspaces, so for
+  most people that is the whole workspace step. Creating further workspaces
+  explicitly is restricted to organization admins.
+- Mint a key in workspace settings. A key looks like `ri_<id>.<signature>`;
+  older `gf_` keys still work. The plaintext is shown once and stored
+  hashed. Expiry is chosen at creation from never, 30 days, 90 days or 1
+  year, defaulting to never.
+- Keys are scoped to one workspace and carry scopes. This plugin needs
+  `ingest`. The Rius MCP server needs `read`. One key can hold both.
+
+> **The first key has to come from a browser login.** An API key can never
+> mint another API key -- the backend refuses, so that a leaked agent key
+> cannot create more credentials. Either the console or a single interactive
+> OAuth session against the Rius MCP server gets you the first one; after
+> that the MCP server's `create_api_key` can mint further keys, but it
+> cannot create a workspace and there is no revoke tool.
+
+The [getting started guide](docs/getting-started.md) has the full version,
+including which endpoint to use for which environment.
 
 ## Enabling a folder
 
@@ -110,6 +174,10 @@ prints the session id it can see, so the normal flow is `status`, then
 Most of the time you want `/rius enable-here` instead, which needs no session
 id at all.
 
+Those five are every action the command implements; anything else prints its
+usage line and exits 0. The slash command passes `--cwd` for you, so
+`enable-here` and `status` always see the folder you are actually in.
+
 `/rius status` is the important one. Because the default is off, a plugin
 that's installed correctly but simply not enabled for this folder looks
 identical, from the outside, to a plugin that's broken. `status` disambiguates
@@ -129,6 +197,13 @@ Reason: off: RIUS_API_KEY is not set
 
 Those are different problems (folder not enabled vs. missing key), and the
 `Reason` line is what tells you which one you have.
+
+`status` also prints the platform implementation that is live, the endpoint,
+`Spans exported this session`, and -- whenever an export has failed -- a
+`Last export error` line carrying the reason and the time. The
+[troubleshooting section](docs/getting-started.md#troubleshooting) of the
+getting started guide maps those reasons onto fixes, along with the
+`~/.claude/rius/log/` files to read when `status` itself is not enough.
 
 ## Settings
 
@@ -157,6 +232,32 @@ override, then `RIUS_CLAUDE_ENABLED` from the environment, then the path rules
 in `~/.claude/rius/config.json`, then the global default of off. If
 `RIUS_API_KEY` is unset, tracing is forced off no matter what the above
 resolves to.
+
+### Where the API key goes
+
+Put it in the project's `.claude/settings.local.json`, not in the global
+`~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "RIUS_API_KEY": "ri_xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxx"
+  }
+}
+```
+
+`settings.local.json` is the per-project file that is conventionally
+gitignored, so the credential does not follow the repo into a commit --
+check that your repo does ignore it before writing a key there. A key is
+also scoped to a single Rius workspace, so projects reporting into different
+workspaces need different keys, which one global value cannot express. And a
+key in the global file applies to every folder on the machine; tracing is
+off per folder by default, so that is not a leak by itself, but it makes the
+blast radius of a later `/rius enable-here` wider than it needs to be.
+
+Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
+as well. The plugin reads the environment and has no credential file of its
+own.
 
 ## How it works
 
@@ -216,6 +317,33 @@ queuing behind a tool call. If you compare a generation's duration against
 what you'd expect from your Anthropic bill or API logs, expect it to run
 long, sometimes by a lot. There is no signal in the transcript that would let
 this be tightened without guessing.
+
+## Asking Claude about your traces
+
+The Rius MCP server is a separate, optional install that lets you query the
+traces this plugin produces from inside Claude Code. Register it as an HTTP
+URL server -- registering it as a stdio command server is the most common
+setup mistake and surfaces as an auth failure:
+
+```bash
+claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp
+```
+
+That form uses the interactive OAuth browser login. For headless use, send a
+`read`-scoped key as a static bearer header instead:
+
+```bash
+claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp \
+  --header "Authorization: Bearer ${RIUS_API_KEY}"
+```
+
+The ingest-only key this plugin uses is rejected with a 403 there; the MCP
+server needs `read`. With it connected, questions like "which of my sessions
+in the last 24 hours cost the most, and what did the tokens go on?" or "show
+the waterfall for my last errored trace and say which tool call failed" are
+answerable in chat. The
+[getting started guide](docs/getting-started.md#exploring-your-traces-from-claude-code)
+lists all 13 tools.
 
 ## Heartbeat
 
