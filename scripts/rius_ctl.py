@@ -169,6 +169,10 @@ _CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh"
 
 
 def _shell_quote(path):
+    # Unquoted when safe, so the command matches the `allowed-tools` pattern
+    # in commands/rius.md and runs without a permission prompt.
+    if all(c.isalnum() or c in "/._-~" for c in path):
+        return path
     return "'" + path.replace("'", "'\\''") + "'"
 
 
