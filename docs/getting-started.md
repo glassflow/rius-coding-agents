@@ -9,6 +9,7 @@ in the README before you enable any folder. By default this plugin sends
 full session content, including the contents of files Claude Code reads and
 the output of commands it runs.
 
+- [Quickest start: no account (staging)](#quickest-start-no-account-staging)
 - [Quick start: `/rius login` (staging)](#quick-start-rius-login-staging)
 - [1. Get a Rius workspace](#1-get-a-rius-workspace)
 - [2. Mint an API key](#2-mint-an-api-key)
@@ -20,6 +21,34 @@ the output of commands it runs.
 - [Exploring your traces from Claude Code](#exploring-your-traces-from-claude-code)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall and local state](#uninstall-and-local-state)
+
+## Quickest start: no account (staging)
+
+```
+/plugin marketplace add glassflow/rius-coding-agents
+/plugin install rius-claude-code@rius-coding-agents
+/rius enable-here    # in the folder you want traced
+```
+
+With no stored key and no `RIUS_API_KEY`, `enable-here` provisions an
+**unclaimed** staging workspace and stores its `ingest` + `read` key in
+`~/.claude/rius/credentials.json` (mode 0600). Traces flow at once, and it
+prints `Tracing on. Claim this workspace any time: <claim URL>`.
+
+- **Claim it** whenever you want to look at the traces: open the claim URL
+  in a browser, or run `/rius login`. Either attaches the key and the traces
+  sent so far to a workspace your account can access (admin or member). If
+  you can access several, `/rius login` lists them and `/rius claim <number>`
+  (or a name or id) finishes. The key does not change.
+- The claim URL is a secret: whoever holds it can take the traces.
+  `/rius status` shows it (`Workspace: unclaimed. Claim: <url>`) until you
+  claim. `/rius logout` of an unclaimed workspace prints it one last time,
+  because it is then the only way back to that data.
+- Headless or CI: `bash <plugin>/scripts/rius_ctl.sh provision` does the same
+  without enabling a folder. The hooks never provision on their own.
+- `RIUS_API_KEY` still wins: with it set, nothing is provisioned or claimed.
+- Nothing is deleted if you never claim, but no one can see those traces
+  until someone does.
 
 ## Quick start: `/rius login` (staging)
 

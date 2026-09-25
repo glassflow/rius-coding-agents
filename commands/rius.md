@@ -1,5 +1,6 @@
 ---
-description: Control Rius tracing for this Claude Code session (login, enable-here, status, on, off, logout)
+description: Control Rius tracing for this Claude Code session (enable-here, status, login, claim, provision, on, off, logout)
+argument-hint: "[enable-here | status | login | claim <n|name|id> | provision | on | off | clear | logout]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)
 ---
 
