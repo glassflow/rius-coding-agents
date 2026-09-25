@@ -262,3 +262,19 @@ def test_ctl_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_path):
         "output did not name the missing file: %r" % r.stdout)
     assert "tried: ()" not in r.stdout, (
         "output still shows the empty-candidate-list PATH misdiagnosis")
+
+
+def test_bare_invocation_means_status(tmp_path):
+    # `/rius` with no argument reaches the script as just `--cwd <path>`.
+    home = str(tmp_path)
+    r = _run(["--cwd", "/x/y"], home)
+    assert "Rius tracing: off" in r.stdout
+    assert "cwd: /x/y" in r.stdout
+
+
+def test_command_passes_the_argument_through():
+    # `${ARGUMENTS:-status}` is never substituted by Claude Code (only the
+    # literal `$ARGUMENTS` is), so every `/rius <action>` ran `status`.
+    md = (pathlib.Path(__file__).parent.parent / "commands" / "rius.md").read_text()
+    assert "rius_ctl.sh\" $ARGUMENTS " in md
+    assert "${ARGUMENTS" not in md

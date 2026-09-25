@@ -54,10 +54,12 @@ What to do instead:
 
 
 def _parse_args(argv):
-    action = argv[0] if argv else ""
+    # A bare `/rius` arrives as just the flags: no action means `status`.
+    has_action = bool(argv) and not argv[0].startswith("--")
+    action = argv[0] if has_action else "status"
     session_id = None
     cwd = None
-    i = 1
+    i = 1 if has_action else 0
     while i < len(argv):
         if argv[i] == "--session" and i + 1 < len(argv):
             session_id = argv[i + 1]
