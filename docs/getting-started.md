@@ -9,6 +9,7 @@ in the README before you enable any folder. By default this plugin sends
 full session content, including the contents of files Claude Code reads and
 the output of commands it runs.
 
+- [Quick start: `/rius login` (staging)](#quick-start-rius-login-staging)
 - [1. Get a Rius workspace](#1-get-a-rius-workspace)
 - [2. Mint an API key](#2-mint-an-api-key)
 - [3. Pick an endpoint](#3-pick-an-endpoint)
@@ -19,6 +20,37 @@ the output of commands it runs.
 - [Exploring your traces from Claude Code](#exploring-your-traces-from-claude-code)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall and local state](#uninstall-and-local-state)
+
+## Quick start: `/rius login` (staging)
+
+On staging, steps 1, 2, 3 and 5 below collapse into one command:
+
+```
+/plugin marketplace add glassflow/rius-coding-agents
+/plugin install rius-claude-code@rius-coding-agents
+/rius login          # approve the code in the browser; sign up if you are new
+/rius enable-here    # in the folder you want traced
+```
+
+`/rius login` uses Auth0's device flow: it prints a short code, opens the
+browser, and once you approve it exchanges your sign-in for an API key with
+`ingest` + `read` scopes in your workspace (a brand-new account gets a
+`Default` workspace created on the spot). The key is stored in
+`~/.claude/rius/credentials.json` (mode 0600) together with the staging
+ingest endpoint, and it expires after a year. It never goes into Claude
+Code's settings.
+
+- `RIUS_API_KEY` in the environment still wins over the stored key, so an
+  existing setup keeps working unchanged. `/rius status` says which one is
+  in use (`Key from:`).
+- `/rius logout` deletes the stored key locally. It stays valid on the
+  server until it expires or is revoked in the console.
+- Tracing is still off until `/rius enable-here`. Login never enables a
+  folder.
+- A key minted seconds ago can be rejected with 401 for up to ~30s while it
+  propagates to the receiver.
+- Production has no device-flow application yet; there, follow the steps
+  below.
 
 ## 1. Get a Rius workspace
 

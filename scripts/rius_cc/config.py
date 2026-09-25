@@ -13,6 +13,7 @@ import os
 import re
 from typing import Mapping, Optional
 
+from . import login
 from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
@@ -21,16 +22,21 @@ DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
+_NO_KEY = "no API key: run `/rius login` (or set RIUS_API_KEY)"
+
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
 
 
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
-                 capture_content, max_attr_bytes, debug):
+                 capture_content, max_attr_bytes, debug, key_source=None,
+                 workspace_name=None):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
+        self.key_source = key_source
+        self.workspace_name = workspace_name
         self.endpoint = endpoint
         self.service_name = service_name
         self.capture_content = capture_content
@@ -196,9 +202,26 @@ def redact(api_key: Optional[str]) -> str:
     return api_key[: idx + 1] + "…"
 
 
+def _credential(env: Mapping[str, str], home: str):
+    """(api_key, endpoint, source, workspace_name).
+
+    RIUS_API_KEY wins over the file `/rius login` writes: existing installs
+    are configured that way. The stored endpoint travels with the stored key
+    and only with it -- a key minted on one environment is meaningless
+    against another's ingest."""
+    if env.get("RIUS_API_KEY"):
+        return (env["RIUS_API_KEY"], env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT),
+                "RIUS_API_KEY", None)
+    creds = login.read_credentials(home)
+    if creds:
+        endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
+        return (creds["api_key"], endpoint, "/rius login",
+                creds.get("workspace_name"))
+    return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
+
+
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
-    api_key = env.get("RIUS_API_KEY")
-    endpoint = env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT)
+    api_key, endpoint, key_source, workspace_name = _credential(env, home)
     service_name = env.get("RIUS_SERVICE_NAME", DEFAULT_SERVICE_NAME)
     capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
     if capture_content is None:
@@ -228,9 +251,9 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
     if not api_key:
         if enabled:
             enabled = False
-            reason = "off: RIUS_API_KEY is not set"
+            reason = "off: " + _NO_KEY
         else:
-            reason = reason + "; also RIUS_API_KEY is not set"
+            reason = reason + "; also " + _NO_KEY
 
     return Config(
         enabled=enabled,
@@ -241,4 +264,6 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         capture_content=capture_content,
         max_attr_bytes=max_attr_bytes,
         debug=debug,
+        key_source=key_source,
+        workspace_name=workspace_name,
     )

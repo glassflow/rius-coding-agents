@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI backing the /rius slash command.
 
-Actions: on | off | clear | enable-here | status
+Actions: on | off | clear | enable-here | status | login | login-wait | logout
 Flags:   --session <id>   --cwd <path>
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
@@ -23,10 +23,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, platform_compat, state  # noqa: E402
+from rius_cc import config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
-    "Usage: rius_ctl.py <on|off|clear|enable-here|status> "
+    "Usage: rius_ctl.py "
+    "<on|off|clear|enable-here|status|login|login-wait|logout> "
     "[--session <id>] [--cwd <path>]"
 )
 
@@ -136,6 +137,10 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
     print("API key: %s" % config.redact(cfg.api_key))
+    if cfg.key_source:
+        print("Key from: %s" % cfg.key_source)
+    if cfg.workspace_name:
+        print("Workspace: %s" % cfg.workspace_name)
     spans = _spans_exported(session_id, home)
     if spans is not None:
         print("Spans exported this session: %s" % spans)
@@ -149,8 +154,73 @@ def _print_status(session_id, cwd, home, inferred=False):
               % (last.get("reason"), last.get("at")))
 
 
+def _login(home):
+    print(login.DISCLOSURE)
+    print()
+    pending = login.start(home)
+    _open_browser(pending["verification_uri_complete"])
+    print("RIUS_LOGIN_PENDING: bash %s login-wait" % _shell_quote(_CTL_SH))
+    print("Open:  %s" % pending["verification_uri_complete"])
+    print("Code:  %s" % pending["user_code"])
+    print("Confirm the code matches the one in your browser, then approve.")
+
+
+_CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
+
+
+def _shell_quote(path):
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
+def _open_browser(url):
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:  # headless or no browser: the printed URL still works
+        pass
+
+
+def _login_wait(home):
+    creds = login.wait(home)
+    if creds is None:
+        print("Still waiting for approval in the browser. "
+              "Run `/rius login-wait` again once you have approved.")
+        return
+    print("Signed in. Traces will go to workspace: %s"
+          % (creds.get("workspace_name") or creds.get("workspace_id")))
+    print("Key %s (scopes: %s) saved to %s"
+          % (config.redact(creds["api_key"]), ", ".join(creds["scopes"]),
+             login.credentials_path(home)))
+    if creds.get("expires_at"):
+        print("It expires %s." % creds["expires_at"])
+    if os.environ.get("RIUS_API_KEY"):
+        print("NOTE: RIUS_API_KEY is set in your environment and still wins "
+              "over this key. Unset it to use the new one.")
+    print("Nothing is traced yet. Run `/rius enable-here` in a folder to "
+          "start tracing it (the first spans can take ~30s to be accepted).")
+
+
+def _logout(home):
+    if login.clear_credentials(home):
+        print("Removed the stored Rius key. It is still valid on the server "
+              "until it expires or is revoked in the console.")
+    else:
+        print("No stored Rius key to remove.")
+
+
+def _run_account_action(action, home):
+    try:
+        {"login": _login, "login-wait": _login_wait, "logout": _logout}[action](home)
+    except login.LoginError as exc:
+        print("Rius login failed: %s" % exc)
+
+
 def dispatch(argv, home):
     action, session_id, cwd = _parse_args(argv)
+
+    if action in ("login", "login-wait", "logout"):
+        _run_account_action(action, home)
+        return
 
     inferred = False
     if action in SESSION_WRITE_ACTIONS and not session_id:
