@@ -37,6 +37,7 @@ ENVIRONMENTS = {
         "auth0_domain": "glassflow-staging.eu.auth0.com",
         "client_id": "lNt2WxEfME3lPpibambn3o5Kl5hpZWsf",
         "audience": "https://cloud.glassflow.ai",
+        "api_base": "https://device.staging.rius.glassflow.xyz",
         "exchange_url": "https://device.staging.rius.glassflow.xyz/v1/device/exchange",
         "ingest_endpoint": "https://ingest.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
@@ -71,26 +72,43 @@ def _send(req: urllib.request.Request, timeout: float = 15.0):
         return err.code, _parse(err.read())
 
 
-def _parse(raw: bytes) -> dict:
+def _parse(raw: bytes):
     try:
         data = json.loads(raw.decode("utf-8") or "{}")
     except ValueError:
         return {}
-    return data if isinstance(data, dict) else {}
+    return data if isinstance(data, (dict, list)) else {}
+
+
+def _as_object(response):
+    status, body = response
+    return status, body if isinstance(body, dict) else {}
 
 
 def post_form(url: str, fields: dict):
     body = urllib.parse.urlencode(fields).encode("ascii")
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/x-www-form-urlencoded"})
-    return _send(req)
+    return _as_object(_send(req))
 
 
-def post_json(url: str, payload: dict, bearer: str):
+def post_json(url: str, payload: dict, bearer: Optional[str]):
+    headers = {"Content-Type": "application/json"}
+    if bearer:
+        headers["Authorization"] = "Bearer " + bearer
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                 method="POST", headers={
-                                     "Content-Type": "application/json",
-                                     "Authorization": "Bearer " + bearer})
+                                 method="POST", headers=headers)
+    return _as_object(_send(req))
+
+
+def post_json_noauth(url: str, payload: dict):
+    return post_json(url, payload, None)
+
+
+def get_json(url: str, bearer: str):
+    """(status, body), where body may be a JSON list."""
+    req = urllib.request.Request(url, method="GET", headers={
+        "Accept": "application/json", "Authorization": "Bearer " + bearer})
     return _send(req)
 
 
@@ -185,9 +203,9 @@ def load_pending(home: str) -> Optional[dict]:
 
 def poll_for_token(pending: dict, post: Callable = post_form,
                    sleep: Callable = time.sleep, now: Callable = time.time,
-                   budget: float = WAIT_BUDGET_SECONDS) -> Optional[str]:
-    """The access token, or None if the budget ran out while the user has
-    still not answered. Raises LoginError on a denial or an expired code."""
+                   budget: float = WAIT_BUDGET_SECONDS) -> Optional[dict]:
+    """Auth0's token response, or None if the budget ran out while the user
+    has still not answered. Raises LoginError on a denial or an expired code."""
     env = ENVIRONMENTS[pending["env"]]
     interval = pending["interval"]
     give_up_at = min(now() + budget, pending["expires_at"])
@@ -198,7 +216,7 @@ def poll_for_token(pending: dict, post: Callable = post_form,
             {"grant_type": DEVICE_GRANT, "device_code": pending["device_code"],
              "client_id": env["client_id"]})
         if status == 200 and body.get("access_token"):
-            return body["access_token"]
+            return body
         error = body.get("error")
         if error == "authorization_pending":
             continue
@@ -238,25 +256,34 @@ def exchange(env_name: str, access_token: str, post: Callable = post_json) -> di
     }
 
 
-def wait(home: str, post_token: Callable = post_form,
-         post_exchange: Callable = post_json, sleep: Callable = time.sleep,
-         now: Callable = time.time) -> Optional[dict]:
-    """Finish a pending login. The stored credentials, or None if the user
-    has not answered yet (the pending code is kept for another `wait`).
-
-    Every terminal outcome -- success, denial, expiry -- removes the pending
-    code, and only success writes a credential."""
+def wait_for_token(home: str, post_token: Callable = post_form,
+                   sleep: Callable = time.sleep,
+                   now: Callable = time.time) -> Optional[dict]:
+    """Auth0's token response for the pending login, or None if the user has
+    not answered yet (the pending code is kept for another wait). Any other
+    outcome consumes the pending code."""
     pending = load_pending(home)
     if pending is None:
         raise LoginError("There is no sign-in in progress. Run `/rius login` first.")
     try:
         token = poll_for_token(pending, post=post_token, sleep=sleep, now=now)
-        if token is None:
-            return None
-        creds = exchange(pending["env"], token, post=post_exchange)
     except LoginError:
         _remove(pending_path(home))
         raise
+    if token is not None:
+        token["env"] = pending["env"]
+        _remove(pending_path(home))
+    return token
+
+
+def wait(home: str, post_token: Callable = post_form,
+         post_exchange: Callable = post_json, sleep: Callable = time.sleep,
+         now: Callable = time.time) -> Optional[dict]:
+    """Finish a pending login with a new key. The stored credentials, or None
+    if the user has not answered yet. Only success writes a credential."""
+    token = wait_for_token(home, post_token=post_token, sleep=sleep, now=now)
+    if token is None:
+        return None
+    creds = exchange(token["env"], token["access_token"], post=post_exchange)
     _write_private(credentials_path(home), creds)
-    _remove(pending_path(home))
     return creds

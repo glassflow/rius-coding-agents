@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """CLI backing the /rius slash command.
 
-Actions: on | off | clear | enable-here | status | login | login-wait | logout
+Actions: on | off | clear | enable-here | status | login | login-wait |
+         claim <number|name|id> | provision | logout
 Flags:   --session <id>   --cwd <path>
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
@@ -23,13 +24,25 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, login, platform_compat, state  # noqa: E402
+from rius_cc import anonymous, config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|status|login|login-wait|logout> "
-    "[--session <id>] [--cwd <path>]"
+    "<on|off|clear|enable-here|status|login|login-wait|claim <n|name|id>|"
+    "provision|logout> [--session <id>] [--cwd <path>]"
 )
+
+ACCOUNT_ACTIONS = ("login", "login-wait", "logout", "provision", "claim")
+
+CLAIM_DISCLOSURE = """\
+Signing in claims this unclaimed workspace: its key and the traces sent so
+far are attached to a Rius workspace your account can access (a new account
+gets a `Default` workspace). The stored key stays the same."""
+
+ENV_KEY_BLOCKS_CLAIM = """\
+RIUS_API_KEY is set, so it is the key in use and this command will not claim
+or replace the unclaimed workspace stored in ~/.claude/rius/credentials.json.
+Unset RIUS_API_KEY and run it again, or claim in a browser: %s"""
 
 # Actions that WRITE a per-session override. These must never guess which
 # session they are acting on: guessing means either crashing on a fresh
@@ -59,6 +72,7 @@ def _parse_args(argv):
     action = argv[0] if has_action else "status"
     session_id = None
     cwd = None
+    positional = []
     i = 1 if has_action else 0
     while i < len(argv):
         if argv[i] == "--session" and i + 1 < len(argv):
@@ -68,8 +82,10 @@ def _parse_args(argv):
             cwd = argv[i + 1]
             i += 2
         else:
+            if not argv[i].startswith("--"):
+                positional.append(argv[i])
             i += 1
-    return action, session_id, cwd
+    return action, session_id, cwd, positional
 
 
 def _most_recent_session(home):
@@ -141,7 +157,9 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
-    if cfg.workspace_name:
+    if cfg.claim_url:
+        print("Workspace: unclaimed. Claim: %s" % cfg.claim_url)
+    elif cfg.workspace_name:
         print("Workspace: %s" % cfg.workspace_name)
     spans = _spans_exported(session_id, home)
     if spans is not None:
@@ -156,8 +174,27 @@ def _print_status(session_id, cwd, home, inferred=False):
               % (last.get("reason"), last.get("at")))
 
 
-def _login(home):
-    print(login.DISCLOSURE)
+def _env_key_set():
+    return bool(os.environ.get("RIUS_API_KEY"))
+
+
+def _stored_unclaimed(home):
+    creds = login.read_credentials(home)
+    return creds if anonymous.is_unclaimed(creds) else None
+
+
+def _refuse_claim_over_env_key(unclaimed):
+    if unclaimed and _env_key_set():
+        print(ENV_KEY_BLOCKS_CLAIM % unclaimed["claim_url"])
+        return True
+    return False
+
+
+def _login(home, _args=()):
+    unclaimed = _stored_unclaimed(home)
+    if _refuse_claim_over_env_key(unclaimed):
+        return
+    print(CLAIM_DISCLOSURE if unclaimed else login.DISCLOSURE)
     print()
     pending = login.start(home)
     _open_browser(pending["verification_uri_complete"])
@@ -186,11 +223,20 @@ def _open_browser(url):
         pass
 
 
-def _login_wait(home):
+_STILL_WAITING = ("Still waiting for approval in the browser. "
+                  "Run `/rius login-wait` again once you have approved.")
+
+
+def _login_wait(home, _args=()):
+    unclaimed = _stored_unclaimed(home)
+    if _refuse_claim_over_env_key(unclaimed):
+        return
+    if unclaimed:
+        _claim_after_login(home)
+        return
     creds = login.wait(home)
     if creds is None:
-        print("Still waiting for approval in the browser. "
-              "Run `/rius login-wait` again once you have approved.")
+        print(_STILL_WAITING)
         return
     print("Signed in. Traces will go to workspace: %s"
           % (creds.get("workspace_name") or creds.get("workspace_id")))
@@ -208,26 +254,113 @@ def _login_wait(home):
           "start tracing it (the first spans can take ~30s to be accepted).")
 
 
-def _logout(home):
-    if login.clear_credentials(home):
-        print("Removed the stored Rius key. It is still valid on the server "
-              "until it expires or is revoked in the console.")
-    else:
-        print("No stored Rius key to remove.")
+def _claim_after_login(home):
+    token = login.wait_for_token(home)
+    if token is None:
+        print(_STILL_WAITING)
+        return
+    creds, choices = anonymous.after_login(home, token)
+    if creds:
+        _print_claimed(creds)
+        return
+    print("Your account can access several workspaces. Choose where this "
+          "one's key and traces should go:")
+    print(anonymous.format_targets(choices))
+    print("Run `/rius claim <number>` (a workspace name or id also works) "
+          "to finish.")
 
 
-def _run_account_action(action, home):
+def _print_claimed(creds):
+    print("Claimed. Traces now go to workspace %s (%s); the ones sent before "
+          "the claim are copied there in the background."
+          % (creds.get("workspace_name") or creds.get("workspace_id"),
+             creds.get("org_name") or "your org"))
+    print("The key is unchanged, so there is nothing to reconfigure.")
+
+
+def _claim(home, args):
+    if _refuse_claim_over_env_key(_stored_unclaimed(home)):
+        return
+    if not args:
+        print("Usage: /rius claim <number|name|id>, from the list "
+              "`/rius login` printed.")
+        return
     try:
-        {"login": _login, "login-wait": _login_wait, "logout": _logout}[action](home)
+        creds = anonymous.finish_claim(home, " ".join(args))
+    except anonymous.SignInExpired:
+        print("The sign-in for this claim has expired; starting a new one.")
+        _login(home)
+        return
+    _print_claimed(creds)
+
+
+def _print_provision_failure(exc):
+    print("Rius could not provision a workspace: %s" % exc)
+    print("Tracing stays off until a key exists: run this again, "
+          "`/rius login`, or set RIUS_API_KEY.")
+
+
+def _provision(home, _args=()):
+    if _env_key_set():
+        print("RIUS_API_KEY is set and is the key in use, so no workspace "
+              "was provisioned.")
+        return
+    creds = login.read_credentials(home)
+    if creds:
+        print("A Rius key is already stored in %s; nothing was provisioned."
+              % login.credentials_path(home))
+        if anonymous.is_unclaimed(creds):
+            print("Claim this workspace any time: %s" % creds["claim_url"])
+        return
+    try:
+        creds = anonymous.provision(home)
     except login.LoginError as exc:
-        print("Rius login failed: %s" % exc)
+        _print_provision_failure(exc)
+        return
+    print("Provisioned an unclaimed Rius workspace; its key is in %s."
+          % login.credentials_path(home))
+    print("Claim this workspace any time: %s" % creds["claim_url"])
+
+
+def _provision_if_keyless(home):
+    if _env_key_set() or login.read_credentials(home):
+        return
+    try:
+        creds = anonymous.provision(home)
+    except login.LoginError as exc:
+        _print_provision_failure(exc)
+        return
+    print("Tracing on. Claim this workspace any time: %s" % creds["claim_url"])
+
+
+def _logout(home, _args=()):
+    unclaimed = _stored_unclaimed(home)
+    anonymous.forget_pending(home)
+    if not login.clear_credentials(home):
+        print("No stored Rius key to remove.")
+        return
+    print("Removed the stored Rius key. It is still valid on the server "
+          "until it expires or is revoked in the console.")
+    if unclaimed:
+        print("WARNING: this workspace was never claimed. Its claim URL is "
+              "now the only way back to its traces, so keep it: %s"
+              % unclaimed["claim_url"])
+
+
+def _run_account_action(action, home, args):
+    handlers = {"login": _login, "login-wait": _login_wait, "logout": _logout,
+                "provision": _provision, "claim": _claim}
+    try:
+        handlers[action](home, args)
+    except login.LoginError as exc:
+        print("Rius %s failed: %s" % (action, exc))
 
 
 def dispatch(argv, home):
-    action, session_id, cwd = _parse_args(argv)
+    action, session_id, cwd, args = _parse_args(argv)
 
-    if action in ("login", "login-wait", "logout"):
-        _run_account_action(action, home)
+    if action in ACCOUNT_ACTIONS:
+        _run_account_action(action, home, args)
         return
 
     inferred = False
@@ -254,6 +387,7 @@ def dispatch(argv, home):
         target_cwd = cwd or os.getcwd()
         _enable_here(target_cwd, home)
         print("Rius tracing enabled for %s." % target_cwd)
+        _provision_if_keyless(home)
     elif action == "status":
         _print_status(session_id, cwd, home, inferred=inferred)
     else:

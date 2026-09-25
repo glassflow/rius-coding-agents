@@ -233,3 +233,14 @@ def test_login_wait_without_login_fails_politely(tmp_path):
     r = _ctl(["login-wait"], str(tmp_path))
     assert r.returncode == 0
     assert "no sign-in in progress" in r.stdout
+
+
+def test_wait_for_token_returns_the_token_response_and_its_environment(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    token = login.wait_for_token(
+        home, post_token=scripted((200, {"access_token": "tok", "expires_in": 60})),
+        sleep=clock.sleep, now=clock.now)
+    assert token == {"access_token": "tok", "expires_in": 60, "env": "staging"}
+    assert not os.path.exists(login.pending_path(home))
+    assert not os.path.exists(login.credentials_path(home))

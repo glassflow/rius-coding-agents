@@ -24,6 +24,8 @@ _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 _NO_KEY = "no API key: run `/rius login` (or set RIUS_API_KEY)"
 
+CLAIM_TOKEN_PREFIX = "ric_"
+
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
 
@@ -31,12 +33,13 @@ _FALSE_VALUES = {"false", "0"}
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
                  capture_content, max_attr_bytes, debug, key_source=None,
-                 workspace_name=None):
+                 workspace_name=None, claim_url=None):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
         self.key_source = key_source
         self.workspace_name = workspace_name
+        self.claim_url = claim_url
         self.endpoint = endpoint
         self.service_name = service_name
         self.capture_content = capture_content
@@ -196,6 +199,8 @@ def _max_attr_bytes(env: Mapping[str, str]) -> int:
 def redact(api_key: Optional[str]) -> str:
     if not api_key:
         return "<unset>"
+    if api_key.startswith(CLAIM_TOKEN_PREFIX):
+        return "<redacted>"
     idx = api_key.find("_")
     if idx == -1:
         return "<redacted>"
@@ -203,7 +208,7 @@ def redact(api_key: Optional[str]) -> str:
 
 
 def _credential(env: Mapping[str, str], home: str):
-    """(api_key, endpoint, source, workspace_name).
+    """(api_key, endpoint, source, stored credential or None).
 
     RIUS_API_KEY wins over the file `/rius login` writes: existing installs
     are configured that way. The stored endpoint travels with the stored key
@@ -215,13 +220,15 @@ def _credential(env: Mapping[str, str], home: str):
     creds = login.read_credentials(home)
     if creds:
         endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
-        return (creds["api_key"], endpoint, "/rius login",
-                creds.get("workspace_name"))
+        source = ("unclaimed workspace (/rius enable-here)"
+                  if creds.get("anonymous") else "/rius login")
+        return creds["api_key"], endpoint, source, creds
     return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
-    api_key, endpoint, key_source, workspace_name = _credential(env, home)
+    api_key, endpoint, key_source, creds = _credential(env, home)
+    creds = creds or {}
     service_name = env.get("RIUS_SERVICE_NAME", DEFAULT_SERVICE_NAME)
     capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
     if capture_content is None:
@@ -265,5 +272,6 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         max_attr_bytes=max_attr_bytes,
         debug=debug,
         key_source=key_source,
-        workspace_name=workspace_name,
+        workspace_name=creds.get("workspace_name"),
+        claim_url=creds.get("claim_url") if creds.get("anonymous") else None,
     )
