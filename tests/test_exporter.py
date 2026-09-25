@@ -219,11 +219,11 @@ def _failing(monkeypatch, status):
 
 
 def test_permanent_4xx_advances_the_offset_and_records_why(home, monkeypatch, fixtures_dir):
-    """A wrong API key is permanent. Holding the offset means every later
+    """A key without the scope is permanent. Holding the offset means every later
     hook re-reads from the same place and re-encodes an ever larger batch,
     forever: growing CPU, growing payload, nothing exported, nothing said."""
     sid = "11111111-1111-1111-1111-111111111111"
-    sent = _failing(monkeypatch, 401)
+    sent = _failing(monkeypatch, 403)
     exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
                  ENV, home)
 
@@ -231,7 +231,7 @@ def test_permanent_4xx_advances_the_offset_and_records_why(home, monkeypatch, fi
     assert st["offset"] > 0, "a permanent failure must not re-read the same lines forever"
     assert st["spans_exported"] == 0
     err = st["last_export_error"]
-    assert err["status"] == 401
+    assert err["status"] == 403
     assert "RIUS_API_KEY" in err["reason"]
     assert err["at"]
 
@@ -250,6 +250,17 @@ def test_transient_5xx_holds_the_offset_but_still_records_why(home, monkeypatch,
     assert st["offset"] == 0, "a transient failure should retry the same lines"
     assert st["consecutive_export_failures"] == 1
     assert st["last_export_error"]["status"] == 503
+
+
+def test_401_is_transient_because_a_fresh_key_takes_seconds_to_go_live(
+        home, monkeypatch, fixtures_dir):
+    sid = "11111111-1111-1111-1111-111111111111"
+    _failing(monkeypatch, 401)
+    exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"),
+                 ENV, home)
+    st = state.load(sid, home)
+    assert st["offset"] == 0, "the spans must survive until the key is live"
+    assert "/rius login" in st["last_export_error"]["reason"]
 
 
 def test_429_is_treated_as_transient(home, monkeypatch, fixtures_dir):

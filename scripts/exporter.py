@@ -36,7 +36,9 @@ def _export_error_reason(status: int) -> str:
         return ("could not reach the endpoint at all (DNS, TLS, network or a "
                 "wrong RIUS_ENDPOINT)")
     if status in (401, 403):
-        return "rejected the API key (HTTP %d) -- check RIUS_API_KEY" % status
+        return ("rejected the API key (HTTP %d) -- check RIUS_API_KEY or run "
+                "/rius login; a key minted in the last ~30s is not live yet"
+                % status)
     if status == 404:
         return ("no OTLP receiver at that URL (HTTP 404) -- RIUS_ENDPOINT "
                 "must be a BASE url; /v1/traces is appended")
@@ -49,8 +51,11 @@ def _export_error_reason(status: int) -> str:
 
 def _is_permanent(status: int) -> bool:
     """4xx means the receiver understood us and said no. Retrying the exact
-    same bytes cannot change that -- except for 429, which is a 'later'."""
-    return bool(status) and 400 <= status < 500 and status != 429
+    same bytes cannot change that -- except for 429, which is a 'later', and
+    401: a key minted seconds ago by `/rius login` is rejected for up to ~30s
+    while it reaches the receiver. The transient cap still bounds a key that
+    is genuinely wrong."""
+    return bool(status) and 400 <= status < 500 and status not in (401, 429)
 
 
 def _now_rfc3339() -> str:
