@@ -1,7 +1,7 @@
 {
   "name": "rius-claude-code",
   "description": "Stream Claude Code sessions to Rius as OTLP GenAI traces",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": { "name": "GlassFlow", "url": "https://glassflow.dev" },
   "homepage": "https://github.com/glassflow/rius-coding-agents"
 }
