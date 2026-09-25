@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rius": {
+      "type": "http",
+      "url": "${RIUS_MCP_URL:-https://mcp.eu.staging.rius.glassflow.xyz/mcp}",
+      "headersHelper": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp_headers.sh\""
+    }
+  }
+}

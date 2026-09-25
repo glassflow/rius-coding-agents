@@ -47,6 +47,10 @@ Code's settings.
   server until it expires or is revoked in the console.
 - Tracing is still off until `/rius enable-here`. Login never enables a
   folder.
+- The plugin bundles the Rius MCP server as `rius`, authenticated with the
+  same key (via a `headersHelper`, so the key never lands in any MCP
+  config). After logging in, reconnect it in `/mcp` or restart Claude Code.
+  `RIUS_MCP_URL` points it elsewhere; it defaults to staging.
 - A key minted seconds ago can be rejected with 401 for up to ~30s while it
   propagates to the receiver.
 - Production has no device-flow application yet; there, follow the steps

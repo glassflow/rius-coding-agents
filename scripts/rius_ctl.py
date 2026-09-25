@@ -200,6 +200,8 @@ def _login_wait(home):
     if os.environ.get("RIUS_API_KEY"):
         print("NOTE: RIUS_API_KEY is set in your environment and still wins "
               "over this key. Unset it to use the new one.")
+    print("The plugin's `rius` MCP server uses this key too: run `/mcp` and "
+          "reconnect `rius` (or restart Claude Code) to query your traces.")
     print("Nothing is traced yet. Run `/rius enable-here` in a folder to "
           "start tracing it (the first spans can take ~30s to be accepted).")
 
