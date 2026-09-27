@@ -5,9 +5,11 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import urllib.error
 
 import pytest
+from time import sleep as time_sleep
 
 import rius_ctl
 from rius_cc import config, login, platform_compat
@@ -176,7 +178,8 @@ def test_a_socket_timeout_is_a_blip_too(tmp_path):
     assert creds["email"] == "x@acme.com"
 
 
-@pytest.mark.parametrize("field", ["endpoint", "workspace_name", "email"])
+@pytest.mark.parametrize("field", ["endpoint", "workspace_id", "workspace_name",
+                                   "email"])
 def test_a_key_without_its_destination_is_refused(tmp_path, field):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
@@ -282,9 +285,12 @@ def test_a_second_wait_does_not_poll_while_another_holds_the_link(tmp_path):
     fd = _hold_wait_lock(home)
     try:
         post = scripted()
+        began = clock.t
         with pytest.raises(login.WaitInProgress):
             _wait(home, clock, post)
         assert post.calls == []
+        assert (login.LOCK_WAIT_SECONDS <= clock.t - began
+                <= login.LOCK_WAIT_SECONDS + login.LOCK_RETRY_SECONDS)
         assert os.path.exists(login.pending_path(home))
     finally:
         os.close(fd)
@@ -312,6 +318,72 @@ def test_an_older_wait_leaves_a_newer_login_s_link_alone(tmp_path):
     _start(home, clock)
     _wait(home, clock, _restart_then(home, clock, (200, TOKEN_RESPONSE)))
     assert login.load_pending(home)["link_id"] == "l-new"
+
+
+def test_a_superseded_wait_stops_within_one_interval(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    restarted_at = []
+
+    def post(url, payload, bearer=None):
+        post.calls += 1
+        if not restarted_at:
+            _restart_then(home, clock, None)(url, payload)
+            restarted_at.append(clock.t)
+        return PENDING
+    post.calls = 0
+    with pytest.raises(login.Superseded):
+        _wait(home, clock, post)
+    assert post.calls == 1
+    assert clock.t - restarted_at[0] <= LINK_RESPONSE["interval"]
+    assert login.load_pending(home)["link_id"] == "l-new"
+    assert not os.path.exists(login.credentials_path(home))
+    os.close(_hold_wait_lock(home))
+
+
+def test_a_newer_wait_takes_over_once_the_older_one_is_superseded(tmp_path):
+    home = str(tmp_path)
+    _park(home, link_id="l-old")
+    restarted, b_retrying = threading.Event(), threading.Event()
+    outcome = {}
+
+    def old_post(url, payload, bearer=None):
+        restarted.wait(5)
+        old_post.calls += 1
+        return PENDING if old_post.calls < 50 else (410, {})
+    old_post.calls = 0
+
+    def old_sleep(seconds):
+        if restarted.is_set():
+            b_retrying.wait(5)
+
+    def run_old():
+        try:
+            login.wait(home, post=old_post, sleep=old_sleep)
+        except BaseException as exc:
+            outcome["old"] = exc
+
+    def new_sleep(seconds):
+        b_retrying.set()
+        time_sleep(0.01)
+
+    old = threading.Thread(target=run_old, daemon=True)
+    old.start()
+    try:
+        while not os.path.exists(login.wait_lock_path(home)):
+            time_sleep(0.01)
+        _park(home, link_id="l-new", device_code="dc_new")
+        restarted.set()
+        new_post = scripted((200, TOKEN_RESPONSE))
+        creds = login.wait(home, post=new_post, sleep=new_sleep)
+    finally:
+        restarted.set()
+        b_retrying.set()
+        old.join(10)
+    assert isinstance(outcome.get("old"), login.Superseded)
+    assert creds["api_key"] == "ri_supersecretkey"
+    assert new_post.calls[0][1] == {"device_code": "dc_new"}
+    assert not os.path.exists(login.pending_path(home))
 
 
 def test_an_older_wait_failing_leaves_a_newer_login_s_link_alone(tmp_path):
@@ -529,8 +601,9 @@ def test_login_wait_still_waiting_repeats_the_pending_line(
 
 
 def test_login_wait_while_another_waits_says_so_and_does_not_loop(
-        tmp_path, server, capsys):
+        tmp_path, server, capsys, monkeypatch):
     home = str(tmp_path)
+    monkeypatch.setattr(login, "LOCK_WAIT_SECONDS", 0.0)
     _park(home)
     fake = server()
     fd = _hold_wait_lock(home)
@@ -542,6 +615,20 @@ def test_login_wait_while_another_waits_says_so_and_does_not_loop(
     assert "another login is already waiting" in out.lower()
     assert "Still waiting" not in out and "RIUS_LOGIN_PENDING" not in out
     assert fake.calls == []
+
+
+def test_a_superseded_login_wait_says_so_and_does_not_loop(
+        tmp_path, capsys, monkeypatch):
+    home, clock = str(tmp_path), Clock()
+    _park(home, interval=5)
+    real_wait = login.wait
+    monkeypatch.setattr(login, "wait", lambda h: real_wait(
+        h, post=_restart_then(h, clock, PENDING), sleep=clock.sleep, now=clock.now))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "newer /rius:login" in out
+    assert "Still waiting" not in out and "RIUS_LOGIN_PENDING" not in out
+    assert "Rius login failed" not in out
 
 
 def test_logout_revokes_then_deletes(tmp_path, server, capsys):

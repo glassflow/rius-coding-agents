@@ -272,7 +272,7 @@ def _run_account_action(action, home, cwd):
     handler = {"login": _login, "login-wait": _login_wait, "logout": _logout}[action]
     try:
         handler(home, cwd or os.getcwd())
-    except login.WaitInProgress as exc:
+    except (login.WaitInProgress, login.Superseded) as exc:
         print(exc)
     except login.LoginError as exc:
         print("Rius login failed: %s" % exc)

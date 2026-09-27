@@ -34,6 +34,9 @@ from rius_cc import platform_compat
 WAIT_BUDGET_SECONDS = 540
 MAX_BACKOFF_SECONDS = 60
 REQUEST_TIMEOUT_SECONDS = 15.0
+# Long enough for a superseded wait to notice at its next poll and let go.
+LOCK_WAIT_SECONDS = 10.0
+LOCK_RETRY_SECONDS = 0.25
 
 ENVIRONMENTS = {
     "staging": {
@@ -52,6 +55,8 @@ LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
 NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
 ALREADY_WAITING = ("Another login is already waiting for approval in the "
                    "browser; it reports back when it finishes.")
+SUPERSEDED = ("This sign-in was replaced by a newer /rius:login, which "
+              "reports back instead.")
 
 _PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
                    "interval", "expires_at")
@@ -59,7 +64,8 @@ _LINK_FIELDS = ("link_id", "device_code", "user_code", "connect_url", "interval"
                 "expires_in")
 _CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
                       "workspace_name", "org_name", "email", "expires_at")
-_REQUIRED_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_name", "email")
+_REQUIRED_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_id",
+                               "workspace_name", "email")
 _NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
 
@@ -69,6 +75,10 @@ class LoginError(Exception):
 
 class WaitInProgress(Exception):
     """Another `wait` holds the pending link."""
+
+
+class Superseded(Exception):
+    """A newer `/rius:login` replaced the link this `wait` was polling."""
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -173,9 +183,13 @@ def clear_credentials(home: str) -> bool:
     return _remove(credentials_path(home))
 
 
-def _remove_pending_if_still(home: str, pending: dict) -> None:
+def _is_current(home: str, pending: dict) -> bool:
     current = load_pending(home)
-    if current and current["link_id"] == pending["link_id"]:
+    return bool(current) and current["link_id"] == pending["link_id"]
+
+
+def _remove_pending_if_still(home: str, pending: dict) -> None:
+    if _is_current(home, pending):
         _remove(pending_path(home))
 
 
@@ -242,9 +256,11 @@ def _backoff(interval: int, failures: int) -> float:
 
 def poll_for_key(pending: dict, post: Callable = post_json,
                  sleep: Callable = time.sleep, now: Callable = time.time,
-                 budget: Optional[float] = None) -> Optional[dict]:
+                 budget: Optional[float] = None,
+                 is_current: Callable[[], bool] = lambda: True) -> Optional[dict]:
     """The token response, or None if the budget ran out while the link is
-    still pending. Raises LoginError when the link is dead."""
+    still pending. Raises LoginError when the link is dead, Superseded when
+    `is_current` says a newer link replaced it."""
     url = _link_base(pending["env"]) + "/v1/agent-links/token"
     if budget is None:
         budget = WAIT_BUDGET_SECONDS
@@ -253,6 +269,8 @@ def poll_for_key(pending: dict, post: Callable = post_json,
     while now() < give_up_at:
         sleep(min(_backoff(pending["interval"], failures),
                   max(0.0, give_up_at - now())))
+        if not is_current():
+            raise Superseded(SUPERSEDED)
         status, body = _poll_once(url, pending["device_code"], post)
         if _is_success(status) and body.get("api_key"):
             _require_credentials(body)
@@ -297,21 +315,28 @@ def revoke(creds: dict, post: Callable = post_json) -> bool:
 
 
 @contextlib.contextmanager
-def _single_wait(home: str):
+def _single_wait(home: str, sleep: Callable, now: Callable):
     """Two waits on one link would each mint a key, and the slower one could
     store a key the other's re-mint already revoked."""
     path = wait_lock_path(home)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = platform_compat.open_lock_file(path, mode=0o600)
     try:
-        if not platform_compat.try_lock(fd):
-            raise WaitInProgress(ALREADY_WAITING)
+        _take_lock(fd, sleep, now)
         try:
             yield
         finally:
             platform_compat.unlock(fd)
     finally:
         os.close(fd)
+
+
+def _take_lock(fd: int, sleep: Callable, now: Callable) -> None:
+    give_up_at = now() + LOCK_WAIT_SECONDS
+    while not platform_compat.try_lock(fd):
+        if now() >= give_up_at:
+            raise WaitInProgress(ALREADY_WAITING)
+        sleep(LOCK_RETRY_SECONDS)
 
 
 def wait(home: str, post: Callable = post_json, sleep: Callable = time.sleep,
@@ -322,7 +347,7 @@ def wait(home: str, post: Callable = post_json, sleep: Callable = time.sleep,
     Every terminal outcome removes the pending link unless a newer
     `/rius:login` has replaced it, and only success writes a credential.
     The key it replaces is revoked afterwards."""
-    with _single_wait(home):
+    with _single_wait(home, sleep, now):
         return _wait_locked(home, post, sleep, now)
 
 
@@ -332,7 +357,8 @@ def _wait_locked(home: str, post: Callable, sleep: Callable,
     if pending is None:
         raise LoginError(NO_SIGN_IN)
     try:
-        body = poll_for_key(pending, post=post, sleep=sleep, now=now)
+        body = poll_for_key(pending, post=post, sleep=sleep, now=now,
+                            is_current=lambda: _is_current(home, pending))
     except LoginError:
         _remove_pending_if_still(home, pending)
         raise
