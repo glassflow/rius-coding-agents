@@ -19,6 +19,7 @@ import http.client
 import json
 import os
 import socket
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +30,7 @@ from typing import Callable, Optional
 # `wait` can pick it up, instead of being killed mid-poll.
 WAIT_BUDGET_SECONDS = 540
 MAX_BACKOFF_SECONDS = 60
+REQUEST_TIMEOUT_SECONDS = 15.0
 
 ENVIRONMENTS = {
     "staging": {
@@ -48,8 +50,11 @@ NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
 
 _PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
                    "interval", "expires_at")
+_LINK_FIELDS = ("device_code", "user_code", "connect_url", "interval",
+                "expires_in")
 _CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
                       "workspace_name", "org_name", "email", "expires_at")
+_REQUIRED_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_name", "email")
 _NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
 
@@ -59,7 +64,7 @@ class LoginError(Exception):
 
 # --- HTTP -------------------------------------------------------------------
 
-def _send(req: urllib.request.Request, timeout: float = 15.0):
+def _send(req: urllib.request.Request, timeout: float = REQUEST_TIMEOUT_SECONDS):
     """(status, parsed JSON body). Error statuses are data here, not
     exceptions: 428 is how the server says "not yet"."""
     try:
@@ -90,6 +95,10 @@ def _is_success(status: int) -> bool:
     return 200 <= status < 300
 
 
+def _missing(body: dict, fields) -> list:
+    return [f for f in fields if body.get(f) in (None, "")]
+
+
 def _detail(body: dict) -> str:
     return body.get("code") or body.get("detail") or body.get("title") or "no detail"
 
@@ -111,16 +120,16 @@ def credentials_path(home: str) -> str:
 def _write_private(path: str, data: dict) -> None:
     """Write via a 0600 temp file and rename, so the secret is never readable
     by others, not even for the instant before a chmod."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".rius-", suffix=".tmp")
     try:
-        os.remove(tmp)
-    except OSError:
-        pass
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(data, fh)
-    os.replace(tmp, path)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except BaseException:
+        _remove(tmp)
+        raise
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -175,17 +184,21 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
         status, body = post(url, {"client_name": socket.gethostname()[:64]})
     except _NETWORK_ERRORS as exc:
         raise LoginError("Could not reach Rius to start the sign-in (%s)." % exc)
-    if not _is_success(status) or "device_code" not in body:
+    if not _is_success(status):
         raise LoginError("Rius could not start the sign-in (HTTP %s: %s)."
                          % (status, _detail(body)))
+    missing = _missing(body, _LINK_FIELDS)
+    if missing:
+        raise LoginError("Rius started the sign-in but left out %s."
+                         % ", ".join(missing))
     pending = {
         "env": env_name,
         "link_id": body.get("link_id"),
         "device_code": body["device_code"],
-        "user_code": body.get("user_code"),
-        "connect_url": body.get("connect_url"),
-        "interval": int(body.get("interval", 5)),
-        "expires_at": now() + int(body.get("expires_in", 900)),
+        "user_code": body["user_code"],
+        "connect_url": body["connect_url"],
+        "interval": int(body["interval"]),
+        "expires_at": now() + int(body["expires_in"]),
     }
     _write_private(pending_path(home), pending)
     return pending
@@ -219,9 +232,11 @@ def poll_for_key(pending: dict, post: Callable = post_json,
     give_up_at = min(now() + budget, pending["expires_at"])
     failures = 0
     while now() < give_up_at:
-        sleep(_backoff(pending["interval"], failures))
+        sleep(min(_backoff(pending["interval"], failures),
+                  max(0.0, give_up_at - now())))
         status, body = _poll_once(url, pending["device_code"], post)
         if _is_success(status) and body.get("api_key"):
+            _require_credentials(body)
             return body
         if status == 428:
             failures = 0
@@ -235,6 +250,13 @@ def poll_for_key(pending: dict, post: Callable = post_json,
     if now() >= pending["expires_at"]:
         raise LoginError(LINK_EXPIRED)
     return None
+
+
+def _require_credentials(body: dict) -> None:
+    missing = _missing(body, _REQUIRED_CREDENTIAL_FIELDS)
+    if missing:
+        raise LoginError("Rius issued a key but left out %s. Run `/rius:login` "
+                         "again." % ", ".join(missing))
 
 
 def _credentials(env_name: str, body: dict) -> dict:

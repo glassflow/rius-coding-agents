@@ -110,6 +110,16 @@ def test_start_reports_an_unconfigured_environment(tmp_path):
     assert not os.path.exists(login.pending_path(str(tmp_path)))
 
 
+@pytest.mark.parametrize("field", ["device_code", "user_code", "connect_url",
+                                   "interval", "expires_in"])
+def test_start_requires_every_contract_field(tmp_path, field):
+    body = dict(LINK_RESPONSE)
+    del body[field]
+    with pytest.raises(login.LoginError, match=field):
+        login.start(str(tmp_path), post=scripted((201, body)))
+    assert not os.path.exists(login.pending_path(str(tmp_path)))
+
+
 def test_start_reports_an_unreachable_server(tmp_path):
     with pytest.raises(login.LoginError, match="reach"):
         login.start(str(tmp_path), post=scripted(urllib.error.URLError("dns")))
@@ -166,6 +176,17 @@ def test_a_socket_timeout_is_a_blip_too(tmp_path):
     assert creds["email"] == "x@acme.com"
 
 
+@pytest.mark.parametrize("field", ["endpoint", "workspace_name", "email"])
+def test_a_key_without_its_destination_is_refused(tmp_path, field):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    body = dict(TOKEN_RESPONSE)
+    del body[field]
+    with pytest.raises(login.LoginError, match=field):
+        _wait(home, clock, scripted((200, body)))
+    assert not os.path.exists(login.credentials_path(home))
+
+
 def test_an_unexpected_rejection_is_terminal(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
@@ -187,6 +208,29 @@ def test_budget_exhaustion_keeps_the_pending_link_and_a_resume_succeeds(tmp_path
     assert not os.path.exists(login.pending_path(home))
 
 
+class SlowNetwork:
+    """Every request fails after using up the whole request timeout."""
+
+    def __init__(self, clock, cost=login.REQUEST_TIMEOUT_SECONDS):
+        self.clock, self.cost, self.calls = clock, cost, 0
+
+    def __call__(self, url, payload, bearer=None):
+        self.calls += 1
+        self.clock.t += self.cost
+        raise urllib.error.URLError("unreachable")
+
+
+def test_sustained_network_failure_stays_inside_the_budget(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    network = SlowNetwork(clock)
+    assert _wait(home, clock, network) is None
+    elapsed = clock.t - 1000.0
+    assert elapsed <= login.WAIT_BUDGET_SECONDS + login.REQUEST_TIMEOUT_SECONDS
+    assert network.calls > 1
+    assert os.path.exists(login.pending_path(home))
+
+
 def test_the_link_expiring_mid_wait_is_terminal(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
@@ -206,6 +250,20 @@ def test_a_leftover_pending_file_of_another_shape_is_ignored(tmp_path):
     login._write_private(login.pending_path(home), {"verification_uri": "x"})
     with pytest.raises(login.LoginError, match="no sign-in in progress"):
         _wait(home, Clock(), scripted())
+
+
+# --- private files -----------------------------------------------------------
+
+def test_private_writes_leave_no_temp_files_and_ignore_a_stale_one(tmp_path):
+    path = login.credentials_path(str(tmp_path))
+    os.makedirs(os.path.dirname(path))
+    open(path + ".tmp", "w").close()
+    login._write_private(path, {"api_key": "a"})
+    login._write_private(path, {"api_key": "b"})
+    assert json.load(open(path)) == {"api_key": "b"}
+    assert _mode(path) == 0o600
+    assert sorted(os.listdir(os.path.dirname(path))) == [
+        "credentials.json", "credentials.json.tmp"]
 
 
 # --- the previous key -----------------------------------------------------------
@@ -368,6 +426,32 @@ def test_login_wait_is_quiet_about_folders_when_the_workspace_is_the_same(
     server((200, TOKEN_RESPONSE), (204, {}))
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     assert "enabled folder" not in capsys.readouterr().out
+
+
+def test_login_wait_without_an_org_prints_no_placeholder(tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home)
+    body = dict(TOKEN_RESPONSE)
+    del body["org_name"]
+    server((200, body))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "Connected as x@acme.com → eng-shared."
+    assert "None" not in out
+
+
+def test_login_wait_under_a_dead_network_still_says_it_is_waiting(
+        tmp_path, capsys, monkeypatch):
+    home, clock = str(tmp_path), Clock()
+    _park(home, interval=5, expires_at=clock.now() + 900)
+    real_wait = login.wait
+    monkeypatch.setattr(login, "wait", lambda h: real_wait(
+        h, post=SlowNetwork(clock), sleep=clock.sleep, now=clock.now))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert clock.t - 1000.0 <= login.WAIT_BUDGET_SECONDS + login.REQUEST_TIMEOUT_SECONDS
+    assert "Still waiting" in out and "RIUS_LOGIN_PENDING: bash " in out
+    assert os.path.exists(login.pending_path(home))
 
 
 def test_login_wait_still_waiting_repeats_the_pending_line(

@@ -1,4 +1,4 @@
-# rius-claude-code
+# rius
 
 [![CI](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
@@ -60,6 +60,20 @@ The marketplace name is `rius-coding-agents` and the plugin name is
 no file watcher: after editing anything under `hooks/` or `scripts/`, run
 `/reload-plugins` for the change to take effect in your current Claude Code
 process.
+
+### Upgrading from `rius-claude-code`
+
+Versions before 0.3.0 installed the plugin as `rius-claude-code`. Remove it
+before installing `rius`, or both stay installed: every hook fires twice
+(duplicate spans) and every command appears under both names.
+
+```
+/plugin uninstall rius-claude-code@rius-coding-agents
+/plugin marketplace update rius-coding-agents
+/plugin install rius@rius-coding-agents
+```
+
+Your path rules and stored key live under `~/.claude/rius/` and carry over.
 
 ### From GitHub
 
@@ -255,8 +269,9 @@ off per folder by default, so that is not a leak by itself, but it makes the
 blast radius of a later `/rius:enable-here` wider than it needs to be.
 
 Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
-as well. The plugin reads the environment and has no credential file of its
-own.
+as well. Without it, the plugin uses the key `/rius:login` stored in
+`~/.claude/rius/credentials.json` (mode 0600); `RIUS_API_KEY` wins when both
+are present.
 
 ## How it works
 
@@ -366,7 +381,11 @@ resumed session continues the same trace but reports as a new instance.
 
 - Zero runtime dependencies: the plugin is Python standard library only,
   nothing is pulled from PyPI at install or run time.
-- Network traffic goes only to the configured `RIUS_ENDPOINT`, nothing else.
+- Span exports go only to the configured `RIUS_ENDPOINT` (or the endpoint
+  stored with the `/rius:login` key). `/rius:login`, `/rius:logout` and a
+  re-login's revoke of the previous key also call the sign-in host
+  (`connect.staging.rius.glassflow.xyz` on staging). Nothing else is
+  contacted.
 - The API key is never logged. `/rius:status` and debug logs print it
   redacted (prefix plus an ellipsis).
 

@@ -176,8 +176,8 @@ ROOT = pathlib.Path(__file__).parent.parent
 COMMANDS = ROOT / "commands"
 CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
 
-PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "status", "logout")
-SESSION_ACTIONS = ("on", "off")
+PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "logout")
+SESSION_ACTIONS = ("status", "on", "off")
 ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS
 
 
@@ -253,12 +253,14 @@ def test_slash_command_line_runs_end_to_end(tmp_path):
     home = tmp_path / "home"
     (home / ".claude" / "rius").mkdir(parents=True)
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
-           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
+           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k",
+           "CLAUDE_SESSION_ID": "s-e2e"}
     line = _command_line("status").replace("$ARGUMENTS", "")
     r = subprocess.run(["/bin/bash", "-c", line], cwd=str(tmp_path),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     assert "off" in r.stdout.lower()
+    assert "session: s-e2e\n" in r.stdout
     assert "glassflow_k" not in r.stdout
 
 
@@ -379,7 +381,7 @@ def test_enable_here_under_a_disabled_parent_says_still_off(tmp_path):
     home = _fresh_home(tmp_path)
     _run(["disable-here", "--cwd", "/opt"], home, KEY)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
-    assert r.returncode != 0
+    assert r.returncode == 0
     assert r.stdout.strip() == ("Still OFF: `/opt` is disabled. Run "
                                 "`/rius:enable-here` in that folder instead.")
     status = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)

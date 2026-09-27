@@ -16,8 +16,7 @@ correctly-installed-but-not-yet-enabled plugin from a broken one, so it
 must surface the resolved state, the deciding layer (cfg.reason,
 verbatim), the redacted key, the endpoint and, when known, spans
 exported so far. Every action exits 0, including an unknown one, which
-prints usage -- except an `enable-here` that a parent disable still
-overrides, which must not read as a success.
+prints usage.
 """
 import os
 import sys
@@ -106,15 +105,13 @@ def _enable_here(cwd, home):
     match = config.matching_rule(cwd, home)
     if match and not match[1]:
         print(STILL_OFF % match[0])
-        return 1
-    print("Rius tracing enabled for %s." % cwd)
-    return 0
+    else:
+        print("Rius tracing enabled for %s." % cwd)
 
 
 def _disable_here(cwd, home):
     _move_path(home, cwd, "disabled_paths", "enabled_paths")
     print("Rius tracing disabled for %s." % cwd)
-    return 0
 
 
 def _spans_exported(session_id, home):
@@ -171,8 +168,7 @@ def _print_account(creds):
     if creds.get("email"):
         print("Signed in as: %s" % creds["email"])
     if creds.get("workspace_name"):
-        org = " (%s)" % creds["org_name"] if creds.get("org_name") else ""
-        print("Workspace: %s%s" % (creds["workspace_name"], org))
+        print("Workspace: %s%s" % (creds["workspace_name"], _in_org(creds)))
     print("Key expires: %s" % _date(creds.get("expires_at")))
     print('Reconnect "rius" in /mcp to query your traces with this key.')
 
@@ -219,8 +215,8 @@ def _login_wait(home, cwd):
         print("Still waiting for approval in the browser.")
         print(_pending_line(cwd))
         return
-    print("Connected as %s → %s (%s)."
-          % (creds["email"], creds["workspace_name"], creds["org_name"]))
+    print("Connected as %s → %s%s."
+          % (creds["email"], creds["workspace_name"], _in_org(creds)))
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
     print('Reconnect "rius" in /mcp to query your traces.')
     moved = _moved_folders_warning(home, previous, creds)
@@ -229,6 +225,10 @@ def _login_wait(home, cwd):
     if os.environ.get("RIUS_API_KEY"):
         print("NOTE: RIUS_API_KEY is set in your environment and still wins "
               "over this key. Unset it to use the new one.")
+
+
+def _in_org(creds):
+    return " (%s)" % creds["org_name"] if creds.get("org_name") else ""
 
 
 def _moved_folders_warning(home, previous, creds):
@@ -296,9 +296,9 @@ def dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        return _enable_here(cwd or os.getcwd(), home)
+        _enable_here(cwd or os.getcwd(), home)
     elif action == "disable-here":
-        return _disable_here(cwd or os.getcwd(), home)
+        _disable_here(cwd or os.getcwd(), home)
     elif action == "status":
         _print_status(session_id, cwd, home, inferred=inferred)
     else:
@@ -306,12 +306,11 @@ def dispatch(argv, home):
 
 
 def main():
-    code = 0
     try:
-        code = dispatch(sys.argv[1:], platform_compat.home_dir(os.environ)) or 0
+        dispatch(sys.argv[1:], platform_compat.home_dir(os.environ))
     except BaseException as exc:  # never fail this CLI
         print("rius_ctl.py error: %s" % exc)
-    sys.exit(code)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

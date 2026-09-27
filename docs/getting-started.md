@@ -9,7 +9,7 @@ in the README before you enable any folder. By default this plugin sends
 full session content, including the contents of files Claude Code reads and
 the output of commands it runs.
 
-- [Quick start: `/rius:login` (staging)](#quick-start-rius-login-staging)
+- [Quick start: `/rius:login` (staging)](#quick-start-riuslogin-staging)
 - [1. Get a Rius workspace](#1-get-a-rius-workspace)
 - [2. Mint an API key](#2-mint-an-api-key)
 - [3. Pick an endpoint](#3-pick-an-endpoint)
@@ -64,6 +64,20 @@ one.
 - A key minted seconds ago can be rejected with 401 for up to ~30s while it
   propagates to the receiver.
 - Production has no agent-link sign-in yet; there, follow the steps below.
+
+### Upgrading from `rius-claude-code`
+
+Versions before 0.3.0 installed the plugin as `rius-claude-code`. Uninstall
+it first, or both copies stay installed: every hook fires twice (duplicate
+spans) and every command appears under both names.
+
+```
+/plugin uninstall rius-claude-code@rius-coding-agents
+/plugin marketplace update rius-coding-agents
+/plugin install rius@rius-coding-agents
+```
+
+Path rules and the stored key live under `~/.claude/rius/` and carry over.
 
 ## 1. Get a Rius workspace
 
@@ -219,8 +233,9 @@ Three reasons to keep the credential there rather than in the global
   to be.
 
 If you would rather not have the key in a settings file at all, export
-`RIUS_API_KEY` in the shell that launches Claude Code. The plugin only reads
-the environment; it has no credential file of its own.
+`RIUS_API_KEY` in the shell that launches Claude Code, or use `/rius:login`,
+which stores its key in `~/.claude/rius/credentials.json` (mode 0600).
+`RIUS_API_KEY` wins when both are present.
 
 The full list of variables is in the README's
 [Settings](../README.md#settings) table.
