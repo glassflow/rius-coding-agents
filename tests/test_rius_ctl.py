@@ -92,6 +92,15 @@ def test_off_and_clear_without_session_also_refuse(tmp_path):
         assert "isadirectory" not in r.stdout.lower(), action
 
 
+def test_the_no_session_hint_names_only_commands_that_exist(tmp_path):
+    home = _fresh_home(tmp_path)
+    commands = pathlib.Path(__file__).parent.parent / "commands"
+    for action in ("on", "off", "clear"):
+        r = _run([action], home, {"RIUS_API_KEY": "glassflow_k"})
+        hinted = (commands / (action + ".md")).exists()
+        assert ("/rius:%s" % action in r.stdout) == hinted, action
+
+
 def test_on_without_session_never_targets_another_live_session(tmp_path):
     """Two concurrent sessions: the override used to land on whichever one
     wrote state most recently, silently enabling somebody else's session."""

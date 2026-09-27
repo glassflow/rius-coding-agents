@@ -15,6 +15,7 @@ Code's settings, which get shared, committed and screenshotted.
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -24,6 +25,8 @@ import time
 import urllib.error
 import urllib.request
 from typing import Callable, Optional
+
+from rius_cc import platform_compat
 
 # `wait` runs under Claude Code's Bash tool, which kills a command after ten
 # minutes. Returning before that leaves the pending link on disk so a second
@@ -47,10 +50,12 @@ DISCLOSURE = (
 
 LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
 NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
+ALREADY_WAITING = ("Another login is already waiting for approval in the "
+                   "browser; it reports back when it finishes.")
 
 _PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
                    "interval", "expires_at")
-_LINK_FIELDS = ("device_code", "user_code", "connect_url", "interval",
+_LINK_FIELDS = ("link_id", "device_code", "user_code", "connect_url", "interval",
                 "expires_in")
 _CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
                       "workspace_name", "org_name", "email", "expires_at")
@@ -60,6 +65,10 @@ _NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
 class LoginError(Exception):
     """A terminal failure, phrased for the user."""
+
+
+class WaitInProgress(Exception):
+    """Another `wait` holds the pending link."""
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -117,6 +126,10 @@ def credentials_path(home: str) -> str:
     return os.path.join(_rius_dir(home), "credentials.json")
 
 
+def wait_lock_path(home: str) -> str:
+    return os.path.join(_rius_dir(home), "login_wait.lock")
+
+
 def _write_private(path: str, data: dict) -> None:
     """Write via a 0600 temp file and rename, so the secret is never readable
     by others, not even for the instant before a chmod."""
@@ -160,6 +173,12 @@ def clear_credentials(home: str) -> bool:
     return _remove(credentials_path(home))
 
 
+def _remove_pending_if_still(home: str, pending: dict) -> None:
+    current = load_pending(home)
+    if current and current["link_id"] == pending["link_id"]:
+        _remove(pending_path(home))
+
+
 def load_pending(home: str) -> Optional[dict]:
     pending = _read_json(pending_path(home))
     if not pending or any(f not in pending for f in _PENDING_FIELDS):
@@ -193,7 +212,7 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
                          % ", ".join(missing))
     pending = {
         "env": env_name,
-        "link_id": body.get("link_id"),
+        "link_id": body["link_id"],
         "device_code": body["device_code"],
         "user_code": body["user_code"],
         "connect_url": body["connect_url"],
@@ -266,14 +285,33 @@ def _credentials(env_name: str, body: dict) -> dict:
 
 
 def revoke(creds: dict, post: Callable = post_json) -> bool:
-    """Best effort: True only when the server confirmed the key is dead."""
+    """Best effort: True only when the server confirmed the key is dead.
+    A 401 means the key no longer authenticates, so it is already gone."""
     url = _link_base(creds.get("env")) + "/v1/agent-keys/revoke"
     try:
         status, _ = post(url, {"workspace_id": creds.get("workspace_id")},
                          creds["api_key"])
     except _NETWORK_ERRORS:
         return False
-    return _is_success(status)
+    return _is_success(status) or status == 401
+
+
+@contextlib.contextmanager
+def _single_wait(home: str):
+    """Two waits on one link would each mint a key, and the slower one could
+    store a key the other's re-mint already revoked."""
+    path = wait_lock_path(home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = platform_compat.open_lock_file(path, mode=0o600)
+    try:
+        if not platform_compat.try_lock(fd):
+            raise WaitInProgress(ALREADY_WAITING)
+        try:
+            yield
+        finally:
+            platform_compat.unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def wait(home: str, post: Callable = post_json, sleep: Callable = time.sleep,
@@ -281,22 +319,29 @@ def wait(home: str, post: Callable = post_json, sleep: Callable = time.sleep,
     """Finish a pending login. The stored credentials, or None if the user
     has not finished yet (the pending link is kept for another `wait`).
 
-    Every terminal outcome removes the pending link, and only success writes
-    a credential. The key it replaces is revoked afterwards."""
+    Every terminal outcome removes the pending link unless a newer
+    `/rius:login` has replaced it, and only success writes a credential.
+    The key it replaces is revoked afterwards."""
+    with _single_wait(home):
+        return _wait_locked(home, post, sleep, now)
+
+
+def _wait_locked(home: str, post: Callable, sleep: Callable,
+                 now: Callable) -> Optional[dict]:
     pending = load_pending(home)
     if pending is None:
         raise LoginError(NO_SIGN_IN)
     try:
         body = poll_for_key(pending, post=post, sleep=sleep, now=now)
     except LoginError:
-        _remove(pending_path(home))
+        _remove_pending_if_still(home, pending)
         raise
     if body is None:
         return None
     previous = read_credentials(home)
     creds = _credentials(pending["env"], body)
     _write_private(credentials_path(home), creds)
-    _remove(pending_path(home))
+    _remove_pending_if_still(home, pending)
     if previous and previous["api_key"] != creds["api_key"]:
         revoke(previous, post=post)
     return creds

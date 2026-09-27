@@ -10,7 +10,7 @@ import urllib.error
 import pytest
 
 import rius_ctl
-from rius_cc import config, login
+from rius_cc import config, login, platform_compat
 
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 LINK_BASE = login.ENVIRONMENTS["staging"]["link_base"]
@@ -110,7 +110,7 @@ def test_start_reports_an_unconfigured_environment(tmp_path):
     assert not os.path.exists(login.pending_path(str(tmp_path)))
 
 
-@pytest.mark.parametrize("field", ["device_code", "user_code", "connect_url",
+@pytest.mark.parametrize("field", ["link_id", "device_code", "user_code", "connect_url",
                                    "interval", "expires_in"])
 def test_start_requires_every_contract_field(tmp_path, field):
     body = dict(LINK_RESPONSE)
@@ -266,6 +266,62 @@ def test_private_writes_leave_no_temp_files_and_ignore_a_stale_one(tmp_path):
         "credentials.json", "credentials.json.tmp"]
 
 
+# --- one wait at a time -------------------------------------------------------
+
+def _hold_wait_lock(home):
+    path = login.wait_lock_path(home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = platform_compat.open_lock_file(path)
+    assert platform_compat.try_lock(fd)
+    return fd
+
+
+def test_a_second_wait_does_not_poll_while_another_holds_the_link(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    fd = _hold_wait_lock(home)
+    try:
+        post = scripted()
+        with pytest.raises(login.WaitInProgress):
+            _wait(home, clock, post)
+        assert post.calls == []
+        assert os.path.exists(login.pending_path(home))
+    finally:
+        os.close(fd)
+
+
+def test_the_wait_lock_is_private_and_released_afterwards(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    _wait(home, clock, scripted((200, TOKEN_RESPONSE)))
+    assert _mode(login.wait_lock_path(home)) == 0o600
+    os.close(_hold_wait_lock(home))
+
+
+def _restart_then(home, clock, answer):
+    """A poll during which the user runs /rius:login again."""
+    def post(url, payload, bearer=None):
+        login.start(home, post=scripted((201, dict(LINK_RESPONSE, link_id="l-new"))),
+                    now=clock.now)
+        return answer
+    return post
+
+
+def test_an_older_wait_leaves_a_newer_login_s_link_alone(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    _wait(home, clock, _restart_then(home, clock, (200, TOKEN_RESPONSE)))
+    assert login.load_pending(home)["link_id"] == "l-new"
+
+
+def test_an_older_wait_failing_leaves_a_newer_login_s_link_alone(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    with pytest.raises(login.LoginError):
+        _wait(home, clock, _restart_then(home, clock, (410, {})))
+    assert login.load_pending(home)["link_id"] == "l-new"
+
+
 # --- the previous key -----------------------------------------------------------
 
 def test_a_new_login_revokes_the_previous_key(tmp_path):
@@ -289,6 +345,11 @@ def test_a_failed_revoke_does_not_fail_the_login(tmp_path, failure):
     creds = _wait(home, clock, scripted((200, TOKEN_RESPONSE), failure))
     assert creds["api_key"] == "ri_supersecretkey"
     assert login.read_credentials(home)["api_key"] == "ri_supersecretkey"
+
+
+def test_an_already_revoked_key_counts_as_revoked(tmp_path):
+    assert login.revoke({"api_key": "ri_gone", "env": "staging"},
+                        post=scripted((401, {}))) is True
 
 
 def test_the_same_key_coming_back_is_not_revoked(tmp_path):
@@ -467,6 +528,22 @@ def test_login_wait_still_waiting_repeats_the_pending_line(
     assert DEVICE_CODE not in out
 
 
+def test_login_wait_while_another_waits_says_so_and_does_not_loop(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home)
+    fake = server()
+    fd = _hold_wait_lock(home)
+    try:
+        rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    finally:
+        os.close(fd)
+    out = capsys.readouterr().out
+    assert "another login is already waiting" in out.lower()
+    assert "Still waiting" not in out and "RIUS_LOGIN_PENDING" not in out
+    assert fake.calls == []
+
+
 def test_logout_revokes_then_deletes(tmp_path, server, capsys):
     home = str(tmp_path)
     _store(home)
@@ -479,7 +556,27 @@ def test_logout_revokes_then_deletes(tmp_path, server, capsys):
     assert not os.path.exists(login.credentials_path(home))
 
 
-@pytest.mark.parametrize("failure", [(401, {}), urllib.error.URLError("down")])
+def test_logout_of_an_already_revoked_key_is_a_clean_sign_out(tmp_path, server,
+                                                             capsys):
+    home = str(tmp_path)
+    _store(home)
+    server((401, {}))
+    rius_ctl.dispatch(["logout"], home)
+    assert capsys.readouterr().out.strip() == "Signed out; the key was revoked."
+    assert not os.path.exists(login.credentials_path(home))
+
+
+def test_relogin_over_an_already_revoked_key_says_nothing_about_it(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _store(home)
+    _park(home)
+    server((200, TOKEN_RESPONSE), (401, {}))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    assert "revoke" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure", [(503, {}), urllib.error.URLError("down")])
 def test_logout_still_signs_out_when_the_revoke_fails(tmp_path, server, capsys,
                                                       failure):
     home = str(tmp_path)

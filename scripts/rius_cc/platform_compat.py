@@ -360,7 +360,7 @@ def parent_pid_of(pid: int) -> int:
 # File locking  (TRAP 2)
 # ---------------------------------------------------------------------------
 
-def open_lock_file(path: str) -> int:
+def open_lock_file(path: str, mode: int = 0o777) -> int:
     """A fresh descriptor for the lock file. NEVER cached per path.
 
     Both implementations rely on one-lock-per-descriptor: POSIX flock is
@@ -368,7 +368,7 @@ def open_lock_file(path: str) -> int:
     Reusing a descriptor would make a process invisible to its own lock.
     """
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
-    return os.open(path, flags)
+    return os.open(path, flags, mode)
 
 
 def _posix_try_lock(fd: int, fcntl_mod=None) -> bool:

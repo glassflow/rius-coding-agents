@@ -48,9 +48,17 @@ What to do instead:
   * `/rius:enable-here` -- enable this folder (and everything under it)
     persistently, via the path rules in ~/.claude/rius/config.json. This is
     the normal way to turn tracing on and needs no session id.
+"""
+SESSION_COMMAND_HINT = """\
   * `/rius:%s` -- run from inside the session; it passes the session id
     itself.
 """
+SESSION_SLASH_COMMANDS = ("on", "off")
+
+
+def _no_session_message(action):
+    hint = SESSION_COMMAND_HINT % action if action in SESSION_SLASH_COMMANDS else ""
+    return NO_SESSION_MESSAGE % action + hint
 
 
 def _parse_args(argv):
@@ -264,6 +272,8 @@ def _run_account_action(action, home, cwd):
     handler = {"login": _login, "login-wait": _login_wait, "logout": _logout}[action]
     try:
         handler(home, cwd or os.getcwd())
+    except login.WaitInProgress as exc:
+        print(exc)
     except login.LoginError as exc:
         print("Rius login failed: %s" % exc)
 
@@ -278,7 +288,7 @@ def dispatch(argv, home):
     inferred = False
     if action in SESSION_WRITE_ACTIONS and not session_id:
         # Refuse loudly rather than guess. Still exit 0, like every path here.
-        print(NO_SESSION_MESSAGE % (action, action))
+        print(_no_session_message(action))
         return
     if not session_id:
         # `status` only READS, so inferring is safe there -- as long as it
