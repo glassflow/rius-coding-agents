@@ -339,3 +339,91 @@ def test_manifests_name_the_plugin_rius_at_0_3_0():
     listed = {p["name"]: p["version"] for p in market["plugins"]}
     assert (plugin["name"], plugin["version"]) == ("rius", "0.3.0")
     assert listed == {"rius": "0.3.0"}
+
+
+# --- disable-here / enable-here -----------------------------------------------
+
+def _rules(tmp_path):
+    return json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
+
+
+def _config_mode(tmp_path):
+    return os.stat(str(tmp_path / ".claude" / "rius" / "config.json")).st_mode & 0o777
+
+
+KEY = {"RIUS_API_KEY": "glassflow_k"}
+
+
+def test_disable_here_beats_a_parent_enable(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home, KEY)
+    r = _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode == 0
+    assert "disabled for /opt/proj" in r.stdout
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt"],
+                                "disabled_paths": ["/opt/proj"]}
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/sub"], home, KEY)
+    assert "Rius tracing: off" in status.stdout
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/other"], home, KEY)
+    assert "Rius tracing: on" in status.stdout
+
+
+def test_disable_here_removes_the_folder_from_enabled_paths(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": ["/opt/proj"]}
+
+
+def test_enable_here_under_a_disabled_parent_says_still_off(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt"], home, KEY)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode != 0
+    assert r.stdout.strip() == ("Still OFF: `/opt` is disabled. Run "
+                                "`/rius:enable-here` in that folder instead.")
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in status.stdout
+
+
+def test_enable_here_removes_the_disabled_entry(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode == 0
+    assert "enabled for /opt/proj" in r.stdout
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": []}
+
+
+@pytest.mark.parametrize("action", ["enable-here", "disable-here"])
+def test_path_rules_are_written_privately(tmp_path, action):
+    home = _fresh_home(tmp_path)
+    _run([action, "--cwd", "/opt/proj"], home, KEY)
+    assert _config_mode(tmp_path) == 0o600
+
+
+def test_status_names_the_matching_rule(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home, KEY)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    on = _run(["status", "--session", "s1", "--cwd", "/opt/x"], home, KEY)
+    off = _run(["status", "--session", "s1", "--cwd", "/opt/proj/y"], home, KEY)
+    none = _run(["status", "--session", "s1", "--cwd", "/elsewhere"], home, KEY)
+    assert "Rule: `/opt` enables this folder" in on.stdout
+    assert "Rule: `/opt/proj` disables this folder" in off.stdout
+    assert "Rule: none matches this folder" in none.stdout
+
+
+def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
+    home = _fresh_home(tmp_path)
+    from rius_cc import login as _login
+    _login._write_private(_login.credentials_path(home), {
+        "api_key": "ri_secret", "endpoint": "https://ingest", "env": "staging",
+        "workspace_id": "w", "workspace_name": "eng-shared", "org_name": "Acme",
+        "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"})
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "Signed in as: x@acme.com" in r.stdout
+    assert "Workspace: eng-shared (Acme)" in r.stdout
+    assert "Key expires: 2026-12-26" in r.stdout
+    assert 'Reconnect "rius" in /mcp' in r.stdout
+    assert "ri_secret" not in r.stdout

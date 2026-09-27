@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """CLI backing the /rius:* slash commands (one command file per action).
 
-Actions: on | off | clear | enable-here | status | login | login-wait | logout
+Actions: on | off | clear | enable-here | disable-here | status | login |
+         login-wait | logout
 Flags:   --session <id>   --cwd <path>
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
@@ -15,9 +16,9 @@ correctly-installed-but-not-yet-enabled plugin from a broken one, so it
 must surface the resolved state, the deciding layer (cfg.reason,
 verbatim), the redacted key, the endpoint and, when known, spans
 exported so far. Every action exits 0, including an unknown one, which
-prints usage.
+prints usage -- except an `enable-here` that a parent disable still
+overrides, which must not read as a success.
 """
-import json
 import os
 import sys
 
@@ -27,7 +28,7 @@ from rius_cc import config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|status|login|login-wait|logout> "
+    "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout> "
     "[--session <id>] [--cwd <path>]"
 )
 
@@ -86,22 +87,34 @@ def _most_recent_session(home):
     return entries[0][:-len(".json")]
 
 
-def _write_path_rules(home, rules):
-    path = config.path_rules_path(home)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as fh:
-        json.dump(rules, fh)
+STILL_OFF = ("Still OFF: `%s` is disabled. Run `/rius:enable-here` in that "
+             "folder instead.")
+
+
+def _move_path(home, cwd, to_key, from_key):
+    rules = config.read_path_rules(home)
+    rules[from_key] = [p for p in config.rule_list(rules, from_key) if p != cwd]
+    target = config.rule_list(rules, to_key)
+    if cwd not in target:
+        target.append(cwd)
+    rules[to_key] = target
+    config.write_path_rules(home, rules)
 
 
 def _enable_here(cwd, home):
-    rules = config.read_path_rules(home)
-    enabled_paths = rules.get("enabled_paths")
-    if not isinstance(enabled_paths, list):
-        enabled_paths = []
-    if cwd not in enabled_paths:
-        enabled_paths.append(cwd)
-    rules["enabled_paths"] = enabled_paths
-    _write_path_rules(home, rules)
+    _move_path(home, cwd, "enabled_paths", "disabled_paths")
+    match = config.matching_rule(cwd, home)
+    if match and not match[1]:
+        print(STILL_OFF % match[0])
+        return 1
+    print("Rius tracing enabled for %s." % cwd)
+    return 0
+
+
+def _disable_here(cwd, home):
+    _move_path(home, cwd, "disabled_paths", "enabled_paths")
+    print("Rius tracing disabled for %s." % cwd)
+    return 0
 
 
 def _spans_exported(session_id, home):
@@ -129,8 +142,9 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
-    if cfg.workspace_name:
-        print("Workspace: %s" % cfg.workspace_name)
+    _print_rule(cwd, home)
+    if cfg.key_source == config.STORED_KEY_SOURCE:
+        _print_account(login.read_credentials(home) or {})
     spans = _spans_exported(session_id, home)
     if spans is not None:
         print("Spans exported this session: %s" % spans)
@@ -142,6 +156,25 @@ def _print_status(session_id, cwd, home, inferred=False):
     if last:
         print("Last export error: %s (at %s)"
               % (last.get("reason"), last.get("at")))
+
+
+def _print_rule(cwd, home):
+    match = config.matching_rule(cwd, home) if cwd else None
+    if match is None:
+        print("Rule: none matches this folder")
+    else:
+        print("Rule: `%s` %s this folder"
+              % (match[0], "enables" if match[1] else "disables"))
+
+
+def _print_account(creds):
+    if creds.get("email"):
+        print("Signed in as: %s" % creds["email"])
+    if creds.get("workspace_name"):
+        org = " (%s)" % creds["org_name"] if creds.get("org_name") else ""
+        print("Workspace: %s%s" % (creds["workspace_name"], org))
+    print("Key expires: %s" % _date(creds.get("expires_at")))
+    print('Reconnect "rius" in /mcp to query your traces with this key.')
 
 
 def _login(home, cwd):
@@ -263,9 +296,9 @@ def dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        target_cwd = cwd or os.getcwd()
-        _enable_here(target_cwd, home)
-        print("Rius tracing enabled for %s." % target_cwd)
+        return _enable_here(cwd or os.getcwd(), home)
+    elif action == "disable-here":
+        return _disable_here(cwd or os.getcwd(), home)
     elif action == "status":
         _print_status(session_id, cwd, home, inferred=inferred)
     else:
@@ -273,11 +306,12 @@ def dispatch(argv, home):
 
 
 def main():
+    code = 0
     try:
-        dispatch(sys.argv[1:], platform_compat.home_dir(os.environ))
+        code = dispatch(sys.argv[1:], platform_compat.home_dir(os.environ)) or 0
     except BaseException as exc:  # never fail this CLI
         print("rius_ctl.py error: %s" % exc)
-    sys.exit(0)
+    sys.exit(code)
 
 
 if __name__ == "__main__":

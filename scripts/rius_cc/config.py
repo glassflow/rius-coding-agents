@@ -11,7 +11,7 @@ import fnmatch
 import json
 import os
 import re
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Tuple
 
 from . import login
 from .platform_compat import IS_WINDOWS
@@ -21,6 +21,8 @@ DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+STORED_KEY_SOURCE = "/rius:login"
 
 _NO_KEY = "no API key: run `/rius:login` (or set RIUS_API_KEY)"
 
@@ -110,6 +112,10 @@ def read_path_rules(home: str) -> dict:
     return data
 
 
+def write_path_rules(home: str, rules: dict) -> None:
+    login._write_private(path_rules_path(home), rules)
+
+
 def rule_list(rules: dict, key: str) -> list:
     value = rules.get(key)
     return list(value) if isinstance(value, list) else []
@@ -172,20 +178,25 @@ def _rule_matches(cwd: str, rule: str) -> bool:
     return False
 
 
-def _path_rules_decision(cwd: str, home: str):
+def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
+    """(rule, enables) for the path rule that decides `cwd`, or None.
+    Any matching disable beats every enable."""
     rules = read_path_rules(home)
-    disabled_paths = rule_list(rules, "disabled_paths")
-    enabled_paths = rule_list(rules, "enabled_paths")
+    for key, enables in (("disabled_paths", False), ("enabled_paths", True)):
+        for rule in rule_list(rules, key):
+            if _rule_matches(cwd, rule):
+                return rule, enables
+    return None
 
-    for rule in disabled_paths:
-        if _rule_matches(cwd, rule):
-            return False, "off: path rule %r disables %s" % (rule, cwd)
 
-    for rule in enabled_paths:
-        if _rule_matches(cwd, rule):
-            return True, "on: path rule %r enables %s" % (rule, cwd)
-
-    return None, None
+def _path_rules_decision(cwd: str, home: str):
+    match = matching_rule(cwd, home)
+    if match is None:
+        return None, None
+    rule, enables = match
+    verb = "enables" if enables else "disables"
+    return enables, "%s: path rule %r %s %s" % ("on" if enables else "off",
+                                                 rule, verb, cwd)
 
 
 def _max_attr_bytes(env: Mapping[str, str]) -> int:
@@ -220,7 +231,7 @@ def _credential(env: Mapping[str, str], home: str):
     creds = login.read_credentials(home)
     if creds:
         endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
-        return (creds["api_key"], endpoint, "/rius:login",
+        return (creds["api_key"], endpoint, STORED_KEY_SOURCE,
                 creds.get("workspace_name"))
     return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
 
