@@ -1,5 +1,5 @@
 # Interpreter resolution, shared by the two things Claude Code invokes:
-# scripts/hook.sh (every hook event) and scripts/rius_ctl.sh (/rius).
+# scripts/hook.sh (every hook event) and scripts/rius_ctl.sh (/rius:*).
 #
 # SOURCED, never executed. The caller needs the winning interpreter in its
 # OWN shell so it can `exec` it -- see the note on the exec in hook.sh.

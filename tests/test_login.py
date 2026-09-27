@@ -156,7 +156,7 @@ def test_code_expiring_mid_wait_is_terminal(tmp_path):
 
 
 def test_wait_without_start_says_so(tmp_path):
-    with pytest.raises(login.LoginError, match="/rius login"):
+    with pytest.raises(login.LoginError, match="/rius:login"):
         _wait(str(tmp_path), Clock(), [])
 
 
@@ -176,7 +176,7 @@ def test_stored_credential_is_used_with_its_endpoint(tmp_path):
     assert c.enabled is True
     assert c.api_key == "ri_stored"
     assert c.endpoint == "https://ingest.stored"
-    assert c.key_source == "/rius login"
+    assert c.key_source == "/rius:login"
 
 
 def test_env_key_beats_the_stored_credential_and_its_endpoint(tmp_path):
@@ -195,7 +195,7 @@ def test_corrupt_credentials_file_is_ignored(tmp_path):
         fh.write("{not json")
     c = config.resolve("s1", "/x", {"RIUS_CLAUDE_ENABLED": "true"}, home)
     assert c.enabled is False
-    assert "/rius login" in c.reason
+    assert "/rius:login" in c.reason
 
 
 # --- the CLI ------------------------------------------------------------------
@@ -211,14 +211,14 @@ def test_status_names_the_key_source_and_workspace_but_not_the_key(tmp_path):
     home = str(tmp_path)
     _store(home, api_key="ri_supersecretkey")
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
-    assert "Key from: /rius login" in r.stdout
+    assert "Key from: /rius:login" in r.stdout
     assert "Workspace: Default" in r.stdout
     assert "supersecretkey" not in r.stdout
 
 
 def test_status_without_any_key_points_at_login(tmp_path):
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path))
-    assert "/rius login" in r.stdout
+    assert "/rius:login" in r.stdout
 
 
 def test_logout_removes_the_stored_credential(tmp_path):

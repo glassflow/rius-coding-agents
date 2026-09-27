@@ -2,7 +2,7 @@
 """headersHelper for the bundled Rius MCP server.
 
 Prints the Authorization header for the same key tracing uses -- the one
-`/rius login` stored, or RIUS_API_KEY -- so one sign-in serves both. With no
+`/rius:login` stored, or RIUS_API_KEY -- so one sign-in serves both. With no
 key it prints `{}` and the server's 401 tells the user to sign in.
 """
 import json

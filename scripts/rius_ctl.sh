@@ -1,9 +1,9 @@
 #!/bin/sh
-# Find a Python and hand it rius_ctl.py. The launcher for /rius.
+# Find a Python and hand it rius_ctl.py. The launcher for the /rius:* commands.
 #
-# commands/rius.md used to run scripts/rius_ctl.py directly and rely on its
+# The command files used to run scripts/rius_ctl.py directly and rely on its
 # `#!/usr/bin/env python3` shebang -- the same assumption that stopped
-# hook.py from ever running on Windows. It matters more here: `/rius status`
+# hook.py from ever running on Windows. It matters more here: `/rius:status`
 # is the ONLY thing that distinguishes a correctly-installed-but-disabled
 # plugin from a broken one, so on Windows the command that would have
 # explained the silence was itself silent.

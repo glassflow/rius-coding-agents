@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI backing the /rius slash command.
+"""CLI backing the /rius:* slash commands (one command file per action).
 
 Actions: on | off | clear | enable-here | status | login | login-wait | logout
 Flags:   --session <id>   --cwd <path>
@@ -45,16 +45,16 @@ Rius: I cannot tell which session this is, so I will not guess.
 either do nothing or turn tracing on for a different session you have open.
 
 What to do instead:
-  * `/rius enable-here` -- enable this folder (and everything under it)
+  * `/rius:enable-here` -- enable this folder (and everything under it)
     persistently, via the path rules in ~/.claude/rius/config.json. This is
     the normal way to turn tracing on and needs no session id.
-  * `/rius status` -- prints the session id it can see; then run
-    `/rius %s --session <that id>` if you really want a one-session override.
+  * `/rius:%s` -- run from inside the session; it passes the session id
+    itself.
 """
 
 
 def _parse_args(argv):
-    # A bare `/rius` arrives as just the flags: no action means `status`.
+    # No action (just the flags) means `status`.
     has_action = bool(argv) and not argv[0].startswith("--")
     action = argv[0] if has_action else "status"
     session_id = None
@@ -161,7 +161,7 @@ def _login(home):
     print()
     pending = login.start(home)
     _open_browser(pending["verification_uri_complete"])
-    print("RIUS_LOGIN_PENDING: bash %s login-wait" % _shell_quote(_CTL_SH))
+    print(_pending_line())
     print("Open:  %s" % pending["verification_uri_complete"])
     print("Code:  %s" % pending["user_code"])
     print("Confirm the code matches the one in your browser, then approve.")
@@ -170,9 +170,13 @@ def _login(home):
 _CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
 
 
+def _pending_line():
+    return "RIUS_LOGIN_PENDING: bash %s login-wait" % _shell_quote(_CTL_SH)
+
+
 def _shell_quote(path):
     # Unquoted when safe, so the command matches the `allowed-tools` pattern
-    # in commands/rius.md and runs without a permission prompt.
+    # in commands/login.md and runs without a permission prompt.
     if all(c.isalnum() or c in "/._-~" for c in path):
         return path
     return "'" + path.replace("'", "'\\''") + "'"
@@ -189,8 +193,8 @@ def _open_browser(url):
 def _login_wait(home):
     creds = login.wait(home)
     if creds is None:
-        print("Still waiting for approval in the browser. "
-              "Run `/rius login-wait` again once you have approved.")
+        print("Still waiting for approval in the browser.")
+        print(_pending_line())
         return
     print("Signed in. Traces will go to workspace: %s"
           % (creds.get("workspace_name") or creds.get("workspace_id")))
@@ -204,7 +208,7 @@ def _login_wait(home):
               "over this key. Unset it to use the new one.")
     print("The plugin's `rius` MCP server uses this key too: run `/mcp` and "
           "reconnect `rius` (or restart Claude Code) to query your traces.")
-    print("Nothing is traced yet. Run `/rius enable-here` in a folder to "
+    print("Nothing is traced yet. Run `/rius:enable-here` in a folder to "
           "start tracing it (the first spans can take ~30s to be accepted).")
 
 

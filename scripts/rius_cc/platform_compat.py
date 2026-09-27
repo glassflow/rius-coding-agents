@@ -53,7 +53,7 @@ PS_TIMEOUT_S = 1.0
 
 
 def describe() -> str:
-    """One line for ``/rius status``.
+    """One line for ``/rius:status``.
 
     A Windows user whose plugin is quietly doing nothing needs SOME surface
     that says which code path is live. This is it.
@@ -476,7 +476,7 @@ def replace_atomic(src: str, dst: str, attempts: int = REPLACE_ATTEMPTS,
     MoveFileEx with MOVEFILE_REPLACE_EXISTING -- so the temp-file-then-
     rename save stays atomic. What differs is sharing: the rename fails
     while any other process has the destination open, and Python's open()
-    does not ask for FILE_SHARE_DELETE. `/rius status` and a concurrent
+    does not ask for FILE_SHARE_DELETE. `/rius:status` and a concurrent
     exporter both read state.json, so a save can lose a race it would
     always win on POSIX. Retry briefly, then raise as before.
     """

@@ -3,6 +3,8 @@ import subprocess
 import sys
 import pathlib
 
+import pytest
+
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 
 
@@ -171,55 +173,114 @@ import os      # noqa: E402
 import re      # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
-COMMAND_MD = ROOT / "commands" / "rius.md"
+COMMANDS = ROOT / "commands"
 CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
 
+PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "status", "logout")
+SESSION_ACTIONS = ("on", "off")
+ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS
 
-def _command_line():
-    """The one `!`...`` bash substitution Claude Code runs for /rius."""
-    m = re.search(r"^!`(.+)`\s*$", COMMAND_MD.read_text(), re.M)
-    assert m, "commands/rius.md has no bash substitution line"
+
+def _command_file(action):
+    return COMMANDS / ("%s.md" % action)
+
+
+def _frontmatter(action):
+    return _command_file(action).read_text().split("---")[1]
+
+
+def _command_line(action):
+    """The one `!`...`` bash substitution Claude Code runs for /rius:<action>."""
+    m = re.search(r"^!`(.+)`\s*$", _command_file(action).read_text(), re.M)
+    assert m, "commands/%s.md has no bash substitution line" % action
     return m.group(1)
 
 
-def test_slash_command_does_not_rely_on_the_shebang():
+def test_the_catch_all_command_is_gone():
+    assert not (COMMANDS / "rius.md").exists()
+    assert sorted(p.stem for p in COMMANDS.glob("*.md")) == sorted(ALL_ACTIONS)
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_command_frontmatter_permits_the_launcher(action):
+    front = _frontmatter(action)
+    assert re.search(r"^description: \S", front, re.M), front
+    assert ("allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)"
+            in front), front
+
+
+@pytest.mark.parametrize("action", PLAIN_ACTIONS)
+def test_command_passes_its_action_and_the_arguments(action):
+    assert _command_line(action) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s $ARGUMENTS '
+        '--cwd "$PWD"' % action)
+
+
+@pytest.mark.parametrize("action", SESSION_ACTIONS)
+def test_session_commands_pass_the_session_id(action):
+    assert _command_line(action) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s '
+        '--session ${CLAUDE_SESSION_ID} $ARGUMENTS --cwd "$PWD"' % action)
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_slash_command_does_not_rely_on_the_shebang(action):
     """Windows has no shebang support, so a command file that executes
-    rius_ctl.py directly is a /rius that does nothing there -- the same
-    mechanism that broke the hook, on the one command that would have
-    explained it."""
-    line = _command_line()
+    rius_ctl.py directly does nothing there."""
+    line = _command_line(action)
     assert "rius_ctl.sh" in line, line
-    assert not re.search(r"rius_ctl\.py", line), \
-        "/rius still invokes the .py directly and relies on its shebang"
+    assert not re.search(r"rius_ctl\.py", line), line
 
 
-def test_slash_command_target_exists_on_disk():
-    line = _command_line()
-    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)", line)
-    assert named, line
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_slash_command_target_exists_on_disk(action):
+    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)",
+                       _command_line(action))
+    assert named
     for rel in named:
         assert (ROOT / rel.lstrip("/")).exists(), rel
 
 
-def test_slash_command_is_permitted_by_its_own_frontmatter():
-    """allowed-tools still naming the .py would make the launcher prompt."""
-    front = COMMAND_MD.read_text().split("---")[1]
-    assert "rius_ctl.sh" in front, front
+def test_login_command_tells_claude_to_wait_in_the_background():
+    body = _command_file("login").read_text().split("---", 2)[2]
+    for needle in ("RIUS_LOGIN_PENDING:", "Open:", "Code:", "run_in_background",
+                   "Still waiting", "/rius:enable-here"):
+        assert needle in body, needle
 
 
 def test_slash_command_line_runs_end_to_end(tmp_path):
-    """Mirrors test_launcher_runs_the_hook_end_to_end: run the literal line
-    from the command file, not an approximation of it."""
+    """Run the literal line from the command file, not an approximation."""
     home = tmp_path / "home"
     (home / ".claude" / "rius").mkdir(parents=True)
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
            "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
-    r = subprocess.run(["/bin/bash", "-c", _command_line()],
-                       cwd=str(tmp_path), capture_output=True, text=True,
-                       env=env, timeout=30)
+    line = _command_line("status").replace("$ARGUMENTS", "")
+    r = subprocess.run(["/bin/bash", "-c", line], cwd=str(tmp_path),
+                       capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     assert "off" in r.stdout.lower()
     assert "glassflow_k" not in r.stdout
+
+
+PRINTED_TREES = ("scripts", "docs/getting-started.md", "README.md")
+
+
+def _text_files():
+    for tree in PRINTED_TREES:
+        path = ROOT / tree
+        files = [path] if path.is_file() else sorted(path.rglob("*"))
+        for f in files:
+            if f.is_file() and f.suffix in (".py", ".sh", ".md"):
+                yield f
+
+
+def test_no_string_names_the_old_space_separated_command():
+    stale = re.compile(r"/rius [a-z]")
+    hits = ["%s:%d: %s" % (f.relative_to(ROOT), n, line.strip())
+            for f in _text_files()
+            for n, line in enumerate(f.read_text().splitlines(), 1)
+            if stale.search(line)]
+    assert not hits, "\n".join(hits)
 
 
 def test_ctl_launcher_says_so_when_no_python_can_be_found(tmp_path):
@@ -272,9 +333,9 @@ def test_bare_invocation_means_status(tmp_path):
     assert "cwd: /x/y" in r.stdout
 
 
-def test_command_passes_the_argument_through():
-    # `${ARGUMENTS:-status}` is never substituted by Claude Code (only the
-    # literal `$ARGUMENTS` is), so every `/rius <action>` ran `status`.
-    md = (pathlib.Path(__file__).parent.parent / "commands" / "rius.md").read_text()
-    assert "rius_ctl.sh\" $ARGUMENTS " in md
-    assert "${ARGUMENTS" not in md
+def test_manifests_name_the_plugin_rius_at_0_3_0():
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    listed = {p["name"]: p["version"] for p in market["plugins"]}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.3.0")
+    assert listed == {"rius": "0.3.0"}

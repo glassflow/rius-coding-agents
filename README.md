@@ -35,13 +35,13 @@ output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
 
 ```
 /plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
-/rius enable-here
-/rius status
+/plugin install rius@rius-coding-agents
+/rius:enable-here
+/rius:status
 ```
 
 That is the whole flow once a Rius API key is in the environment Claude Code
-passes to hooks. If you don't have a key yet, or `/rius status` doesn't say
+passes to hooks. If you don't have a key yet, or `/rius:status` doesn't say
 `on`, the [getting started guide](docs/getting-started.md) covers the rest
 end to end: workspace, key and scopes, endpoints, where to put the key,
 first trace, the Rius MCP server, and troubleshooting.
@@ -52,11 +52,11 @@ first trace, the Rius MCP server, and troubleshooting.
 
 ```
 /plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
+/plugin install rius@rius-coding-agents
 ```
 
 The marketplace name is `rius-coding-agents` and the plugin name is
-`rius-claude-code`, as declared in `.claude-plugin/marketplace.json`. There is
+`rius`, as declared in `.claude-plugin/marketplace.json`. There is
 no file watcher: after editing anything under `hooks/` or `scripts/`, run
 `/reload-plugins` for the change to take effect in your current Claude Code
 process.
@@ -65,7 +65,7 @@ process.
 
 ```
 /plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
+/plugin install rius@rius-coding-agents
 ```
 
 This works against a private `github.com/glassflow/rius-coding-agents` repo
@@ -99,7 +99,7 @@ On Windows the hook is launched through Git Bash, which Claude Code already
 needs for its own Bash tool, and `scripts/hook.sh` picks the interpreter --
 `py`, then `python`, then `python3`. If it cannot find one it writes a line
 saying so to `~/.claude/rius/log/bootstrap.log` rather than doing nothing
-quietly. `/rius status` prints which platform implementation is live.
+quietly. `/rius:status` prints which platform implementation is live.
 
 If Claude Code on your machine falls back to PowerShell because Git Bash is
 not installed, the hooks will not run. That is the one configuration this
@@ -142,7 +142,7 @@ Tracing defaults to off everywhere. To turn it on for the folder you're
 currently in:
 
 ```
-/rius enable-here
+/rius:enable-here
 ```
 
 This adds your current working directory to the path rules stored in
@@ -154,31 +154,30 @@ start uploading a repo nobody has thought about -- see
 You also need `RIUS_API_KEY` set (see [Settings](#settings)). Without it,
 tracing stays off regardless of any other setting.
 
-## `/rius` command
+## `/rius:*` commands
 
 | Command | Effect |
 |---|---|
-| `/rius enable-here` | Add the current working directory to the persistent path rules. This is the normal way to turn tracing on. |
-| `/rius status` | Print the resolved on/off state, the endpoint, the redacted API key, spans exported so far, and the last export error if there was one. |
-| `/rius on --session <id>` | Turn tracing on for one session only, overriding path rules and env vars. |
-| `/rius off --session <id>` | Turn tracing off for one session only, same override strength as `on`. |
-| `/rius clear --session <id>` | Remove that per-session override, falling back to the normal resolution (env vars, then path rules, then off). |
+| `/rius:login` | Sign in in the browser, pick the workspace this machine sends to, and store a key for it. |
+| `/rius:enable-here` | Add the current working directory to the persistent path rules. This is the normal way to turn tracing on. |
+| `/rius:disable-here` | Stop tracing the current working directory and everything under it. A disabled folder beats any enabled parent. |
+| `/rius:status` | Print the resolved on/off state, the rule that decided it, the signed-in account, the endpoint, the redacted API key, spans exported so far, and the last export error if there was one. |
+| `/rius:logout` | Revoke the stored key on the server, then delete it locally. |
+| `/rius:on` | Turn tracing on for this session only, overriding path rules and env vars. |
+| `/rius:off` | Turn tracing off for this session only, same override strength as `on`. |
 
-`on`, `off` and `clear` require an explicit `--session` and refuse to run
-without one. They write a per-session override, and the slash command has no
-way to tell them which session it is running in; inferring it from the most
-recently active session would either do nothing useful on a fresh install or
-flip tracing for a different session you happen to have open. `/rius status`
-prints the session id it can see, so the normal flow is `status`, then
-`/rius on --session <that id>` if you really want a one-session override.
-Most of the time you want `/rius enable-here` instead, which needs no session
-id at all.
+`/rius:on` and `/rius:off` pass the current session id themselves. Run from a
+shell, `rius_ctl.sh on|off|clear` refuse to run without an explicit
+`--session <id>`: inferring it from the most recently active session would
+either do nothing useful on a fresh install or flip tracing for a different
+session you happen to have open. Most of the time you want
+`/rius:enable-here` instead, which is persistent and needs no session id.
 
-Those five are every action the command implements; anything else prints its
-usage line and exits 0. The slash command passes `--cwd` for you, so
-`enable-here` and `status` always see the folder you are actually in.
+Any other action prints its usage line and exits 0. Every command passes
+`--cwd` for you, so `enable-here`, `disable-here` and `status` always see the
+folder you are actually in.
 
-`/rius status` is the important one. Because the default is off, a plugin
+`/rius:status` is the important one. Because the default is off, a plugin
 that's installed correctly but simply not enabled for this folder looks
 identical, from the outside, to a plugin that's broken. `status` disambiguates
 by printing not just on/off but **which layer decided it** -- for example:
@@ -227,7 +226,7 @@ swallows its exceptions by design, so a crash that left no trace would be
 invisible to everyone, forever; a log line is the only thing that isn't.
 Normal operation writes nothing there unless debug is on.
 
-Resolution order (first decision wins): a per-session `/rius on`/`/rius off`
+Resolution order (first decision wins): a per-session `/rius:on`/`/rius:off`
 override, then `RIUS_CLAUDE_ENABLED` from the environment, then the path rules
 in `~/.claude/rius/config.json`, then the global default of off. If
 `RIUS_API_KEY` is unset, tracing is forced off no matter what the above
@@ -253,7 +252,7 @@ also scoped to a single Rius workspace, so projects reporting into different
 workspaces need different keys, which one global value cannot express. And a
 key in the global file applies to every folder on the machine; tracing is
 off per folder by default, so that is not a leak by itself, but it makes the
-blast radius of a later `/rius enable-here` wider than it needs to be.
+blast radius of a later `/rius:enable-here` wider than it needs to be.
 
 Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
 as well. The plugin reads the environment and has no credential file of its
@@ -368,13 +367,13 @@ resumed session continues the same trace but reports as a new instance.
 - Zero runtime dependencies: the plugin is Python standard library only,
   nothing is pulled from PyPI at install or run time.
 - Network traffic goes only to the configured `RIUS_ENDPOINT`, nothing else.
-- The API key is never logged. `/rius status` and debug logs print it
+- The API key is never logged. `/rius:status` and debug logs print it
   redacted (prefix plus an ellipsis).
 
 ## Uninstall
 
 ```
-/plugin uninstall rius-claude-code
+/plugin uninstall rius
 ```
 
 Local state -- session overrides, path rules, per-session span-count state,

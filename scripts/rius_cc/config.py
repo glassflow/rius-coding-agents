@@ -22,7 +22,7 @@ DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
-_NO_KEY = "no API key: run `/rius login` (or set RIUS_API_KEY)"
+_NO_KEY = "no API key: run `/rius:login` (or set RIUS_API_KEY)"
 
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
@@ -122,7 +122,7 @@ def _is_usable_rule(rule) -> bool:
 
     "Absolute" is platform-shaped. On Windows it is `C:\proj` or
     `\\server\share\proj`; the POSIX-only leading-"/" test rejected every
-    rule `/rius enable-here` had just written there, so tracing could never
+    rule `/rius:enable-here` had just written there, so tracing could never
     be turned on and nothing said why. The degenerate cases are rejected in
     the Windows spelling too: a bare drive root (`C:\`) is as broad as "/".
     """
@@ -205,7 +205,7 @@ def redact(api_key: Optional[str]) -> str:
 def _credential(env: Mapping[str, str], home: str):
     """(api_key, endpoint, source, workspace_name).
 
-    RIUS_API_KEY wins over the file `/rius login` writes: existing installs
+    RIUS_API_KEY wins over the file `/rius:login` writes: existing installs
     are configured that way. The stored endpoint travels with the stored key
     and only with it -- a key minted on one environment is meaningless
     against another's ingest."""
@@ -215,7 +215,7 @@ def _credential(env: Mapping[str, str], home: str):
     creds = login.read_credentials(home)
     if creds:
         endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
-        return (creds["api_key"], endpoint, "/rius login",
+        return (creds["api_key"], endpoint, "/rius:login",
                 creds.get("workspace_name"))
     return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
 

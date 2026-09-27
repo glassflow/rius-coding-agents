@@ -1,4 +1,4 @@
-"""`/rius login`: Auth0's device authorization grant (RFC 8628), then one call
+"""`/rius:login`: Auth0's device authorization grant (RFC 8628), then one call
 to Rius that turns the Auth0 token into an ingest+read API key.
 
 The flow is split in two because of how `/rius` runs. The slash command's
@@ -48,7 +48,7 @@ DISCLOSURE = """\
 Signing in creates a Rius account (or uses your existing one) and stores an
 API key for it in ~/.claude/rius/credentials.json.
 
-Nothing is traced yet. Tracing stays OFF until you run `/rius enable-here` in
+Nothing is traced yet. Tracing stays OFF until you run `/rius:enable-here` in
 a folder. For folders you enable, Rius receives the full session: your
 prompts, Claude's replies, tool inputs and tool OUTPUT -- which includes the
 contents of files Claude reads and the output of commands it runs.
@@ -248,7 +248,7 @@ def wait(home: str, post_token: Callable = post_form,
     code, and only success writes a credential."""
     pending = load_pending(home)
     if pending is None:
-        raise LoginError("There is no sign-in in progress. Run `/rius login` first.")
+        raise LoginError("There is no sign-in in progress. Run `/rius:login` first.")
     try:
         token = poll_for_token(pending, post=post_token, sleep=sleep, now=now)
         if token is None:

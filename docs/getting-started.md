@@ -9,7 +9,7 @@ in the README before you enable any folder. By default this plugin sends
 full session content, including the contents of files Claude Code reads and
 the output of commands it runs.
 
-- [Quick start: `/rius login` (staging)](#quick-start-rius-login-staging)
+- [Quick start: `/rius:login` (staging)](#quick-start-rius-login-staging)
 - [1. Get a Rius workspace](#1-get-a-rius-workspace)
 - [2. Mint an API key](#2-mint-an-api-key)
 - [3. Pick an endpoint](#3-pick-an-endpoint)
@@ -21,18 +21,18 @@ the output of commands it runs.
 - [Troubleshooting](#troubleshooting)
 - [Uninstall and local state](#uninstall-and-local-state)
 
-## Quick start: `/rius login` (staging)
+## Quick start: `/rius:login` (staging)
 
 On staging, steps 1, 2, 3 and 5 below collapse into one command:
 
 ```
 /plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
-/rius login          # approve the code in the browser; sign up if you are new
-/rius enable-here    # in the folder you want traced
+/plugin install rius@rius-coding-agents
+/rius:login          # approve the code in the browser; sign up if you are new
+/rius:enable-here    # in the folder you want traced
 ```
 
-`/rius login` uses Auth0's device flow: it prints a short code, opens the
+`/rius:login` uses Auth0's device flow: it prints a short code, opens the
 browser, and once you approve it exchanges your sign-in for an API key with
 `ingest` + `read` scopes in your workspace (a brand-new account gets a
 `Default` workspace created on the spot). The key is stored in
@@ -41,11 +41,11 @@ ingest endpoint, and it expires after a year. It never goes into Claude
 Code's settings.
 
 - `RIUS_API_KEY` in the environment still wins over the stored key, so an
-  existing setup keeps working unchanged. `/rius status` says which one is
+  existing setup keeps working unchanged. `/rius:status` says which one is
   in use (`Key from:`).
-- `/rius logout` deletes the stored key locally. It stays valid on the
+- `/rius:logout` deletes the stored key locally. It stays valid on the
   server until it expires or is revoked in the console.
-- Tracing is still off until `/rius enable-here`. Login never enables a
+- Tracing is still off until `/rius:enable-here`. Login never enables a
   folder.
 - The plugin bundles the Rius MCP server as `rius`, authenticated with the
   same key (via a `headersHelper`, so the key never lands in any MCP
@@ -143,7 +143,7 @@ For everyday use, install from git:
 
 ```
 /plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
+/plugin install rius@rius-coding-agents
 ```
 
 For development against a local checkout, point the marketplace at the
@@ -151,11 +151,11 @@ directory instead:
 
 ```
 /plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius-claude-code@rius-coding-agents
+/plugin install rius@rius-coding-agents
 ```
 
 The marketplace is named `rius-coding-agents` and the plugin
-`rius-claude-code`, matching `.claude-plugin/marketplace.json` and
+`rius`, matching `.claude-plugin/marketplace.json` and
 `.claude-plugin/plugin.json`.
 
 > **Refresh the marketplace after every plugin change.** Claude Code caches
@@ -206,7 +206,7 @@ Three reasons to keep the credential there rather than in the global
   express.
 - A key in the global file applies to every folder on the machine. Tracing
   is off by default per folder, so this is not an immediate leak, but it
-  makes the blast radius of a later `/rius enable-here` larger than it needs
+  makes the blast radius of a later `/rius:enable-here` larger than it needs
   to be.
 
 If you would rather not have the key in a settings file at all, export
@@ -221,7 +221,7 @@ The full list of variables is in the README's
 Tracing is off for every folder until you say otherwise:
 
 ```
-/rius enable-here
+/rius:enable-here
 ```
 
 That appends the current working directory to `enabled_paths` in
@@ -231,7 +231,7 @@ too.
 ## 7. Watch the first trace
 
 ```
-/rius status
+/rius:status
 ```
 
 A working setup prints `Rius tracing: on`, a `Reason` line naming the path
@@ -315,17 +315,17 @@ There is no rotate or revoke tool, and no workspace-create tool.
 
 ## Troubleshooting
 
-Start with `/rius status`. Because the default is off, a correctly installed
+Start with `/rius:status`. Because the default is off, a correctly installed
 but not-yet-enabled plugin looks identical from the outside to a broken one,
 and the `Reason` line is what separates the two. It names the layer that
 decided, verbatim:
 
 | `Reason` line | What it means |
 |---|---|
-| `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. Run `/rius enable-here`. |
+| `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. Run `/rius:enable-here`. |
 | `off: RIUS_API_KEY is not set` | The folder is enabled, but no key reached the hook process. |
 | `off: RIUS_CLAUDE_ENABLED` | An environment variable is turning it off, above the path rules. |
-| `off: session override` | A `/rius off --session <id>` override is in force. Clear it with `/rius clear --session <id>`. |
+| `off: session override` | A `/rius:off` override is in force for this session. `/rius:on` flips it; a new session starts without it. |
 | `on: path rule '<rule>' enables <cwd>` | Working as intended. |
 
 Then read the rest of the output:
@@ -349,7 +349,7 @@ Common causes, in the order they actually happen:
 | The MCP server shows no auth support, or will not connect | It was registered as a stdio command server, not an HTTP URL | Re-add it with `--transport http` and a URL |
 | A local MCP dev server fails the TLS handshake | `https://` against a plain-HTTP local port | Use `http://` for local ports |
 | Auth fails on a self-hosted deployment with no obvious reason | The Auth0 audience or the email-claim key does not match the configured string exactly | Both are exact-string matches; compare them character for character with the deployment's configuration |
-| Nothing at all happens, and `/rius` prints nothing useful | No Python interpreter was found | Check `~/.claude/rius/log/bootstrap.log` |
+| Nothing at all happens, and `/rius:status` prints nothing useful | No Python interpreter was found | Check `~/.claude/rius/log/bootstrap.log` |
 
 Logs live in `~/.claude/rius/log/`:
 
@@ -367,7 +367,7 @@ Logs live in `~/.claude/rius/log/`:
 ## Uninstall and local state
 
 ```
-/plugin uninstall rius-claude-code
+/plugin uninstall rius
 ```
 
 Local state -- path rules, per-session overrides, span counts and logs --

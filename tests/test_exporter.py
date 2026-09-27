@@ -260,7 +260,7 @@ def test_401_is_transient_because_a_fresh_key_takes_seconds_to_go_live(
                  ENV, home)
     st = state.load(sid, home)
     assert st["offset"] == 0, "the spans must survive until the key is live"
-    assert "/rius login" in st["last_export_error"]["reason"]
+    assert "/rius:login" in st["last_export_error"]["reason"]
 
 
 def test_429_is_treated_as_transient(home, monkeypatch, fixtures_dir):
