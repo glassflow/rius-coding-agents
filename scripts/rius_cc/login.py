@@ -1,10 +1,13 @@
-"""`/rius:login`: Auth0's device authorization grant (RFC 8628), then one call
-to Rius that turns the Auth0 token into an ingest+read API key.
+"""`/rius:login`: the portal agent-link flow.
 
-The flow is split in two because of how `/rius` runs. The slash command's
-output only reaches the user once its script EXITS, so a single blocking
-command would hide the code the user needs until the wait was already over.
-`start` fetches the code and exits; `wait` polls and is run separately.
+The plugin asks the control plane for a link, the user opens it in the
+portal, signs in and picks a workspace, and the plugin's poll then receives a
+key for that workspace.
+
+The flow is split in two because a slash command's output only reaches the
+user once its script EXITS: a single blocking command would hide the code
+the user needs until the wait was already over. `start` creates the link and
+exits; `wait` polls and is run separately, in the background.
 
 The device code between the two halves lives in its own 0600 file. The
 resulting API key lives in `credentials.json`, also 0600 -- never in Claude
@@ -12,47 +15,42 @@ Code's settings, which get shared, committed and screenshotted.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
-DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-CLIENT_NAME = "Claude Code (rius login)"
-
 # `wait` runs under Claude Code's Bash tool, which kills a command after ten
-# minutes. Returning before that leaves the pending code on disk so a second
+# minutes. Returning before that leaves the pending link on disk so a second
 # `wait` can pick it up, instead of being killed mid-poll.
 WAIT_BUDGET_SECONDS = 540
+MAX_BACKOFF_SECONDS = 60
 
-# The only environment with a device-flow application today (P-RIUS-196):
-# production's Auth0 tenant keeps its email-domain gate until this has been
-# proven on staging. The client id is public by design -- a native client
-# holds no secret.
 ENVIRONMENTS = {
     "staging": {
-        "auth0_domain": "glassflow-staging.eu.auth0.com",
-        "client_id": "lNt2WxEfME3lPpibambn3o5Kl5hpZWsf",
-        "audience": "https://cloud.glassflow.ai",
-        "exchange_url": "https://device.staging.rius.glassflow.xyz/v1/device/exchange",
-        "ingest_endpoint": "https://ingest.staging.rius.glassflow.xyz",
+        "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
     },
 }
 DEFAULT_ENVIRONMENT = "staging"
 
-DISCLOSURE = """\
-Signing in creates a Rius account (or uses your existing one) and stores an
-API key for it in ~/.claude/rius/credentials.json.
+DISCLOSURE = (
+    "Folders you enable send full sessions (prompts, replies, file contents, "
+    "command output) to the workspace you pick. Everyone with access to that "
+    "workspace, including its admins, can read them.")
 
-Nothing is traced yet. Tracing stays OFF until you run `/rius:enable-here` in
-a folder. For folders you enable, Rius receives the full session: your
-prompts, Claude's replies, tool inputs and tool OUTPUT -- which includes the
-contents of files Claude reads and the output of commands it runs.
-Set RIUS_CAPTURE_CONTENT=false to send only structure and token counts."""
+LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
+NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
+
+_PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
+                   "interval", "expires_at")
+_CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
+                      "workspace_name", "org_name", "email", "expires_at")
+_NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
 
 class LoginError(Exception):
@@ -63,7 +61,7 @@ class LoginError(Exception):
 
 def _send(req: urllib.request.Request, timeout: float = 15.0):
     """(status, parsed JSON body). Error statuses are data here, not
-    exceptions: Auth0 reports `authorization_pending` as a 4xx."""
+    exceptions: 428 is how the server says "not yet"."""
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, _parse(resp.read())
@@ -79,19 +77,21 @@ def _parse(raw: bytes) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def post_form(url: str, fields: dict):
-    body = urllib.parse.urlencode(fields).encode("ascii")
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Content-Type": "application/x-www-form-urlencoded"})
-    return _send(req)
-
-
-def post_json(url: str, payload: dict, bearer: str):
+def post_json(url: str, payload: dict, bearer: Optional[str] = None):
+    headers = {"Content-Type": "application/json"}
+    if bearer:
+        headers["Authorization"] = "Bearer " + bearer
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                 method="POST", headers={
-                                     "Content-Type": "application/json",
-                                     "Authorization": "Bearer " + bearer})
+                                 method="POST", headers=headers)
     return _send(req)
+
+
+def _is_success(status: int) -> bool:
+    return 200 <= status < 300
+
+
+def _detail(body: dict) -> str:
+    return body.get("code") or body.get("detail") or body.get("title") or "no detail"
 
 
 # --- Files ------------------------------------------------------------------
@@ -151,27 +151,39 @@ def clear_credentials(home: str) -> bool:
     return _remove(credentials_path(home))
 
 
-# --- The flow ---------------------------------------------------------------
+def load_pending(home: str) -> Optional[dict]:
+    pending = _read_json(pending_path(home))
+    if not pending or any(f not in pending for f in _PENDING_FIELDS):
+        return None
+    if pending["env"] not in ENVIRONMENTS:
+        return None
+    return pending
+
+
+# --- Starting a link --------------------------------------------------------
+
+def _link_base(env_name: Optional[str]) -> str:
+    env = ENVIRONMENTS.get(env_name or "") or ENVIRONMENTS[DEFAULT_ENVIRONMENT]
+    return env["link_base"]
+
 
 def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
-          post: Callable = post_form, now: Callable = time.time) -> dict:
-    """Ask Auth0 for a device code and park it on disk for `wait`."""
-    env = ENVIRONMENTS[env_name]
-    status, body = post(
-        "https://%s/oauth/device/code" % env["auth0_domain"],
-        {"client_id": env["client_id"], "audience": env["audience"],
-         "scope": "openid email profile"})
-    if status != 200 or "device_code" not in body:
-        raise LoginError("Auth0 refused to start the sign-in (HTTP %s: %s)."
-                         % (status, body.get("error_description")
-                            or body.get("error") or "no detail"))
+          post: Callable = post_json, now: Callable = time.time) -> dict:
+    """Create an agent link and park it on disk for `wait`."""
+    url = _link_base(env_name) + "/v1/agent-links"
+    try:
+        status, body = post(url, {"client_name": socket.gethostname()[:64]})
+    except _NETWORK_ERRORS as exc:
+        raise LoginError("Could not reach Rius to start the sign-in (%s)." % exc)
+    if not _is_success(status) or "device_code" not in body:
+        raise LoginError("Rius could not start the sign-in (HTTP %s: %s)."
+                         % (status, _detail(body)))
     pending = {
         "env": env_name,
+        "link_id": body.get("link_id"),
         "device_code": body["device_code"],
-        "user_code": body["user_code"],
-        "verification_uri": body["verification_uri"],
-        "verification_uri_complete": body.get("verification_uri_complete",
-                                              body["verification_uri"]),
+        "user_code": body.get("user_code"),
+        "connect_url": body.get("connect_url"),
         "interval": int(body.get("interval", 5)),
         "expires_at": now() + int(body.get("expires_in", 900)),
     }
@@ -179,84 +191,90 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
     return pending
 
 
-def load_pending(home: str) -> Optional[dict]:
-    return _read_json(pending_path(home))
+# --- Polling ----------------------------------------------------------------
+
+def _poll_once(url: str, device_code: str, post: Callable):
+    try:
+        return post(url, {"device_code": device_code})
+    except _NETWORK_ERRORS:
+        return 0, {}
 
 
-def poll_for_token(pending: dict, post: Callable = post_form,
-                   sleep: Callable = time.sleep, now: Callable = time.time,
-                   budget: float = WAIT_BUDGET_SECONDS) -> Optional[str]:
-    """The access token, or None if the budget ran out while the user has
-    still not answered. Raises LoginError on a denial or an expired code."""
-    env = ENVIRONMENTS[pending["env"]]
-    interval = pending["interval"]
+def _is_transient(status: int) -> bool:
+    return status == 0 or status == 429 or status >= 500
+
+
+def _backoff(interval: int, failures: int) -> float:
+    return min(interval * (2 ** failures), MAX_BACKOFF_SECONDS)
+
+
+def poll_for_key(pending: dict, post: Callable = post_json,
+                 sleep: Callable = time.sleep, now: Callable = time.time,
+                 budget: Optional[float] = None) -> Optional[dict]:
+    """The token response, or None if the budget ran out while the link is
+    still pending. Raises LoginError when the link is dead."""
+    url = _link_base(pending["env"]) + "/v1/agent-links/token"
+    if budget is None:
+        budget = WAIT_BUDGET_SECONDS
     give_up_at = min(now() + budget, pending["expires_at"])
+    failures = 0
     while now() < give_up_at:
-        sleep(interval)
-        status, body = post(
-            "https://%s/oauth/token" % env["auth0_domain"],
-            {"grant_type": DEVICE_GRANT, "device_code": pending["device_code"],
-             "client_id": env["client_id"]})
-        if status == 200 and body.get("access_token"):
-            return body["access_token"]
-        error = body.get("error")
-        if error == "authorization_pending":
-            continue
-        if error == "slow_down":
-            # RFC 8628 3.5: every slow_down adds five seconds, for good.
-            interval += 5
-            continue
-        if error == "access_denied":
-            raise LoginError("Sign-in was declined in the browser.")
-        if error == "expired_token":
-            raise LoginError("The sign-in code expired before it was approved.")
-        raise LoginError("Auth0 rejected the sign-in (HTTP %s: %s)."
-                         % (status, body.get("error_description") or error
-                            or "no detail"))
+        sleep(_backoff(pending["interval"], failures))
+        status, body = _poll_once(url, pending["device_code"], post)
+        if _is_success(status) and body.get("api_key"):
+            return body
+        if status == 428:
+            failures = 0
+        elif _is_transient(status):
+            failures += 1
+        elif status in (404, 410):
+            raise LoginError(LINK_EXPIRED)
+        else:
+            raise LoginError("Rius rejected the sign-in (HTTP %s: %s)."
+                             % (status, _detail(body)))
     if now() >= pending["expires_at"]:
-        raise LoginError("The sign-in code expired before it was approved.")
+        raise LoginError(LINK_EXPIRED)
     return None
 
 
-def exchange(env_name: str, access_token: str, post: Callable = post_json) -> dict:
-    """Trade the Auth0 token for a Rius API key, and learn where it landed."""
-    env = ENVIRONMENTS[env_name]
-    status, body = post(env["exchange_url"], {"client_name": CLIENT_NAME},
-                        access_token)
-    if not 200 <= status < 300 or not body.get("key"):
-        raise LoginError("Rius could not issue a key for this account "
-                         "(HTTP %s: %s)." % (status, body.get("detail")
-                                             or body.get("title") or "no detail"))
-    return {
-        "api_key": body["key"],
-        "endpoint": env["ingest_endpoint"],
-        "env": env_name,
-        "workspace_id": body.get("workspace_id"),
-        "workspace_name": body.get("workspace_name"),
-        "scopes": body.get("scopes") or [],
-        "expires_at": body.get("expires_at"),
-    }
+def _credentials(env_name: str, body: dict) -> dict:
+    creds = {field: body.get(field) for field in _CREDENTIAL_FIELDS}
+    creds["env"] = env_name
+    return creds
 
 
-def wait(home: str, post_token: Callable = post_form,
-         post_exchange: Callable = post_json, sleep: Callable = time.sleep,
+def revoke(creds: dict, post: Callable = post_json) -> bool:
+    """Best effort: True only when the server confirmed the key is dead."""
+    url = _link_base(creds.get("env")) + "/v1/agent-keys/revoke"
+    try:
+        status, _ = post(url, {"workspace_id": creds.get("workspace_id")},
+                         creds["api_key"])
+    except _NETWORK_ERRORS:
+        return False
+    return _is_success(status)
+
+
+def wait(home: str, post: Callable = post_json, sleep: Callable = time.sleep,
          now: Callable = time.time) -> Optional[dict]:
     """Finish a pending login. The stored credentials, or None if the user
-    has not answered yet (the pending code is kept for another `wait`).
+    has not finished yet (the pending link is kept for another `wait`).
 
-    Every terminal outcome -- success, denial, expiry -- removes the pending
-    code, and only success writes a credential."""
+    Every terminal outcome removes the pending link, and only success writes
+    a credential. The key it replaces is revoked afterwards."""
     pending = load_pending(home)
     if pending is None:
-        raise LoginError("There is no sign-in in progress. Run `/rius:login` first.")
+        raise LoginError(NO_SIGN_IN)
     try:
-        token = poll_for_token(pending, post=post_token, sleep=sleep, now=now)
-        if token is None:
-            return None
-        creds = exchange(pending["env"], token, post=post_exchange)
+        body = poll_for_key(pending, post=post, sleep=sleep, now=now)
     except LoginError:
         _remove(pending_path(home))
         raise
+    if body is None:
+        return None
+    previous = read_credentials(home)
+    creds = _credentials(pending["env"], body)
     _write_private(credentials_path(home), creds)
     _remove(pending_path(home))
+    if previous and previous["api_key"] != creds["api_key"]:
+        revoke(previous, post=post)
     return creds

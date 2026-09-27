@@ -1,28 +1,35 @@
 import json
 import os
+import pathlib
+import socket
 import stat
 import subprocess
 import sys
-import pathlib
+import urllib.error
 
 import pytest
 
+import rius_ctl
 from rius_cc import config, login
 
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
+LINK_BASE = login.ENVIRONMENTS["staging"]["link_base"]
+DEVICE_CODE = "dc_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eHF1dXg"
 
-DEVICE_CODE_RESPONSE = {
-    "device_code": "dev-secret", "user_code": "ABCD-EFGH",
-    "verification_uri": "https://auth.example/activate",
-    "verification_uri_complete": "https://auth.example/activate?user_code=ABCD-EFGH",
+LINK_RESPONSE = {
+    "link_id": "11111111-1111-1111-1111-111111111111",
+    "device_code": DEVICE_CODE, "user_code": "ABCD-EFGH",
+    "connect_url": "https://staging.rius.glassflow.xyz/portal/pick?link=1111",
     "interval": 5, "expires_in": 900,
 }
-EXCHANGE_RESPONSE = {
-    "key": "ri_supersecretkey", "id": "k1", "prefix": "ri_supe",
-    "scopes": ["ingest", "read"], "expires_at": "2027-09-25T00:00:00Z",
-    "created_at": "2026-09-25T00:00:00Z", "workspace_id": "w1",
-    "workspace_name": "Default",
+TOKEN_RESPONSE = {
+    "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.staging",
+    "mcp_url": "https://mcp.eu.staging/mcp",
+    "workspace_id": "22222222-2222-2222-2222-222222222222",
+    "workspace_name": "eng-shared", "org_name": "Acme",
+    "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z",
 }
+PENDING = (428, {"status": "pending"})
 
 
 class Clock:
@@ -39,135 +46,203 @@ class Clock:
 
 
 def scripted(*responses):
-    """A `post` that answers with each (status, body) in turn."""
+    """A `post` that answers with each (status, body) in turn, or raises it."""
     queue = list(responses)
     calls = []
 
-    def post(url, payload, *rest):
-        calls.append((url, payload, rest))
-        return queue.pop(0)
+    def post(url, payload, bearer=None):
+        calls.append((url, payload, bearer))
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
     post.calls = calls
     return post
 
 
 def _start(home, clock):
-    return login.start(home, post=scripted((200, DEVICE_CODE_RESPONSE)), now=clock.now)
+    return login.start(home, post=scripted((201, LINK_RESPONSE)), now=clock.now)
 
 
-def _wait(home, clock, token_responses, exchange=(200, EXCHANGE_RESPONSE)):
-    return login.wait(home, post_token=scripted(*token_responses),
-                      post_exchange=scripted(exchange),
-                      sleep=clock.sleep, now=clock.now)
+def _wait(home, clock, post):
+    return login.wait(home, post=post, sleep=clock.sleep, now=clock.now)
 
 
-def test_start_parks_the_device_code_privately(tmp_path):
+def _mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def _store(home, **overrides):
+    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.stored",
+             "env": "staging", "workspace_id": "33333333-3333-3333-3333-333333333333",
+             "workspace_name": "personal", "org_name": "Me",
+             "email": "x@acme.com", "expires_at": "2026-12-01T00:00:00Z"}
+    creds.update(overrides)
+    login._write_private(login.credentials_path(home), creds)
+
+
+# --- start --------------------------------------------------------------------
+
+def test_start_asks_for_a_link_named_after_this_machine(tmp_path):
+    post = scripted((201, LINK_RESPONSE))
+    login.start(str(tmp_path), post=post, now=Clock().now)
+    url, payload, bearer = post.calls[0]
+    assert url == LINK_BASE + "/v1/agent-links"
+    assert payload == {"client_name": socket.gethostname()[:64]}
+    assert bearer is None
+
+
+def test_start_parks_the_link_privately(tmp_path):
     home = str(tmp_path)
     pending = _start(home, Clock())
     assert pending["user_code"] == "ABCD-EFGH"
-    mode = stat.S_IMODE(os.stat(login.pending_path(home)).st_mode)
-    assert mode == 0o600
+    assert pending["expires_at"] == 1900.0
+    stored = json.load(open(login.pending_path(home)))
+    assert set(stored) == {"env", "link_id", "device_code", "user_code",
+                           "connect_url", "interval", "expires_at"}
+    assert _mode(login.pending_path(home)) == 0o600
 
 
-def test_start_reports_an_auth0_refusal(tmp_path):
-    with pytest.raises(login.LoginError, match="unauthorized_client"):
-        login.start(str(tmp_path), post=scripted((403, {"error": "unauthorized_client"})))
+def test_start_reports_an_unconfigured_environment(tmp_path):
+    with pytest.raises(login.LoginError, match="agent_links_unconfigured"):
+        login.start(str(tmp_path), post=scripted(
+            (503, {"code": "agent_links_unconfigured"})))
+    assert not os.path.exists(login.pending_path(str(tmp_path)))
 
 
-def test_success_stores_a_private_credential_and_clears_pending(tmp_path):
+def test_start_reports_an_unreachable_server(tmp_path):
+    with pytest.raises(login.LoginError, match="reach"):
+        login.start(str(tmp_path), post=scripted(urllib.error.URLError("dns")))
+
+
+# --- wait -----------------------------------------------------------------------
+
+def test_pending_then_success_stores_private_credentials(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    creds = _wait(home, clock, [(403, {"error": "authorization_pending"}),
-                                (200, {"access_token": "tok"})])
-    assert creds["workspace_name"] == "Default"
-    assert creds["endpoint"] == login.ENVIRONMENTS["staging"]["ingest_endpoint"]
-    assert stat.S_IMODE(os.stat(login.credentials_path(home)).st_mode) == 0o600
+    post = scripted(PENDING, (200, TOKEN_RESPONSE))
+    creds = _wait(home, clock, post)
+    assert creds == {
+        "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.staging",
+        "mcp_url": "https://mcp.eu.staging/mcp", "env": "staging",
+        "workspace_id": "22222222-2222-2222-2222-222222222222",
+        "workspace_name": "eng-shared", "org_name": "Acme",
+        "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"}
+    assert login.read_credentials(home) == creds
+    assert _mode(login.credentials_path(home)) == 0o600
     assert not os.path.exists(login.pending_path(home))
+    assert post.calls[0][:2] == (LINK_BASE + "/v1/agent-links/token",
+                                 {"device_code": DEVICE_CODE})
+    assert clock.sleeps == [5, 5]
 
 
-def test_exchange_accepts_201_created(tmp_path):
-    # The live route answers 201: it creates a key.
+@pytest.mark.parametrize("status, code", [(404, "link_not_found"),
+                                          (410, "link_expired")])
+def test_a_dead_link_is_terminal(tmp_path, status, code):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    creds = _wait(home, clock, [(200, {"access_token": "tok"})],
-                  exchange=(201, EXCHANGE_RESPONSE))
+    with pytest.raises(login.LoginError) as exc:
+        _wait(home, clock, scripted((status, {"code": code})))
+    assert str(exc.value) == "That sign-in link expired. Run `/rius:login` again."
+    assert not os.path.exists(login.pending_path(home))
+    assert not os.path.exists(login.credentials_path(home))
+
+
+def test_network_blips_and_5xx_back_off_and_keep_polling(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    post = scripted(urllib.error.URLError("reset"), (503, {"code": "mint_failed"}),
+                    PENDING, (200, TOKEN_RESPONSE))
+    creds = _wait(home, clock, post)
     assert creds["api_key"] == "ri_supersecretkey"
+    assert clock.sleeps == [5, 10, 20, 5]
 
 
-def test_exchange_sends_the_auth0_token_as_bearer(tmp_path):
+def test_a_socket_timeout_is_a_blip_too(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    exchange = scripted((200, EXCHANGE_RESPONSE))
-    login.wait(home, post_token=scripted((200, {"access_token": "tok"})),
-               post_exchange=exchange, sleep=clock.sleep, now=clock.now)
-    url, payload, rest = exchange.calls[0]
-    assert url == login.ENVIRONMENTS["staging"]["exchange_url"]
-    assert rest == ("tok",)
-    assert "scopes" not in payload  # the server fixes scopes, never the client
+    creds = _wait(home, clock, scripted(socket.timeout("slow"),
+                                        (200, TOKEN_RESPONSE)))
+    assert creds["email"] == "x@acme.com"
 
 
-def test_slow_down_widens_the_interval_for_good(tmp_path):
+def test_an_unexpected_rejection_is_terminal(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    _wait(home, clock, [(429, {"error": "slow_down"}),
-                        (403, {"error": "authorization_pending"}),
-                        (200, {"access_token": "tok"})])
-    assert clock.sleeps == [5, 10, 10]
-
-
-@pytest.mark.parametrize("error, message", [
-    ("access_denied", "declined"),
-    ("expired_token", "expired"),
-])
-def test_denied_or_expired_leaves_no_credential_and_no_pending(tmp_path, error, message):
-    home, clock = str(tmp_path), Clock()
-    _start(home, clock)
-    with pytest.raises(login.LoginError, match=message):
-        _wait(home, clock, [(403, {"error": error})])
-    assert not os.path.exists(login.credentials_path(home))
+    with pytest.raises(login.LoginError, match="400"):
+        _wait(home, clock, scripted((400, {"detail": "bad device_code"})))
     assert not os.path.exists(login.pending_path(home))
 
 
-def test_failed_exchange_leaves_no_credential(tmp_path):
+def test_budget_exhaustion_keeps_the_pending_link_and_a_resume_succeeds(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    with pytest.raises(login.LoginError, match="403"):
-        _wait(home, clock, [(200, {"access_token": "tok"})],
-              exchange=(403, {"detail": "not an admin"}))
-    assert not os.path.exists(login.credentials_path(home))
-
-
-def test_budget_exhausted_keeps_pending_for_another_wait(tmp_path):
-    home, clock = str(tmp_path), Clock()
-    _start(home, clock)
-    pending = [(403, {"error": "authorization_pending"})] * 200
-    assert _wait(home, clock, pending) is None
+    assert _wait(home, clock, scripted(*[PENDING] * 200)) is None
     assert clock.t - 1000.0 <= login.WAIT_BUDGET_SECONDS + 5
     assert os.path.exists(login.pending_path(home))
     assert not os.path.exists(login.credentials_path(home))
 
+    creds = _wait(home, clock, scripted((200, TOKEN_RESPONSE)))
+    assert creds["workspace_name"] == "eng-shared"
+    assert not os.path.exists(login.pending_path(home))
 
-def test_code_expiring_mid_wait_is_terminal(tmp_path):
+
+def test_the_link_expiring_mid_wait_is_terminal(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
-    clock.t += 890  # the code has ten seconds left
+    clock.t += 890
     with pytest.raises(login.LoginError, match="expired"):
-        _wait(home, clock, [(403, {"error": "authorization_pending"})] * 10)
+        _wait(home, clock, scripted(*[PENDING] * 10))
     assert not os.path.exists(login.pending_path(home))
 
 
 def test_wait_without_start_says_so(tmp_path):
     with pytest.raises(login.LoginError, match="/rius:login"):
-        _wait(str(tmp_path), Clock(), [])
+        _wait(str(tmp_path), Clock(), scripted())
+
+
+def test_a_leftover_pending_file_of_another_shape_is_ignored(tmp_path):
+    home = str(tmp_path)
+    login._write_private(login.pending_path(home), {"verification_uri": "x"})
+    with pytest.raises(login.LoginError, match="no sign-in in progress"):
+        _wait(home, Clock(), scripted())
+
+
+# --- the previous key -----------------------------------------------------------
+
+def test_a_new_login_revokes_the_previous_key(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _store(home)
+    _start(home, clock)
+    post = scripted((200, TOKEN_RESPONSE), (204, {}))
+    _wait(home, clock, post)
+    assert post.calls[1] == (
+        LINK_BASE + "/v1/agent-keys/revoke",
+        {"workspace_id": "33333333-3333-3333-3333-333333333333"}, "ri_stored")
+    assert login.read_credentials(home)["api_key"] == "ri_supersecretkey"
+
+
+@pytest.mark.parametrize("failure", [(401, {}), (503, {}),
+                                     urllib.error.URLError("down")])
+def test_a_failed_revoke_does_not_fail_the_login(tmp_path, failure):
+    home, clock = str(tmp_path), Clock()
+    _store(home)
+    _start(home, clock)
+    creds = _wait(home, clock, scripted((200, TOKEN_RESPONSE), failure))
+    assert creds["api_key"] == "ri_supersecretkey"
+    assert login.read_credentials(home)["api_key"] == "ri_supersecretkey"
+
+
+def test_the_same_key_coming_back_is_not_revoked(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    _store(home, api_key="ri_supersecretkey")
+    _start(home, clock)
+    post = scripted((200, TOKEN_RESPONSE))
+    _wait(home, clock, post)
+    assert len(post.calls) == 1
 
 
 # --- config picks the stored credential up ---------------------------------
-
-def _store(home, **overrides):
-    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.stored",
-             "workspace_name": "Default"}
-    creds.update(overrides)
-    login._write_private(login.credentials_path(home), creds)
-
 
 def test_stored_credential_is_used_with_its_endpoint(tmp_path):
     home = str(tmp_path)
@@ -198,7 +273,146 @@ def test_corrupt_credentials_file_is_ignored(tmp_path):
     assert "/rius:login" in c.reason
 
 
-# --- the CLI ------------------------------------------------------------------
+# --- the CLI, over the real JSON transport -----------------------------------
+
+class FakeServer:
+    """Stands in for `login._send`, so the CLI's real request building runs."""
+
+    def __init__(self, *responses):
+        self.post = scripted(*responses)
+
+    def __call__(self, req, timeout=15.0):
+        bearer = req.headers.get("Authorization")
+        return self.post(req.full_url, json.loads(req.data.decode("utf-8")),
+                         bearer[len("Bearer "):] if bearer else None)
+
+    @property
+    def calls(self):
+        return self.post.calls
+
+
+@pytest.fixture
+def server(monkeypatch):
+    def install(*responses):
+        fake = FakeServer(*responses)
+        monkeypatch.setattr(login, "_send", fake)
+        monkeypatch.setattr(rius_ctl, "_open_browser", lambda url: None)
+        return fake
+    monkeypatch.delenv("RIUS_API_KEY", raising=False)
+    return install
+
+
+def _park(home, **overrides):
+    pending = {"env": "staging", "link_id": "l1", "device_code": DEVICE_CODE,
+               "user_code": "ABCD-EFGH", "connect_url": "https://c/pick",
+               "interval": 0, "expires_at": 4102444800}
+    pending.update(overrides)
+    login._write_private(login.pending_path(home), pending)
+
+
+def _enable(home, *paths):
+    login._write_private(config.path_rules_path(home),
+                         {"enabled_paths": list(paths)})
+
+
+def test_login_prints_the_disclosure_url_and_code_but_not_the_device_code(
+        tmp_path, server, capsys):
+    server((201, LINK_RESPONSE))
+    rius_ctl.dispatch(["login", "--cwd", "/opt/proj"], str(tmp_path))
+    out = capsys.readouterr().out
+    assert login.DISCLOSURE in out
+    assert login.DISCLOSURE == (
+        "Folders you enable send full sessions (prompts, replies, file "
+        "contents, command output) to the workspace you pick. Everyone with "
+        "access to that workspace, including its admins, can read them.")
+    assert "Open:  " + LINK_RESPONSE["connect_url"] in out
+    assert "Code:  ABCD-EFGH" in out
+    assert "RIUS_LOGIN_PENDING: bash " in out
+    assert "login-wait --cwd /opt/proj" in out
+    assert DEVICE_CODE not in out
+
+
+def test_login_wait_success_says_where_it_landed(tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home)
+    server((200, TOKEN_RESPONSE))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert out.splitlines()[:3] == [
+        "Connected as x@acme.com → eng-shared (Acme).",
+        "Trace this folder (/opt/proj)? Run /rius:enable-here.",
+        'Reconnect "rius" in /mcp to query your traces.']
+    assert "enabled folder" not in out
+    assert "supersecretkey" not in out and DEVICE_CODE not in out
+
+
+def test_login_wait_warns_when_enabled_folders_change_workspace(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _store(home)
+    _enable(home, "/a", "/b", "/c")
+    _park(home)
+    server((200, TOKEN_RESPONSE), (204, {}))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert ("3 enabled folders will now send to eng-shared instead of "
+            "personal.") in out
+
+
+def test_login_wait_is_quiet_about_folders_when_the_workspace_is_the_same(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _store(home, workspace_id=TOKEN_RESPONSE["workspace_id"])
+    _enable(home, "/a")
+    _park(home)
+    server((200, TOKEN_RESPONSE), (204, {}))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    assert "enabled folder" not in capsys.readouterr().out
+
+
+def test_login_wait_still_waiting_repeats_the_pending_line(
+        tmp_path, server, capsys, monkeypatch):
+    home = str(tmp_path)
+    _park(home, expires_at=4102444800)
+    monkeypatch.setattr(login, "WAIT_BUDGET_SECONDS", 0)
+    server()
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "Still waiting" in out
+    assert "RIUS_LOGIN_PENDING: bash " in out and "login-wait --cwd /opt/proj" in out
+    assert DEVICE_CODE not in out
+
+
+def test_logout_revokes_then_deletes(tmp_path, server, capsys):
+    home = str(tmp_path)
+    _store(home)
+    fake = server((204, {}))
+    rius_ctl.dispatch(["logout"], home)
+    assert capsys.readouterr().out.strip() == "Signed out; the key was revoked."
+    assert fake.calls == [(LINK_BASE + "/v1/agent-keys/revoke",
+                           {"workspace_id": "33333333-3333-3333-3333-333333333333"},
+                           "ri_stored")]
+    assert not os.path.exists(login.credentials_path(home))
+
+
+@pytest.mark.parametrize("failure", [(401, {}), urllib.error.URLError("down")])
+def test_logout_still_signs_out_when_the_revoke_fails(tmp_path, server, capsys,
+                                                      failure):
+    home = str(tmp_path)
+    _store(home)
+    server(failure)
+    rius_ctl.dispatch(["logout"], home)
+    assert capsys.readouterr().out.strip() == (
+        "Signed out; could not revoke the key (it expires 2026-12-01).")
+    assert not os.path.exists(login.credentials_path(home))
+
+
+def test_logout_with_nothing_stored(tmp_path, server, capsys):
+    fake = server()
+    rius_ctl.dispatch(["logout"], str(tmp_path))
+    assert "No stored Rius key" in capsys.readouterr().out
+    assert fake.calls == []
+
 
 def _ctl(args, home, env=None):
     e = {"HOME": home, "PATH": "/usr/bin:/bin"}
@@ -212,21 +426,13 @@ def test_status_names_the_key_source_and_workspace_but_not_the_key(tmp_path):
     _store(home, api_key="ri_supersecretkey")
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
     assert "Key from: /rius:login" in r.stdout
-    assert "Workspace: Default" in r.stdout
+    assert "Workspace: personal" in r.stdout
     assert "supersecretkey" not in r.stdout
 
 
 def test_status_without_any_key_points_at_login(tmp_path):
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path))
     assert "/rius:login" in r.stdout
-
-
-def test_logout_removes_the_stored_credential(tmp_path):
-    home = str(tmp_path)
-    _store(home)
-    r = _ctl(["logout"], home)
-    assert "Removed" in r.stdout
-    assert not os.path.exists(login.credentials_path(home))
 
 
 def test_login_wait_without_login_fails_politely(tmp_path):

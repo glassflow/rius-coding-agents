@@ -86,18 +86,6 @@ def _most_recent_session(home):
     return entries[0][:-len(".json")]
 
 
-def _read_path_rules(home):
-    path = config.path_rules_path(home)
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return data
-
-
 def _write_path_rules(home, rules):
     path = config.path_rules_path(home)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -106,7 +94,7 @@ def _write_path_rules(home, rules):
 
 
 def _enable_here(cwd, home):
-    rules = _read_path_rules(home)
+    rules = config.read_path_rules(home)
     enabled_paths = rules.get("enabled_paths")
     if not isinstance(enabled_paths, list):
         enabled_paths = []
@@ -156,22 +144,23 @@ def _print_status(session_id, cwd, home, inferred=False):
               % (last.get("reason"), last.get("at")))
 
 
-def _login(home):
+def _login(home, cwd):
     print(login.DISCLOSURE)
     print()
     pending = login.start(home)
-    _open_browser(pending["verification_uri_complete"])
-    print(_pending_line())
-    print("Open:  %s" % pending["verification_uri_complete"])
+    _open_browser(pending["connect_url"])
+    print(_pending_line(cwd))
+    print("Open:  %s" % pending["connect_url"])
     print("Code:  %s" % pending["user_code"])
-    print("Confirm the code matches the one in your browser, then approve.")
+    print("Check that the browser shows the same code, then pick a workspace.")
 
 
 _CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
 
 
-def _pending_line():
-    return "RIUS_LOGIN_PENDING: bash %s login-wait" % _shell_quote(_CTL_SH)
+def _pending_line(cwd):
+    return "RIUS_LOGIN_PENDING: bash %s login-wait --cwd %s" % (
+        _shell_quote(_CTL_SH), _shell_quote(cwd))
 
 
 def _shell_quote(path):
@@ -190,39 +179,58 @@ def _open_browser(url):
         pass
 
 
-def _login_wait(home):
+def _login_wait(home, cwd):
+    previous = login.read_credentials(home)
     creds = login.wait(home)
     if creds is None:
         print("Still waiting for approval in the browser.")
-        print(_pending_line())
+        print(_pending_line(cwd))
         return
-    print("Signed in. Traces will go to workspace: %s"
-          % (creds.get("workspace_name") or creds.get("workspace_id")))
-    print("Key %s (scopes: %s) saved to %s"
-          % (config.redact(creds["api_key"]), ", ".join(creds["scopes"]),
-             login.credentials_path(home)))
-    if creds.get("expires_at"):
-        print("It expires %s." % creds["expires_at"])
+    print("Connected as %s → %s (%s)."
+          % (creds["email"], creds["workspace_name"], creds["org_name"]))
+    print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
+    print('Reconnect "rius" in /mcp to query your traces.')
+    moved = _moved_folders_warning(home, previous, creds)
+    if moved:
+        print(moved)
     if os.environ.get("RIUS_API_KEY"):
         print("NOTE: RIUS_API_KEY is set in your environment and still wins "
               "over this key. Unset it to use the new one.")
-    print("The plugin's `rius` MCP server uses this key too: run `/mcp` and "
-          "reconnect `rius` (or restart Claude Code) to query your traces.")
-    print("Nothing is traced yet. Run `/rius:enable-here` in a folder to "
-          "start tracing it (the first spans can take ~30s to be accepted).")
 
 
-def _logout(home):
-    if login.clear_credentials(home):
-        print("Removed the stored Rius key. It is still valid on the server "
-              "until it expires or is revoked in the console.")
-    else:
+def _moved_folders_warning(home, previous, creds):
+    if not previous or previous.get("workspace_id") == creds["workspace_id"]:
+        return None
+    count = len(config.rule_list(config.read_path_rules(home), "enabled_paths"))
+    if not count:
+        return None
+    return "%d enabled folder%s will now send to %s instead of %s." % (
+        count, "" if count == 1 else "s", creds["workspace_name"],
+        previous.get("workspace_name") or previous.get("workspace_id"))
+
+
+def _logout(home, cwd):
+    creds = login.read_credentials(home)
+    if creds is None:
         print("No stored Rius key to remove.")
+        return
+    revoked = login.revoke(creds)
+    login.clear_credentials(home)
+    if revoked:
+        print("Signed out; the key was revoked.")
+    else:
+        print("Signed out; could not revoke the key (it expires %s)."
+              % _date(creds.get("expires_at")))
 
 
-def _run_account_action(action, home):
+def _date(timestamp):
+    return timestamp[:10] if isinstance(timestamp, str) else "unknown"
+
+
+def _run_account_action(action, home, cwd):
+    handler = {"login": _login, "login-wait": _login_wait, "logout": _logout}[action]
     try:
-        {"login": _login, "login-wait": _login_wait, "logout": _logout}[action](home)
+        handler(home, cwd or os.getcwd())
     except login.LoginError as exc:
         print("Rius login failed: %s" % exc)
 
@@ -231,7 +239,7 @@ def dispatch(argv, home):
     action, session_id, cwd = _parse_args(argv)
 
     if action in ("login", "login-wait", "logout"):
-        _run_account_action(action, home)
+        _run_account_action(action, home, cwd)
         return
 
     inferred = False

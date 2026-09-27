@@ -28,33 +28,42 @@ On staging, steps 1, 2, 3 and 5 below collapse into one command:
 ```
 /plugin marketplace add glassflow/rius-coding-agents
 /plugin install rius@rius-coding-agents
-/rius:login          # approve the code in the browser; sign up if you are new
+/rius:login          # sign in in the browser and pick a workspace
 /rius:enable-here    # in the folder you want traced
 ```
 
-`/rius:login` uses Auth0's device flow: it prints a short code, opens the
-browser, and once you approve it exchanges your sign-in for an API key with
-`ingest` + `read` scopes in your workspace (a brand-new account gets a
-`Default` workspace created on the spot). The key is stored in
-`~/.claude/rius/credentials.json` (mode 0600) together with the staging
-ingest endpoint, and it expires after a year. It never goes into Claude
-Code's settings.
+`/rius:login` prints a short code and opens the Rius portal. There you sign
+in (or sign up), check that the page shows the same code and this machine's
+name, and pick the workspace this machine should send to: one of yours, or
+one you are only a member of. The plugin then prints where it landed:
+
+```
+Connected as x@acme.com → eng-shared (Acme).
+Trace this folder (/path)? Run /rius:enable-here.
+Reconnect "rius" in /mcp to query your traces.
+```
+
+The key is stored in `~/.claude/rius/credentials.json` (mode 0600) with the
+region's ingest endpoint, and expires after 90 days. It never goes into
+Claude Code's settings. Signing in again replaces the key and revokes the old
+one.
 
 - `RIUS_API_KEY` in the environment still wins over the stored key, so an
   existing setup keeps working unchanged. `/rius:status` says which one is
   in use (`Key from:`).
-- `/rius:logout` deletes the stored key locally. It stays valid on the
-  server until it expires or is revoked in the console.
+- `/rius:logout` revokes the key on the server, then deletes it locally. If
+  the server cannot be reached it still signs out, and says the key stays
+  valid until it expires.
 - Tracing is still off until `/rius:enable-here`. Login never enables a
-  folder.
+  folder. `/rius:disable-here` turns a folder (and everything under it) off
+  again, even inside an enabled parent.
 - The plugin bundles the Rius MCP server as `rius`, authenticated with the
   same key (via a `headersHelper`, so the key never lands in any MCP
   config). After logging in, reconnect it in `/mcp` or restart Claude Code.
   `RIUS_MCP_URL` points it elsewhere; it defaults to staging.
 - A key minted seconds ago can be rejected with 401 for up to ~30s while it
   propagates to the receiver.
-- Production has no device-flow application yet; there, follow the steps
-  below.
+- Production has no agent-link sign-in yet; there, follow the steps below.
 
 ## 1. Get a Rius workspace
 

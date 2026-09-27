@@ -98,7 +98,7 @@ def _parse_bool_env(value: Optional[str]) -> Optional[bool]:
     return None
 
 
-def _read_path_rules(home: str) -> dict:
+def read_path_rules(home: str) -> dict:
     path = path_rules_path(home)
     try:
         with open(path) as fh:
@@ -108,6 +108,11 @@ def _read_path_rules(home: str) -> dict:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def rule_list(rules: dict, key: str) -> list:
+    value = rules.get(key)
+    return list(value) if isinstance(value, list) else []
 
 
 def _is_usable_rule(rule) -> bool:
@@ -168,9 +173,9 @@ def _rule_matches(cwd: str, rule: str) -> bool:
 
 
 def _path_rules_decision(cwd: str, home: str):
-    rules = _read_path_rules(home)
-    disabled_paths = rules.get("disabled_paths") or []
-    enabled_paths = rules.get("enabled_paths") or []
+    rules = read_path_rules(home)
+    disabled_paths = rule_list(rules, "disabled_paths")
+    enabled_paths = rule_list(rules, "enabled_paths")
 
     for rule in disabled_paths:
         if _rule_matches(cwd, rule):
