@@ -53,7 +53,7 @@ PS_TIMEOUT_S = 1.0
 
 
 def describe() -> str:
-    """One line for ``/rius status``.
+    """One line for ``/rius:status``.
 
     A Windows user whose plugin is quietly doing nothing needs SOME surface
     that says which code path is live. This is it.
@@ -360,7 +360,7 @@ def parent_pid_of(pid: int) -> int:
 # File locking  (TRAP 2)
 # ---------------------------------------------------------------------------
 
-def open_lock_file(path: str) -> int:
+def open_lock_file(path: str, mode: int = 0o777) -> int:
     """A fresh descriptor for the lock file. NEVER cached per path.
 
     Both implementations rely on one-lock-per-descriptor: POSIX flock is
@@ -368,7 +368,7 @@ def open_lock_file(path: str) -> int:
     Reusing a descriptor would make a process invisible to its own lock.
     """
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
-    return os.open(path, flags)
+    return os.open(path, flags, mode)
 
 
 def _posix_try_lock(fd: int, fcntl_mod=None) -> bool:
@@ -476,7 +476,7 @@ def replace_atomic(src: str, dst: str, attempts: int = REPLACE_ATTEMPTS,
     MoveFileEx with MOVEFILE_REPLACE_EXISTING -- so the temp-file-then-
     rename save stays atomic. What differs is sharing: the rename fails
     while any other process has the destination open, and Python's open()
-    does not ask for FILE_SHARE_DELETE. `/rius status` and a concurrent
+    does not ask for FILE_SHARE_DELETE. `/rius:status` and a concurrent
     exporter both read state.json, so a save can lose a race it would
     always win on POSIX. Retry briefly, then raise as before.
     """

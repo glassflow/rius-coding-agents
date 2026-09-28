@@ -41,7 +41,7 @@ def new_state() -> dict:
         "sub_scopes": {},
         "spans_exported": 0,
         # Diagnostics. These exist so that "nothing was exported" is never
-        # the whole story /rius status can tell.
+        # the whole story /rius:status can tell.
         "lines_skipped": 0,
         "consecutive_export_failures": 0,
         "last_export_error": None,

@@ -3,6 +3,8 @@ import subprocess
 import sys
 import pathlib
 
+import pytest
+
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 
 
@@ -90,6 +92,15 @@ def test_off_and_clear_without_session_also_refuse(tmp_path):
         assert "isadirectory" not in r.stdout.lower(), action
 
 
+def test_the_no_session_hint_names_only_commands_that_exist(tmp_path):
+    home = _fresh_home(tmp_path)
+    commands = pathlib.Path(__file__).parent.parent / "commands"
+    for action in ("on", "off", "clear"):
+        r = _run([action], home, {"RIUS_API_KEY": "glassflow_k"})
+        hinted = (commands / (action + ".md")).exists()
+        assert ("/rius:%s" % action in r.stdout) == hinted, action
+
+
 def test_on_without_session_never_targets_another_live_session(tmp_path):
     """Two concurrent sessions: the override used to land on whichever one
     wrote state most recently, silently enabling somebody else's session."""
@@ -171,55 +182,116 @@ import os      # noqa: E402
 import re      # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
-COMMAND_MD = ROOT / "commands" / "rius.md"
+COMMANDS = ROOT / "commands"
 CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
 
+PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "logout")
+SESSION_ACTIONS = ("status", "on", "off")
+ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS
 
-def _command_line():
-    """The one `!`...`` bash substitution Claude Code runs for /rius."""
-    m = re.search(r"^!`(.+)`\s*$", COMMAND_MD.read_text(), re.M)
-    assert m, "commands/rius.md has no bash substitution line"
+
+def _command_file(action):
+    return COMMANDS / ("%s.md" % action)
+
+
+def _frontmatter(action):
+    return _command_file(action).read_text().split("---")[1]
+
+
+def _command_line(action):
+    """The one `!`...`` bash substitution Claude Code runs for /rius:<action>."""
+    m = re.search(r"^!`(.+)`\s*$", _command_file(action).read_text(), re.M)
+    assert m, "commands/%s.md has no bash substitution line" % action
     return m.group(1)
 
 
-def test_slash_command_does_not_rely_on_the_shebang():
+def test_the_catch_all_command_is_gone():
+    assert not (COMMANDS / "rius.md").exists()
+    assert sorted(p.stem for p in COMMANDS.glob("*.md")) == sorted(ALL_ACTIONS)
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_command_frontmatter_permits_the_launcher(action):
+    front = _frontmatter(action)
+    assert re.search(r"^description: \S", front, re.M), front
+    assert ("allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)"
+            in front), front
+
+
+@pytest.mark.parametrize("action", PLAIN_ACTIONS)
+def test_command_passes_its_action_and_the_arguments(action):
+    assert _command_line(action) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s $ARGUMENTS '
+        '--cwd "$PWD"' % action)
+
+
+@pytest.mark.parametrize("action", SESSION_ACTIONS)
+def test_session_commands_pass_the_session_id(action):
+    assert _command_line(action) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s '
+        '--session ${CLAUDE_SESSION_ID} $ARGUMENTS --cwd "$PWD"' % action)
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_slash_command_does_not_rely_on_the_shebang(action):
     """Windows has no shebang support, so a command file that executes
-    rius_ctl.py directly is a /rius that does nothing there -- the same
-    mechanism that broke the hook, on the one command that would have
-    explained it."""
-    line = _command_line()
+    rius_ctl.py directly does nothing there."""
+    line = _command_line(action)
     assert "rius_ctl.sh" in line, line
-    assert not re.search(r"rius_ctl\.py", line), \
-        "/rius still invokes the .py directly and relies on its shebang"
+    assert not re.search(r"rius_ctl\.py", line), line
 
 
-def test_slash_command_target_exists_on_disk():
-    line = _command_line()
-    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)", line)
-    assert named, line
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_slash_command_target_exists_on_disk(action):
+    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[\w./-]+)",
+                       _command_line(action))
+    assert named
     for rel in named:
         assert (ROOT / rel.lstrip("/")).exists(), rel
 
 
-def test_slash_command_is_permitted_by_its_own_frontmatter():
-    """allowed-tools still naming the .py would make the launcher prompt."""
-    front = COMMAND_MD.read_text().split("---")[1]
-    assert "rius_ctl.sh" in front, front
+def test_login_command_tells_claude_to_wait_in_the_background():
+    body = _command_file("login").read_text().split("---", 2)[2]
+    for needle in ("RIUS_LOGIN_PENDING:", "Open:", "Code:", "run_in_background",
+                   "Still waiting", "/rius:enable-here"):
+        assert needle in body, needle
 
 
 def test_slash_command_line_runs_end_to_end(tmp_path):
-    """Mirrors test_launcher_runs_the_hook_end_to_end: run the literal line
-    from the command file, not an approximation of it."""
+    """Run the literal line from the command file, not an approximation."""
     home = tmp_path / "home"
     (home / ".claude" / "rius").mkdir(parents=True)
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
-           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
-    r = subprocess.run(["/bin/bash", "-c", _command_line()],
-                       cwd=str(tmp_path), capture_output=True, text=True,
-                       env=env, timeout=30)
+           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k",
+           "CLAUDE_SESSION_ID": "s-e2e"}
+    line = _command_line("status").replace("$ARGUMENTS", "")
+    r = subprocess.run(["/bin/bash", "-c", line], cwd=str(tmp_path),
+                       capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     assert "off" in r.stdout.lower()
+    assert "session: s-e2e\n" in r.stdout
     assert "glassflow_k" not in r.stdout
+
+
+PRINTED_TREES = ("scripts", "docs/getting-started.md", "README.md")
+
+
+def _text_files():
+    for tree in PRINTED_TREES:
+        path = ROOT / tree
+        files = [path] if path.is_file() else sorted(path.rglob("*"))
+        for f in files:
+            if f.is_file() and f.suffix in (".py", ".sh", ".md"):
+                yield f
+
+
+def test_no_string_names_the_old_space_separated_command():
+    stale = re.compile(r"/rius [a-z]")
+    hits = ["%s:%d: %s" % (f.relative_to(ROOT), n, line.strip())
+            for f in _text_files()
+            for n, line in enumerate(f.read_text().splitlines(), 1)
+            if stale.search(line)]
+    assert not hits, "\n".join(hits)
 
 
 def test_ctl_launcher_says_so_when_no_python_can_be_found(tmp_path):
@@ -262,3 +334,107 @@ def test_ctl_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_path):
         "output did not name the missing file: %r" % r.stdout)
     assert "tried: ()" not in r.stdout, (
         "output still shows the empty-candidate-list PATH misdiagnosis")
+
+
+def test_bare_invocation_means_status(tmp_path):
+    # `/rius` with no argument reaches the script as just `--cwd <path>`.
+    home = str(tmp_path)
+    r = _run(["--cwd", "/x/y"], home)
+    assert "Rius tracing: off" in r.stdout
+    assert "cwd: /x/y" in r.stdout
+
+
+def test_manifests_name_the_plugin_rius_at_0_3_0():
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    listed = {p["name"]: p["version"] for p in market["plugins"]}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.3.0")
+    assert listed == {"rius": "0.3.0"}
+
+
+# --- disable-here / enable-here -----------------------------------------------
+
+def _rules(tmp_path):
+    return json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
+
+
+def _config_mode(tmp_path):
+    return os.stat(str(tmp_path / ".claude" / "rius" / "config.json")).st_mode & 0o777
+
+
+KEY = {"RIUS_API_KEY": "glassflow_k"}
+
+
+def test_disable_here_beats_a_parent_enable(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home, KEY)
+    r = _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode == 0
+    assert "disabled for /opt/proj" in r.stdout
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt"],
+                                "disabled_paths": ["/opt/proj"]}
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/sub"], home, KEY)
+    assert "Rius tracing: off" in status.stdout
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/other"], home, KEY)
+    assert "Rius tracing: on" in status.stdout
+
+
+def test_disable_here_removes_the_folder_from_enabled_paths(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": ["/opt/proj"]}
+
+
+def test_enable_here_under_a_disabled_parent_says_still_off(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt"], home, KEY)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ("Still OFF: `/opt` is disabled. Run "
+                                "`/rius:enable-here` in that folder instead.")
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in status.stdout
+
+
+def test_enable_here_removes_the_disabled_entry(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    assert r.returncode == 0
+    assert "enabled for /opt/proj" in r.stdout
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": []}
+
+
+@pytest.mark.parametrize("action", ["enable-here", "disable-here"])
+def test_path_rules_are_written_privately(tmp_path, action):
+    home = _fresh_home(tmp_path)
+    _run([action, "--cwd", "/opt/proj"], home, KEY)
+    assert _config_mode(tmp_path) == 0o600
+
+
+def test_status_names_the_matching_rule(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home, KEY)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    on = _run(["status", "--session", "s1", "--cwd", "/opt/x"], home, KEY)
+    off = _run(["status", "--session", "s1", "--cwd", "/opt/proj/y"], home, KEY)
+    none = _run(["status", "--session", "s1", "--cwd", "/elsewhere"], home, KEY)
+    assert "Rule: `/opt` enables this folder" in on.stdout
+    assert "Rule: `/opt/proj` disables this folder" in off.stdout
+    assert "Rule: none matches this folder" in none.stdout
+
+
+def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
+    home = _fresh_home(tmp_path)
+    from rius_cc import login as _login
+    _login._write_private(_login.credentials_path(home), {
+        "api_key": "ri_secret", "endpoint": "https://ingest", "env": "staging",
+        "workspace_id": "w", "workspace_name": "eng-shared", "org_name": "Acme",
+        "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"})
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "Signed in as: x@acme.com" in r.stdout
+    assert "Workspace: eng-shared (Acme)" in r.stdout
+    assert "Key expires: 2026-12-26" in r.stdout
+    assert 'Reconnect "rius" in /mcp' in r.stdout
+    assert "ri_secret" not in r.stdout

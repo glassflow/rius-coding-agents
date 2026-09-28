@@ -11,8 +11,9 @@ import fnmatch
 import json
 import os
 import re
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Tuple
 
+from . import login
 from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
@@ -21,16 +22,23 @@ DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
+STORED_KEY_SOURCE = "/rius:login"
+
+_NO_KEY = "no API key: run `/rius:login` (or set RIUS_API_KEY)"
+
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
 
 
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
-                 capture_content, max_attr_bytes, debug):
+                 capture_content, max_attr_bytes, debug, key_source=None,
+                 workspace_name=None):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
+        self.key_source = key_source
+        self.workspace_name = workspace_name
         self.endpoint = endpoint
         self.service_name = service_name
         self.capture_content = capture_content
@@ -92,7 +100,7 @@ def _parse_bool_env(value: Optional[str]) -> Optional[bool]:
     return None
 
 
-def _read_path_rules(home: str) -> dict:
+def read_path_rules(home: str) -> dict:
     path = path_rules_path(home)
     try:
         with open(path) as fh:
@@ -102,6 +110,15 @@ def _read_path_rules(home: str) -> dict:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def write_path_rules(home: str, rules: dict) -> None:
+    login._write_private(path_rules_path(home), rules)
+
+
+def rule_list(rules: dict, key: str) -> list:
+    value = rules.get(key)
+    return list(value) if isinstance(value, list) else []
 
 
 def _is_usable_rule(rule) -> bool:
@@ -116,7 +133,7 @@ def _is_usable_rule(rule) -> bool:
 
     "Absolute" is platform-shaped. On Windows it is `C:\proj` or
     `\\server\share\proj`; the POSIX-only leading-"/" test rejected every
-    rule `/rius enable-here` had just written there, so tracing could never
+    rule `/rius:enable-here` had just written there, so tracing could never
     be turned on and nothing said why. The degenerate cases are rejected in
     the Windows spelling too: a bare drive root (`C:\`) is as broad as "/".
     """
@@ -161,20 +178,25 @@ def _rule_matches(cwd: str, rule: str) -> bool:
     return False
 
 
+def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
+    """(rule, enables) for the path rule that decides `cwd`, or None.
+    Any matching disable beats every enable."""
+    rules = read_path_rules(home)
+    for key, enables in (("disabled_paths", False), ("enabled_paths", True)):
+        for rule in rule_list(rules, key):
+            if _rule_matches(cwd, rule):
+                return rule, enables
+    return None
+
+
 def _path_rules_decision(cwd: str, home: str):
-    rules = _read_path_rules(home)
-    disabled_paths = rules.get("disabled_paths") or []
-    enabled_paths = rules.get("enabled_paths") or []
-
-    for rule in disabled_paths:
-        if _rule_matches(cwd, rule):
-            return False, "off: path rule %r disables %s" % (rule, cwd)
-
-    for rule in enabled_paths:
-        if _rule_matches(cwd, rule):
-            return True, "on: path rule %r enables %s" % (rule, cwd)
-
-    return None, None
+    match = matching_rule(cwd, home)
+    if match is None:
+        return None, None
+    rule, enables = match
+    verb = "enables" if enables else "disables"
+    return enables, "%s: path rule %r %s %s" % ("on" if enables else "off",
+                                                 rule, verb, cwd)
 
 
 def _max_attr_bytes(env: Mapping[str, str]) -> int:
@@ -196,9 +218,26 @@ def redact(api_key: Optional[str]) -> str:
     return api_key[: idx + 1] + "…"
 
 
+def _credential(env: Mapping[str, str], home: str):
+    """(api_key, endpoint, source, workspace_name).
+
+    RIUS_API_KEY wins over the file `/rius:login` writes: existing installs
+    are configured that way. The stored endpoint travels with the stored key
+    and only with it -- a key minted on one environment is meaningless
+    against another's ingest."""
+    if env.get("RIUS_API_KEY"):
+        return (env["RIUS_API_KEY"], env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT),
+                "RIUS_API_KEY", None)
+    creds = login.read_credentials(home)
+    if creds:
+        endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
+        return (creds["api_key"], endpoint, STORED_KEY_SOURCE,
+                creds.get("workspace_name"))
+    return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
+
+
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
-    api_key = env.get("RIUS_API_KEY")
-    endpoint = env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT)
+    api_key, endpoint, key_source, workspace_name = _credential(env, home)
     service_name = env.get("RIUS_SERVICE_NAME", DEFAULT_SERVICE_NAME)
     capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
     if capture_content is None:
@@ -228,9 +267,9 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
     if not api_key:
         if enabled:
             enabled = False
-            reason = "off: RIUS_API_KEY is not set"
+            reason = "off: " + _NO_KEY
         else:
-            reason = reason + "; also RIUS_API_KEY is not set"
+            reason = reason + "; also " + _NO_KEY
 
     return Config(
         enabled=enabled,
@@ -241,4 +280,6 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         capture_content=capture_content,
         max_attr_bytes=max_attr_bytes,
         debug=debug,
+        key_source=key_source,
+        workspace_name=workspace_name,
     )

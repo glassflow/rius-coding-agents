@@ -113,7 +113,7 @@ jobs:
           plugin = json.load(open(".claude-plugin/plugin.json"))
           market = json.load(open(".claude-plugin/marketplace.json"))
           hooks = json.load(open("hooks/hooks.json"))
-          assert plugin["name"] == "rius-claude-code", plugin["name"]
+          assert plugin["name"] == "rius", plugin["name"]
           names = [p["name"] for p in market["plugins"]]
           assert plugin["name"] in names, (plugin["name"], names)
           required = {"SessionStart", "UserPromptSubmit", "PreToolUse",

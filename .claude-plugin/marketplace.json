@@ -4,10 +4,10 @@
   "owner": { "name": "GlassFlow", "url": "https://glassflow.dev" },
   "plugins": [
     {
-      "name": "rius-claude-code",
+      "name": "rius",
       "description": "Stream Claude Code sessions to Rius as OTLP GenAI traces",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "category": "monitoring",
       "tags": ["observability", "otel", "tracing", "rius"]
     }
