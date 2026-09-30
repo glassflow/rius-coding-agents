@@ -35,6 +35,14 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   panel showed only "cached prefix" and "fresh input" for Claude Code
   sessions because the plugin sent neither content nor sizes. Sizes are not
   content and are sent with capture off too.
+- A failed tool call carries an `exception` event whose type is the tool
+  and how it failed (`Bash.exit_1`, `Write.tool_error`) and whose message is
+  the one line that says why, such as a traceback's last line. The console
+  groups errors by that event. Without it the whole tool output was the
+  error's type and message, so an 80-line file piped before a failing
+  `grep` became an error type, and each distinct output was its own group.
+  The status message is that same line; the full output stays in
+  `output.value`.
 
 ## 0.4.1 (2026-09-30)
 
