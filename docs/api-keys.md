@@ -55,5 +55,8 @@ blast radius of a later `/rius:enable-here` wider than it needs to be.
 
 Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
 as well. Without it, the plugin uses the key `/rius:login` stored in
-`~/.claude/rius/credentials.json` (mode 0600); `RIUS_API_KEY` wins when both
-are present.
+`~/.claude/rius/credentials.json` (mode 0600). `RIUS_API_KEY` wins for
+tracing when both are present. The bundled MCP server only ever uses the
+`/rius:login` key; with `RIUS_API_KEY` alone, register the MCP server by
+hand, as in
+[Exploring your traces](getting-started.md#exploring-your-traces-from-claude-code).
