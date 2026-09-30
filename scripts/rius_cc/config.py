@@ -178,6 +178,15 @@ def _rule_matches(cwd: str, rule: str) -> bool:
     return False
 
 
+def disabled_below(cwd: str, home: str) -> list:
+    """Disable rules strictly inside `cwd`, which enabling `cwd` does not
+    reach: matching_rule only ever looks upward from a folder."""
+    prefix = _normalise_for_match(cwd).rstrip("/") + "/"
+    return [rule for rule in rule_list(read_path_rules(home), "disabled_paths")
+            if _is_usable_rule(rule)
+            and _normalise_for_match(rule).startswith(prefix)]
+
+
 def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
     """(rule, enables) for the path rule that decides `cwd`, or None.
     Any matching disable beats every enable."""

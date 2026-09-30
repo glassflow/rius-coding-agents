@@ -418,12 +418,12 @@ def test_enable_here_says_what_this_folder_will_upload_and_where(tmp_path):
     home = _fresh_home(tmp_path)
     _store_login(home)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
-    assert r.stdout.strip() == (
-        "Rius tracing enabled for /opt/proj and everything under it. Sessions "
-        "here now send prompts, replies, the contents of files Claude reads "
-        "and command output to eng-shared. Set RIUS_CAPTURE_CONTENT=false to "
-        "send structure only (models, tokens, timing), or run "
-        "/rius:disable-here to stop.")
+    assert r.stdout.splitlines() == [
+        "Rius tracing enabled for /opt/proj and everything under it.",
+        "Sessions here now send prompts, replies, the contents of files Claude "
+        "reads and command output to eng-shared.",
+        "Set RIUS_CAPTURE_CONTENT=false to send structure only (models, "
+        "tokens, timing), or run /rius:disable-here to stop."]
 
 
 def test_enable_here_with_content_off_does_not_claim_content_is_sent(tmp_path):
@@ -431,11 +431,12 @@ def test_enable_here_with_content_off_does_not_claim_content_is_sent(tmp_path):
     _store_login(home)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home,
              {"RIUS_CAPTURE_CONTENT": "false"})
-    assert r.stdout.strip() == (
-        "Rius tracing enabled for /opt/proj and everything under it. Sessions "
-        "here now send structure only (models, tokens, timing) to eng-shared; "
-        "RIUS_CAPTURE_CONTENT=false withholds prompts, replies, file contents "
-        "and command output. Run /rius:disable-here to stop.")
+    assert r.stdout.splitlines() == [
+        "Rius tracing enabled for /opt/proj and everything under it.",
+        "Sessions here now send structure only (models, tokens, timing) to "
+        "eng-shared; RIUS_CAPTURE_CONTENT=false withholds prompts, replies, "
+        "file contents and command output.",
+        "Run /rius:disable-here to stop."]
 
 
 def test_enable_here_under_an_env_key_names_no_workspace_it_cannot_know(tmp_path):
@@ -444,6 +445,39 @@ def test_enable_here_under_an_env_key_names_no_workspace_it_cannot_know(tmp_path
     r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
     assert "command output to your Rius workspace." in r.stdout
     assert "eng-shared" not in r.stdout
+
+
+def test_enable_here_before_login_says_nothing_is_sent_yet(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
+    assert r.stdout.splitlines()[1] == (
+        "Sessions here will send prompts, replies, the contents of files "
+        "Claude reads and command output to the workspace you pick once you "
+        "sign in with /rius:login.")
+    assert "now send" not in r.stdout
+
+
+def test_enable_here_names_the_disabled_folders_it_does_not_cover(tmp_path):
+    home = _fresh_home(tmp_path)
+    _store_login(home)
+    _run(["disable-here", "--cwd", "/opt/proj/secrets"], home)
+    _run(["disable-here", "--cwd", "/opt/proj/vendor"], home)
+    _run(["disable-here", "--cwd", "/opt/other"], home)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
+    assert r.stdout.splitlines()[0] == (
+        "Rius tracing enabled for /opt/proj and everything under it, except "
+        "/opt/proj/secrets and /opt/proj/vendor (disabled).")
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/secrets/x"], home)
+    assert "Rius tracing: off" in status.stdout
+
+
+def test_a_sibling_with_a_shared_prefix_is_not_an_exception(tmp_path):
+    home = _fresh_home(tmp_path)
+    _store_login(home)
+    _run(["disable-here", "--cwd", "/opt/project-b"], home)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
+    assert r.stdout.splitlines()[0] == (
+        "Rius tracing enabled for /opt/proj and everything under it.")
 
 
 @pytest.mark.parametrize("action", ["enable-here", "disable-here"])
