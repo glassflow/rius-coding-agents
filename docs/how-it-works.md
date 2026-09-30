@@ -10,13 +10,21 @@ One trace per Claude Code session, shaped as a waterfall:
 ```
 AGENT   session root
 └─ CHAIN  turn (one user prompt and everything it caused)
-   └─ LLM   generation (one assistant message: model, token counts, cache reads)
+   └─ LLM   generation (one model API response: model, token counts, cache reads)
       ├─ TOOL  tool call (input and output)
       └─ TOOL  Agent (the call that spawned a subagent)
          └─ AGENT  the subagent, named by its agent type
             └─ LLM   the subagent's own generation
                └─ TOOL  a tool the subagent called
 ```
+
+**One generation per API response.** Claude Code writes a single model
+response as several transcript lines, one per content block (thinking, text,
+each tool call), and every line repeats the response's token usage. The
+plugin groups the lines by their `message.id`, so each response is one `LLM`
+span with its usage counted once, and every tool it called hangs beneath it.
+A response whose lines arrive over several hook events is re-sent under the
+same span id; the backend keeps the latest copy.
 
 **Subagents are drilled into.** Claude Code does not write a subagent's work
 into the session transcript -- each subagent gets its own file under
@@ -55,7 +63,7 @@ timestamps (the entry carrying the `tool_use` and the matching
 Generation span durations are not. The Claude Code transcript only records
 *completion* times -- nothing in it marks when a request was actually
 dispatched to the model. So a generation's start is taken as the timestamp of
-the preceding entry, and its duration ends up absorbing whatever happened
+the entry before its first line, its end is the timestamp of its last line, and its duration ends up absorbing whatever happened
 before the call actually went out: user think time, a permission prompt,
 queuing behind a tool call. If you compare a generation's duration against
 what you'd expect from your Anthropic bill or API logs, expect it to run

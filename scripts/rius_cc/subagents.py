@@ -178,7 +178,7 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
         # A subagent's generations hang off its own AGENT span. Its entries
         # are all sidechain entries, so the main transcript's inline-sidechain
         # re-parenting would put them under whatever tool ran last.
-        make_turns=False, inline_sidechains=False,
+        make_turns=False, inline_sidechains=False, source_path=path,
     )
 
     end_ns = link.get("end_ns")

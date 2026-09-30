@@ -290,7 +290,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 max_attr_bytes=cfg.max_attr_bytes,
             )
 
-            out = spans.build(entries, st, ctx)
+            out = spans.build(entries, st, ctx, source_path=transcript_path)
 
             # Subagents write their own transcripts; without this the 58% of
             # tokens that live in them never reach the trace. Guarded on its

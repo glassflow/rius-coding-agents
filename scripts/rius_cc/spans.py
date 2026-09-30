@@ -179,13 +179,121 @@ def new_scope() -> dict:
     only -- all of it is persisted between hook invocations.
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
-            "last_ns": 0, "started": False, "start_ns": 0}
+            "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None}
+
+
+def _generation_for(entry: Any, scope: dict, root_span_id: str,
+                    inline_sidechains: bool) -> dict:
+    """The generation (one API response) this assistant line belongs to.
+
+    Claude Code writes ONE response as one line per content block, and every
+    line repeats the response's usage. The lines are contiguous apart from
+    the tool_results of tools that already ran, so the response in progress
+    is the only one that can still grow. Its id, parent and start are fixed
+    by its first line and persisted: a later hook re-emits the span, and the
+    backend collapses the copies only if the span id and start match.
+    Nothing here is content; the text is re-read from the file when needed.
+    """
+    key = entry.generation_key()
+    gen = scope.get("open_gen")
+    if isinstance(gen, dict) and gen.get("key") == key:
+        return gen
+    if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
+        # Only the main transcript: a Claude Code version that wrote
+        # sidechain entries inline still nests them under the tool call.
+        # Inside a subagent's own file every entry is a sidechain entry and
+        # belongs to that subagent, not to the nested tool call it follows.
+        parent_span_id = scope["open_task_spans"][-1]
+    else:
+        parent_span_id = _current_turn_parent(scope, root_span_id)
+    gen = {
+        "key": key,
+        "span_id": span_id_for(key),
+        "parent_span_id": parent_span_id,
+        "start_ns": scope["last_ns"] or entry.timestamp_ns,
+        "offset": entry.offset,
+    }
+    scope["open_gen"] = gen
+    return gen
+
+
+def _earlier_text(ctx: Ctx, source_path: str, gen: dict,
+                  lines: List[Any]) -> str:
+    """Text from lines of this response that an earlier hook already read."""
+    if not ctx.capture_content or not source_path:
+        return ""
+    start = gen.get("offset", -1)
+    end = lines[0].offset
+    if start is None or start < 0 or end <= start:
+        return ""
+    from . import transcript
+    return "".join(e.text() for e in transcript.read_between(source_path, start, end)
+                   if e.kind == "assistant" and e.generation_key() == gen["key"])
+
+
+def _latest(lines: List[Any], key: str) -> Any:
+    for line in reversed(lines):
+        value = line.message.get(key)
+        if value:
+            return value
+    return None
+
+
+def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
+                     earlier_text: str) -> Span:
+    """The LLM span for one response, from the lines of it seen so far.
+
+    Usage comes from the LATEST line: in the main transcript every line has
+    the same final usage, but a streamed subagent line can carry a partial
+    count (output_tokens=1, stop_reason=None) that only its last line fixes.
+    """
+    model = _latest(lines, "model") or ""
+    usage = _latest(lines, "usage") or {}
+    stop_reason = _latest(lines, "stop_reason")
+
+    attrs = _base_attrs(ctx, "LLM")
+    if model:
+        attrs["gen_ai.request.model"] = model
+        attrs["gen_ai.response.model"] = model
+    if "input_tokens" in usage:
+        attrs["gen_ai.usage.input_tokens"] = usage["input_tokens"]
+    if "output_tokens" in usage:
+        attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
+    if "cache_read_input_tokens" in usage:
+        attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
+    if "cache_creation_input_tokens" in usage:
+        # Upstream OTel GenAI semconv renamed this attribute to
+        # gen_ai.usage.cache_write.input_tokens (semantic-
+        # conventions-genai#440). We emit BOTH keys with the same
+        # value, deliberately, not belt-and-braces: a Rius backend
+        # at migration 000011 (before 000013_spans_cache_write_
+        # rename) reads only the old key, and dropping it would
+        # silently zero its cache-write count -- this project's
+        # signature failure mode. A backend at 000013+ prefers the
+        # new key, so emitting it too means we stop depending on a
+        # compatibility fallback that will eventually be removed.
+        # Revisit and drop the legacy key once every deployment is
+        # known to be at 000013+.
+        attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
+        attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
+    if stop_reason:
+        attrs["gen_ai.response.finish_reasons"] = [stop_reason]
+    _content_attr(ctx, attrs, "output.value",
+                  earlier_text + "".join(line.text() for line in lines))
+
+    return Span(
+        trace_id=trace_id, span_id=gen["span_id"],
+        parent_span_id=gen["parent_span_id"], name=model or "assistant",
+        kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
+        attributes=attrs, status_code="OK", status_message="", pending=False,
+    )
 
 
 def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                  root_span_id: str, links: dict, depth: int = 0,
                  key_prefix: str = "", make_turns: bool = True,
-                 inline_sidechains: bool = True) -> List[Any]:
+                 inline_sidechains: bool = True,
+                 source_path: str = "") -> List[Any]:
     """Entries of ONE transcript -> spans, parented under `root_span_id`.
 
     Used for both the main transcript (scope == the session state, root ==
@@ -193,8 +301,14 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     scope, root == that agent's AGENT span). `links` collects every
     subagent-spawning tool_use seen, so subagents.expand() can find the
     transcript each one wrote -- including the ones a subagent spawns.
+
+    `source_path` is the file `entries` came from. It is only read to recover
+    the text of a response whose earlier lines an earlier hook consumed.
     """
     out: List[Span] = []
+    # One generation span per API response in this batch, emitted after the
+    # loop so it carries every line of the response that has arrived.
+    batch_gens: Dict[str, Any] = {}
     for entry in entries:
         if entry.kind == "user":
             tool_results = entry.tool_results()
@@ -267,57 +381,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     ))
 
         elif entry.kind == "assistant":
-            if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
-                # Only the main transcript: a Claude Code version that wrote
-                # sidechain entries inline still nests them under the tool
-                # call. Inside a subagent's own file every entry is a
-                # sidechain entry and belongs to that subagent, not to the
-                # nested tool call it happens to follow.
-                parent_span_id = scope["open_task_spans"][-1]
-            else:
-                parent_span_id = _current_turn_parent(scope, root_span_id)
-
-            model = entry.message.get("model") or ""
-            usage = entry.message.get("usage") or {}
-            stop_reason = entry.message.get("stop_reason")
-            llm_span_id = span_id_for(entry.uuid)
-            start_ns = scope["last_ns"] or entry.timestamp_ns
-
-            attrs = _base_attrs(ctx, "LLM")
-            if model:
-                attrs["gen_ai.request.model"] = model
-                attrs["gen_ai.response.model"] = model
-            if "input_tokens" in usage:
-                attrs["gen_ai.usage.input_tokens"] = usage["input_tokens"]
-            if "output_tokens" in usage:
-                attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
-            if "cache_read_input_tokens" in usage:
-                attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
-            if "cache_creation_input_tokens" in usage:
-                # Upstream OTel GenAI semconv renamed this attribute to
-                # gen_ai.usage.cache_write.input_tokens (semantic-
-                # conventions-genai#440). We emit BOTH keys with the same
-                # value, deliberately, not belt-and-braces: a Rius backend
-                # at migration 000011 (before 000013_spans_cache_write_
-                # rename) reads only the old key, and dropping it would
-                # silently zero its cache-write count -- this project's
-                # signature failure mode. A backend at 000013+ prefers the
-                # new key, so emitting it too means we stop depending on a
-                # compatibility fallback that will eventually be removed.
-                # Revisit and drop the legacy key once every deployment is
-                # known to be at 000013+.
-                attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
-                attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
-            if stop_reason:
-                attrs["gen_ai.response.finish_reasons"] = [stop_reason]
-            _content_attr(ctx, attrs, "output.value", entry.text())
-
-            out.append(Span(
-                trace_id=trace_id, span_id=llm_span_id, parent_span_id=parent_span_id,
-                name=model or "assistant", kind_oi="LLM", start_ns=start_ns,
-                end_ns=entry.timestamp_ns, attributes=attrs, status_code="OK",
-                status_message="", pending=False,
-            ))
+            gen = _generation_for(entry, scope, root_span_id, inline_sidechains)
+            batch_lines = batch_gens.setdefault(gen["key"], (gen, []))[1]
+            batch_lines.append(entry)
+            llm_span_id = gen["span_id"]
 
             for block in entry.tool_uses():
                 tool_id = block.get("id")
@@ -367,10 +434,14 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
         scope["last_ns"] = entry.timestamp_ns
 
+    for gen, lines in batch_gens.values():
+        earlier = _earlier_text(ctx, source_path, gen, lines)
+        out.append(_generation_span(ctx, trace_id, gen, lines, earlier))
     return out
 
 
-def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
+def build(entries: List[Any], state: dict, ctx: Ctx,
+          source_path: str = "") -> List[Any]:
     """The MAIN transcript. Subagent transcripts are separate files; see
     subagents.expand(), which feeds them through emit_entries() too."""
     out: List[Span] = []
@@ -397,7 +468,8 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
 
     out += emit_entries(entries, state, ctx, trace_id, root_span_id,
                         state["sub_links"], depth=0, key_prefix="",
-                        make_turns=True, inline_sidechains=True)
+                        make_turns=True, inline_sidechains=True,
+                        source_path=source_path)
     return out
 
 

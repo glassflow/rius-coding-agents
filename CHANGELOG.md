@@ -9,6 +9,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 - `/rius:status` says when a session was stopped by a mid-session disable:
   it reads `Rius tracing: off` with a `Stopped:` line, instead of the `on`
   the folder rules alone would give.
+- Each model API response is one generation span. Claude Code writes a
+  response as one transcript line per content block, each repeating the
+  usage, and the plugin made a span per line: tokens and cost were counted
+  once per block, often 2-6 times over. Lines are now grouped by
+  `message.id`, the usage is counted once (from the response's last line,
+  since streamed subagent lines carry partial counts), and the response's
+  tool calls all sit under it.
 
 ## 0.4.1 (2026-09-30)
 
