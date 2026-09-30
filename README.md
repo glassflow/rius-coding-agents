@@ -87,12 +87,13 @@ details.
 - **One trace per session.** Session, then turn, then model generation, then
   tool call. Subagents nest under the tool call that started them, with
   their own generations and tools.
-- **Tokens and cost per generation**, including cache reads, with the model
-  that produced them.
+- **Tokens and cost.** Every generation carries its model and token counts,
+  including cache reads, and Rius prices them.
 - **Live sessions.** Spans appear as they start, and a 15-second heartbeat
   keeps a long turn from reading as dead. A session that crashes mid-run
   stays visibly unfinished.
-- **Failed tool calls marked as errors**, with the output that explains why.
+- **Failed tool calls marked as errors**, with the output that explains why
+  (unless content capture is off).
 - **Your traces from inside Claude Code**, through the bundled Rius MCP server.
 
 <picture>
