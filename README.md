@@ -1,12 +1,33 @@
-# rius
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Rius by GlassFlow: Claude Code sessions, traced" width="100%">
+</p>
 
-[![CI](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml)
+# Rius for Claude Code
+
+A Claude Code plugin that streams your sessions to [Rius](https://www.glassflow.ai/rius)
+as OpenTelemetry GenAI traces. Each session becomes one trace: turns, model
+generations with token counts, tool calls and subagents, laid out as a
+waterfall that fills in while the session is still running.
+
+<p>
+  <a href="https://docs.glassflow.ai/rius"><b>Docs</b></a> ·
+  <a href="https://console.rius-glassflow.com">Console</a> ·
+  <a href="docs/getting-started.md">Getting started</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/glassflow/rius-coding-agents/issues">Issues</a>
+</p>
+
+[![CI](https://img.shields.io/github/actions/workflow/status/glassflow/rius-coding-agents/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/glassflow/rius-coding-agents/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6b7280?style=flat-square)](LICENSE)
+![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-d97757?style=flat-square)
+![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425cc7?style=flat-square&logo=opentelemetry&logoColor=white)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Zero runtime deps](https://img.shields.io/badge/dependencies-zero-6b7280?style=flat-square)
 
-A Claude Code plugin that streams Claude Code sessions to [Rius](https://glassflow.dev)
-as OTLP GenAI traces: one trace per session, with turns, model generations
-(including token counts), tool calls, and subagents laid out as a waterfall.
+<!-- SCREENSHOT SLOT: a Claude Code session's waterfall in the Rius console,
+     captured on production with the workspace name masked. Save it as
+     docs/assets/console-trace.png and replace this comment with:
+     <img src="docs/assets/console-trace.png" alt="A Claude Code session as a trace waterfall in the Rius console" width="100%"> -->
 
 ## What gets sent -- read this before enabling anything
 
@@ -49,109 +70,38 @@ If `/rius:status` doesn't say `on`, the
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
 server, and troubleshooting.
 
-## Install
-
-### Local development
+To update later, refresh the marketplace, because Claude Code caches it:
 
 ```
-/plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius@rius-coding-agents
-```
-
-The marketplace name is `rius-coding-agents` and the plugin name is
-`rius`, as declared in `.claude-plugin/marketplace.json`. There is
-no file watcher: after editing anything under `hooks/` or `scripts/`, run
-`/reload-plugins` for the change to take effect in your current Claude Code
-process.
-
-### Upgrading from `rius-claude-code`
-
-Versions before 0.3.0 installed the plugin as `rius-claude-code`. Remove it
-before installing `rius`, or both stay installed: every hook fires twice
-(duplicate spans) and every command appears under both names.
-
-```
-/plugin uninstall rius-claude-code@rius-coding-agents
 /plugin marketplace update rius-coding-agents
-/plugin install rius@rius-coding-agents
+/reload-plugins
 ```
 
-Your path rules and stored key live under `~/.claude/rius/` and carry over.
+Runs on macOS, Linux and Windows (through Git Bash) with any Python 3.9+ on
+`PATH`. [Installing and updating](docs/install.md) covers the upgrade from the
+old `rius-claude-code` name, working from a local checkout, and platform
+details.
 
-### From GitHub
+## What you see in Rius
 
-```
-/plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius@rius-coding-agents
-```
+- **One trace per session.** Session, then turn, then model generation, then
+  tool call. Subagents nest under the tool call that started them, with
+  their own generations and tools.
+- **Tokens and cost per generation**, including cache reads, with the model
+  that produced them.
+- **Live sessions.** Spans appear as they start, and a 15-second heartbeat
+  keeps a long turn from reading as dead. A session that crashes mid-run
+  stays visibly unfinished.
+- **Failed tool calls marked as errors**, with the output that explains why.
+- **Your traces from inside Claude Code**, through the bundled Rius MCP server.
 
-The repo is public, so no GitHub credentials are needed.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.svg">
+  <img alt="Claude Code hooks feed the rius plugin, which sends OTLP to Rius. The console and the Rius MCP server read the traces back, and the MCP server answers questions inside Claude Code." src="docs/assets/how-it-works-light.svg" width="100%">
+</picture>
 
-### Updating an installed plugin
-
-> **Claude Code caches the marketplace. Refresh it after every plugin
-> change.** A marketplace added from a directory or a git source is read
-> once and cached, not read live, so an updated plugin -- upstream or in
-> your own checkout -- does not reach your session until you run:
->
-> ```
-> /plugin marketplace update rius-coding-agents
-> /reload-plugins
-> ```
->
-> Skipping this is not a cosmetic problem. A stale cache is indistinguishable
-> from a change that did not work: the code on disk is new, the code being
-> run is old, and nothing says so. It invalidated a full round of testing
-> during development of this plugin, which is why it has a section of its
-> own rather than a footnote.
-
-### Platform support
-
-macOS, Linux and Windows. The plugin is pure standard library, so the only
-requirement is a Python 3.9+ on `PATH`.
-
-On Windows the hook is launched through Git Bash, which Claude Code already
-needs for its own Bash tool, and `scripts/hook.sh` picks the interpreter --
-`py`, then `python`, then `python3`. If it cannot find one it writes a line
-saying so to `~/.claude/rius/log/bootstrap.log` rather than doing nothing
-quietly. `/rius:status` prints which platform implementation is live.
-
-If Claude Code on your machine falls back to PowerShell because Git Bash is
-not installed, the hooks will not run. That is the one configuration this
-plugin does not yet cover.
-
-CI runs the suite on Linux only, across Python 3.10 to 3.13 plus a 3.9
-runtime-floor job. There is no Windows CI job yet (tracked as RIUS-945), so
-the Windows code paths are covered by unit tests with fakes rather than by a
-native run.
-
-## Getting a Rius workspace and API key
-
-The plugin cannot do anything without a Rius API key. `/rius:login` gets
-you one without leaving Claude Code. To mint one by hand instead, for
-`RIUS_API_KEY`, the short version is:
-
-- Log in to the Rius console (`https://console.rius-glassflow.com`) in a
-  browser. A `Default` workspace is created
-  for an identity that has none the first time it lists workspaces, so for
-  most people that is the whole workspace step. Creating further workspaces
-  explicitly is restricted to organization admins.
-- Mint a key in workspace settings. A key looks like `ri_<id>.<signature>`;
-  older `gf_` keys still work. The plaintext is shown once and stored
-  hashed. Expiry is chosen at creation from never, 30 days, 90 days or 1
-  year, defaulting to never.
-- Keys are scoped to one workspace and carry scopes. This plugin needs
-  `ingest`. The Rius MCP server needs `read`. One key can hold both.
-
-> **The first key has to come from a browser login.** An API key can never
-> mint another API key -- the backend refuses, so that a leaked agent key
-> cannot create more credentials. Either the console or a single interactive
-> OAuth session against the Rius MCP server gets you the first one; after
-> that the MCP server's `create_api_key` can mint further keys, but it
-> cannot create a workspace and there is no revoke tool.
-
-The [getting started guide](docs/getting-started.md) has the full version,
-including which endpoint to use for which environment.
+[How it works](docs/how-it-works.md) has the span tree, how subagents are
+followed, the heartbeat, and why generation durations run long.
 
 ## Enabling a folder
 
@@ -252,91 +202,11 @@ in `~/.claude/rius/config.json`, then the global default of off. If
 `RIUS_API_KEY` is unset, tracing is forced off no matter what the above
 resolves to.
 
-### Where the API key goes
+## Your own API key
 
-Put it in the project's `.claude/settings.local.json`, not in the global
-`~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "RIUS_API_KEY": "ri_xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxx"
-  }
-}
-```
-
-`settings.local.json` is the per-project file that is conventionally
-gitignored, so the credential does not follow the repo into a commit --
-check that your repo does ignore it before writing a key there. A key is
-also scoped to a single Rius workspace, so projects reporting into different
-workspaces need different keys, which one global value cannot express. And a
-key in the global file applies to every folder on the machine; tracing is
-off per folder by default, so that is not a leak by itself, but it makes the
-blast radius of a later `/rius:enable-here` wider than it needs to be.
-
-Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
-as well. Without it, the plugin uses the key `/rius:login` stored in
-`~/.claude/rius/credentials.json` (mode 0600); `RIUS_API_KEY` wins when both
-are present.
-
-## How it works
-
-One trace per Claude Code session, shaped as a waterfall:
-
-```
-AGENT   session root
-└─ CHAIN  turn (one user prompt and everything it caused)
-   └─ LLM   generation (one assistant message: model, token counts, cache reads)
-      ├─ TOOL  tool call (input and output)
-      └─ TOOL  Agent (the call that spawned a subagent)
-         └─ AGENT  the subagent, named by its agent type
-            └─ LLM   the subagent's own generation
-               └─ TOOL  a tool the subagent called
-```
-
-**Subagents are drilled into.** Claude Code does not write a subagent's work
-into the session transcript -- each subagent gets its own file under
-`~/.claude/projects/<project>/<session-id>/subagents/`, and the sibling
-`.meta.json` names the exact tool call that spawned it. The plugin follows
-that link and emits the subagent as an `AGENT` span under the tool span, with
-its generations and tool calls beneath. This is not a detail: in the session
-this was built against, **58% of all tokens and 71% of all model calls were
-inside subagents**, and a trace that stopped at the tool call reported less
-than half of what the session cost.
-
-The subagent's span carries `gen_ai.agent.name` (its agent type, e.g.
-`general-purpose`), its own model and its description, so each subagent is
-filterable as a named agent in the Rius UI rather than an anonymous span.
-Subagents that spawn subagents nest the same way, to a bounded depth.
-
-Turns the harness injected rather than you typing them -- a slash command's
-caveat, a background task's notification, a subagent's report -- keep their
-span but are marked `cc.turn.source = system`, so the turn list can tell them
-apart from your prompts.
-
-Spans appear while the session is still running, not only after it ends: each
-hook event emits a "pending" snapshot at span start (session start, prompt
-submit, tool start) that the backend shows as in-progress, then replaces with
-the finished span once the corresponding end event arrives. A session that
-dies mid-run leaves those pending spans unresolved -- that's intentional, it's
-what "the agent died while running" is supposed to look like in the UI, not a
-bug to be papered over.
-
-### Generation timing is approximate
-
-Tool span durations are accurate: start and end come from real transcript
-timestamps (the entry carrying the `tool_use` and the matching
-`tool_result`).
-
-Generation span durations are not. The Claude Code transcript only records
-*completion* times -- nothing in it marks when a request was actually
-dispatched to the model. So a generation's start is taken as the timestamp of
-the preceding entry, and its duration ends up absorbing whatever happened
-before the call actually went out: user think time, a permission prompt,
-queuing behind a tool call. If you compare a generation's duration against
-what you'd expect from your Anthropic bill or API logs, expect it to run
-long, sometimes by a lot. There is no signal in the transcript that would let
-this be tightened without guessing.
+`/rius:login` is all most people need. To mint a key in the console instead,
+or to decide where a hand-minted key should live, see
+[API keys](docs/api-keys.md).
 
 ## Asking Claude about your traces
 
@@ -361,23 +231,22 @@ answerable in chat. The
 [getting started guide](docs/getting-started.md#exploring-your-traces-from-claude-code)
 lists the main tools and how to register the server without the plugin.
 
-## Heartbeat
+## Beyond Claude Code
 
-A small background process pings the endpoint every 15 seconds while a
-session is active, so a long-running agent turn doesn't read as dead in the
-UI just because no span has closed recently. It starts when the session
-starts and exits on its own once the session ends or Claude Code exits --
-nothing is left running in the background afterward.
-
-Each ping carries an `instance_id` that covers exactly one Claude Code
-process lifetime -- never two. A **resumed** session is a new process, so it
-gets a fresh `instance_id` even though it continues the same session (and
-therefore the same trace): the old instance already sent its
-`stopped: true` ping when the prior process exited, so reusing its id would
-have this new process contradict it by pinging as "already stopped."
-**Compacting** or **clearing** context, by contrast, happens inside the
-same running process, so the existing `instance_id` is kept. In short: a
-resumed session continues the same trace but reports as a new instance.
+Rius traces other agents as well. The
+[Python and TypeScript SDKs](https://docs.glassflow.ai/rius/sdk/installation)
+have integrations for the
+[Claude Agent SDK](https://docs.glassflow.ai/rius/sdk/integrations/claude-agent-sdk),
+the [OpenAI Agents SDK](https://docs.glassflow.ai/rius/sdk/integrations/openai-agents),
+[LangChain](https://docs.glassflow.ai/rius/sdk/integrations/langchain),
+[CrewAI](https://docs.glassflow.ai/rius/sdk/integrations/crewai),
+[Pydantic AI](https://docs.glassflow.ai/rius/sdk/integrations/pydantic-ai)
+and more. Anything that already emits OpenTelemetry, whether through
+[OpenLLMetry](https://docs.glassflow.ai/rius/interoperability/openllmetry),
+[OpenInference](https://docs.glassflow.ai/rius/interoperability/openinference),
+a plain [OTel SDK](https://docs.glassflow.ai/rius/interoperability/otel-sdks)
+or a [Collector](https://docs.glassflow.ai/rius/interoperability/collector),
+can send to Rius without code changes.
 
 ## Privacy and security posture
 
@@ -407,3 +276,33 @@ slate:
 ```
 rm -rf ~/.claude/rius/
 ```
+
+## Documentation
+
+| Page | What it covers |
+|---|---|
+| [Getting started](docs/getting-started.md) | Workspace, key and scopes, endpoints, staging, first trace, MCP, troubleshooting |
+| [Installing and updating](docs/install.md) | Marketplace cache, upgrading from `rius-claude-code`, local checkout, platforms |
+| [How it works](docs/how-it-works.md) | The span tree, subagents, live spans, generation timing, heartbeat |
+| [API keys](docs/api-keys.md) | Minting a key by hand and where to keep it |
+| [Design records](docs/design/) | The original spec, plan and build log |
+| [Changelog](CHANGELOG.md) | What changed in each version |
+| [Rius docs](https://docs.glassflow.ai/rius) | The product: console, alerts, MCP tools, SDKs |
+
+## Contributing
+
+Bug reports and pull requests are welcome. The plugin is standard-library
+Python and the suite runs with:
+
+```
+python -m pip install 'pytest>=7.0' 'opentelemetry-proto==1.43.0'
+python -m pytest -q
+claude plugin validate .
+```
+
+`opentelemetry-proto` is test-only: it checks the hand-written OTLP encoder
+against the real wire format and never ships.
+
+## License
+
+[MIT](LICENSE). Built by [GlassFlow](https://www.glassflow.ai).
