@@ -163,10 +163,20 @@ def _spans_exported(session_id, home):
     return st.get("spans_exported")
 
 
+STOPPED_NOTE = ("Stopped: this session stopped tracing when its folder was "
+                "disabled, and stays stopped even if the folder is enabled "
+                "again. New sessions in this folder are traced as usual.")
+
+
 def _print_status(session_id, cwd, home, inferred=False):
     cfg = config.resolve(session_id or "", cwd or "", os.environ, home)
-    print("Rius tracing: %s" % ("on" if cfg.enabled else "off"))
+    # The exporter's sticky stop outranks the rules for this one session, so
+    # without this the rules would say "on" for a session that sends nothing.
+    stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
+    print("Rius tracing: %s" % ("on" if cfg.enabled and not stopped else "off"))
     print("Reason: %s" % cfg.reason)
+    if stopped:
+        print(STOPPED_NOTE)
     print("cwd: %s" % (cwd or "<unknown, default>"))
     if not session_id:
         print("session: <unknown> (no --session given and no session state "

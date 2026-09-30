@@ -389,6 +389,11 @@ decided, verbatim:
 | `off: session override` | A `/rius:off` override is in force for this session. `/rius:on` flips it; a new session starts without it. |
 | `on: path rule '<rule>' enables <cwd>` | Working as intended. |
 
+A `Stopped:` line under `Reason` means this session's folder was disabled
+while it was running. That session sends nothing more, even if the folder is
+enabled again, and `Rius tracing` reads `off` for it whatever the rules say;
+its trace is still closed when it ends. Start a new session to trace again.
+
 Then read the rest of the output:
 
 - **`Spans exported this session`** is the count that matters. 0 with
