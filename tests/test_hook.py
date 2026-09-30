@@ -1,6 +1,9 @@
+import atexit
 import io
 import json
 import os
+import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -51,7 +54,24 @@ def _run_in_process(monkeypatch, event, payload, env, home):
     return calls
 
 
+def _isolated_env():
+    """os.environ with a fresh, throwaway HOME and no RIUS_* settings.
+
+    hook.py resolves its home from HOME: run with the developer's own
+    environment it reads their real key and writes into their real
+    ~/.claude/rius/state. No test may do that.
+    """
+    home = tempfile.mkdtemp(prefix="rius-test-home-")
+    atexit.register(shutil.rmtree, home, True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("RIUS_")}
+    env["HOME"] = home
+    env["USERPROFILE"] = home
+    return env
+
+
 def _run(event, payload, env=None):
+    if env is None:
+        env = _isolated_env()
     return subprocess.run(
         [sys.executable, HOOK, event],
         input=json.dumps(payload), capture_output=True, text=True,

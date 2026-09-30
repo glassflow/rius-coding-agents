@@ -231,7 +231,7 @@ def expand(state: dict, ctx, subdir: str) -> List[Any]:
     if not subdir or not state["sub_links"] or not os.path.isdir(subdir):
         return out
 
-    trace_id = spans.trace_id_for(ctx.session_id)
+    trace_id = spans.trace_id_for(ctx.conversation_id)
     index: Optional[Dict[str, Tuple[str, dict, str]]] = None
     seen = set()
 
@@ -274,7 +274,7 @@ def finalize(state: dict, ctx, subdir: str, now_ns: int) -> List[Any]:
     out: List[Any] = []
     if not subdir or not state["sub_links"] or not os.path.isdir(subdir):
         return out
-    trace_id = spans.trace_id_for(ctx.session_id)
+    trace_id = spans.trace_id_for(ctx.conversation_id)
     index = index_by_tool_use(subdir)
     for tool_use_id, link in list(state["sub_links"].items()):
         if link.get("closed"):

@@ -4,6 +4,20 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## Unreleased
+
+- A conversation Claude Code moves to a new session id (sending a session
+  to the background does this) stays one trace, like a resumed session.
+  The new session's transcript opens with a copy of the whole history, and
+  the plugin sent it all again as a second trace: both traces started at
+  the same millisecond, every token, cost and error before the move counted
+  twice, and the first trace never closed. The new session now skips the
+  copied history and carries on in the same trace, under the same root and
+  `session.id`, as a new instance. Its turns carry `cc.continued_from`.
+  Subagents still running at the move keep landing in the trace, the
+  conversation's root closes at the continued session's end, and a
+  mid-session disable carries over to the continued session.
+
 ## 0.4.2 (2026-09-30)
 
 - `/rius:status` says when a session was stopped by a mid-session disable:

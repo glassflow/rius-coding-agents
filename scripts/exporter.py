@@ -12,8 +12,8 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, log as rius_log, otlp, platform_compat, spans,
-                     state, subagents, transcript)
+from rius_cc import (config, continuation, log as rius_log, otlp,
+                     platform_compat, spans, state, subagents, transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -154,8 +154,12 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     return 0
 
 
-def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg) -> int:
-    """Export `out` (if any), then persist the state and the new offset."""
+def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
+          on_success=None) -> int:
+    """Export `out` (if any), then persist the state and the new offset.
+
+    `on_success` runs only once the spans are accepted (or there were none).
+    """
     if out:
         body = otlp.encode(resource_attrs, out)
         status = otlp.export(cfg.endpoint, cfg.api_key, body)
@@ -172,7 +176,69 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg) -> int:
 
     st["offset"] = new_offset
     state.save(session_id, home, st)
+    if on_success is not None:
+        on_success()
     return len(out)
+
+
+def _ctx(st, session_id, cfg, cwd, git_branch="", cc_version="",
+         capture_content=None):
+    """The span context for this session id: under its conversation's trace."""
+    return spans.Ctx(
+        session_id=session_id, cwd=cwd, git_branch=git_branch,
+        cc_version=cc_version, service_name=cfg.service_name,
+        capture_content=(cfg.capture_content if capture_content is None
+                         else capture_content),
+        max_attr_bytes=cfg.max_attr_bytes,
+        conversation_id=st.get("conversation") or "",
+        continued_from=st.get("continued_from") or "",
+    )
+
+
+def _adopted_subagents(st, ctx, cfg, home, event, now_ns, final):
+    """Spans from the subagents of the session ids this one took over.
+
+    A background subagent can outlive the switch: its file sits under the
+    OLD id's directory, and its bookkeeping stays in the old id's state.
+    Returns (spans, states to save once the export succeeded).
+    """
+    out, saves = [], []
+    for item in st.get("adopted") or []:
+        old_id = item.get("session_id") if isinstance(item, dict) else None
+        if not old_id:
+            continue
+        with state.session_lock(old_id, home, block_timeout=(
+                FINAL_EVENT_LOCK_TIMEOUT_S if event in FINAL_EVENTS else 0.0)) as got:
+            if not got:
+                continue
+            old = state.load(old_id, home)
+        if not old.get("sub_links"):
+            continue
+        old_ctx = spans.Ctx(
+            session_id=old_id, cwd=ctx.cwd, git_branch=ctx.git_branch,
+            cc_version=ctx.cc_version, service_name=ctx.service_name,
+            capture_content=ctx.capture_content,
+            max_attr_bytes=ctx.max_attr_bytes,
+            conversation_id=ctx.conversation_id)
+        sub_dir = subagents.dir_for(item.get("transcript_path") or "", old_id)
+        try:
+            if not final:
+                out += subagents.expand(old, old_ctx, sub_dir)
+            if event == "SessionEnd":
+                out += subagents.finalize(old, old_ctx, sub_dir, now_ns)
+        except Exception as exc:
+            _log(home, cfg, "session %s: subagents of %s failed: %r"
+                 % (ctx.session_id, old_id, exc), force=True)
+        saves.append((old_id, old))
+    return out, saves
+
+
+def _save_adopted(saves, home):
+    for old_id, old in saves:
+        with state.session_lock(old_id, home,
+                                block_timeout=FINAL_EVENT_LOCK_TIMEOUT_S) as got:
+            if got:
+                state.save(old_id, home, old)
 
 
 def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
@@ -184,7 +250,8 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
     said while it was off). Nothing is read from the transcript. SessionEnd
     still closes every open span -- with capture off, so the closing spans
     carry no content -- because a single pending span keeps the whole
-    session out of the backend's finished-trace counts.
+    session out of the backend's finished-trace counts. A conversation that
+    moved to this id brings its stop with it, and is closed the same way.
     """
     if not state.trace_is_open(st):
         _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
@@ -196,11 +263,7 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
              % (session_id, cfg.reason, event))
         return 0
 
-    ctx = spans.Ctx(
-        session_id=session_id, cwd=cwd, git_branch="", cc_version="",
-        service_name=cfg.service_name, capture_content=False,
-        max_attr_bytes=cfg.max_attr_bytes,
-    )
+    ctx = _ctx(st, session_id, cfg, cwd, capture_content=False)
     now_ns = _now_ns()
     out = []
     try:
@@ -209,6 +272,9 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
     except Exception as exc:
         _log(home, cfg, "session %s: subagent finalize failed: %r"
              % (session_id, exc), force=True)
+    adopted, saves = _adopted_subagents(st, ctx, cfg, home, event, now_ns,
+                                        final=True)
+    out += adopted
     out += spans.finalize_session(st, ctx, now_ns)
     resource_attrs = {
         "service.name": cfg.service_name,
@@ -218,7 +284,36 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
         "cc.git_branch": "",
     }
     return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
-                 home, cfg)
+                 home, cfg, on_success=lambda: _save_adopted(saves, home))
+
+
+def _link(st, session_id, transcript_path, home, cfg, final):
+    """Take over the conversation this id continues, if it continues one."""
+    try:
+        old_id = continuation.link(session_id, transcript_path, home, st=st,
+                                   final=final)
+    except Exception as exc:
+        _log(home, cfg, "session %s: continuation check failed: %r"
+             % (session_id, exc), force=True)
+        return
+    if old_id:
+        # Persisted at once: a failed export reloads this state from disk,
+        # and the old id has already handed its root over.
+        state.save(session_id, home, st)
+        _log(home, cfg, "session %s: continues the conversation of %s in "
+                        "its trace" % (session_id, old_id))
+
+
+def _drop_copied_history(st, entries):
+    """The history Claude Code copied in, minus what was never sent."""
+    if not st.get("skipping_copied") or not entries:
+        return entries
+    uuids = continuation.copied_uuids(st.get("continued_from_path") or "",
+                                      until=st.get("copied_until", -1))
+    entries, ended = continuation.drop_copied(entries, uuids)
+    if ended:
+        st["skipping_copied"] = False
+    return entries
 
 
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
@@ -249,6 +344,15 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 return 0
 
             st = state.load(session_id, home)
+            if st.get("handed_off_to"):
+                # Claude Code moved this conversation to another session id,
+                # which owns its trace and root from the switch on.
+                _log(home, cfg, "session %s: handed off to %s; %s ignored"
+                     % (session_id, st["handed_off_to"], event))
+                return 0
+            # Before the stopped check: a conversation moved into a disabled
+            # folder must still be found, or its root is never closed.
+            _link(st, session_id, transcript_path, home, cfg, final=False)
             if not cfg.enabled or st.get("content_stopped"):
                 return _run_stopped(event, st, cfg, session_id, cwd,
                                     transcript_path, home)
@@ -271,6 +375,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             entries, new_offset = transcript.read_from(
                 transcript_path, st.get("offset", 0), stats=read_stats)
             _note_skipped_lines(home, cfg, session_id, st, read_stats)
+            if entries and not st.get("continuation_checked"):
+                _link(st, session_id, transcript_path, home, cfg, final=True)
+                if st.get("content_stopped"):
+                    return _run_stopped(event, st, cfg, session_id, cwd,
+                                        transcript_path, home)
+            entries = _drop_copied_history(st, entries)
 
             first_cwd = cwd
             first_git_branch = ""
@@ -280,15 +390,8 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 first_git_branch = entries[0].git_branch or ""
                 first_cc_version = entries[0].cc_version or ""
 
-            ctx = spans.Ctx(
-                session_id=session_id,
-                cwd=first_cwd,
-                git_branch=first_git_branch,
-                cc_version=first_cc_version,
-                service_name=cfg.service_name,
-                capture_content=cfg.capture_content,
-                max_attr_bytes=cfg.max_attr_bytes,
-            )
+            ctx = _ctx(st, session_id, cfg, first_cwd, first_git_branch,
+                       first_cc_version)
 
             out = spans.build(entries, st, ctx, source_path=transcript_path)
 
@@ -304,6 +407,9 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                      % (session_id, exc), force=True)
 
             now_ns = _now_ns()
+            adopted, saves = _adopted_subagents(st, ctx, cfg, home, event,
+                                                now_ns, final=False)
+            out += adopted
             if event == "Stop":
                 out += spans.finalize_turn(st, ctx, now_ns)
             elif event == "SessionEnd":
@@ -322,7 +428,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 "cc.git_branch": first_git_branch,
             }
             return _ship(out, resource_attrs, st, new_offset, session_id,
-                         home, cfg)
+                         home, cfg, on_success=lambda: _save_adopted(saves, home))
     except BaseException as exc:  # never raise out of run()
         try:
             # force=True deliberately: an unhandled crash is logged even with
