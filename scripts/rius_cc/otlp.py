@@ -62,6 +62,14 @@ def _status(status_code, status_message) -> bytes:
     return proto.ld(15, payload)
 
 
+def _event(time_ns: int, name: str, attrs: Dict[str, Any]) -> bytes:
+    """Span.Event: time_unix_nano=1 (fixed64), name=2, attributes=3."""
+    payload = proto.fixed64_field(1, time_ns)
+    payload += proto.string_field(2, name)
+    payload += _attributes(3, attrs)
+    return proto.ld(11, payload)
+
+
 def _encode_span(span) -> bytes:
     payload = b""
     payload += proto.bytes_field(1, bytes.fromhex(span.trace_id))
@@ -73,6 +81,8 @@ def _encode_span(span) -> bytes:
     payload += proto.fixed64_field(7, span.start_ns)
     payload += proto.fixed64_field(8, span.end_ns)
     payload += _attributes(9, span.attributes)
+    for time_ns, name, attrs in getattr(span, "events", None) or []:
+        payload += _event(time_ns, name, attrs)
     payload += _status(span.status_code, span.status_message)
     return proto.ld(2, payload)
 

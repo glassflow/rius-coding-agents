@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 PROVIDER_NAME = "anthropic"
@@ -21,6 +22,15 @@ SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
 TOOL_ERROR_WITHHELD = "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+
+# A failed tool's error message is one line that says why, capped here. The
+# backend groups errors by it, so the whole output (an 80-line file a grep
+# was piped after, say) must never be it.
+ERROR_MESSAGE_MAX_BYTES = 256
+
+# How Claude Code opens a failed Bash call's result.
+_EXIT_CODE = re.compile(r"Exit code (\d+)\s*$")
+_TOOL_USE_ERROR_TAG = re.compile(r"</?tool_use_error>")
 
 # A "user" entry whose text opens with one of these was injected by the
 # harness, not typed by the user: a slash-command caveat, a background-task
@@ -117,7 +127,7 @@ class Ctx:
 class Span:
     def __init__(self, trace_id, span_id, parent_span_id, name, kind_oi,
                  start_ns, end_ns, attributes, status_code, status_message,
-                 pending):
+                 pending, events=None):
         self.trace_id = trace_id
         self.span_id = span_id
         self.parent_span_id = parent_span_id
@@ -129,6 +139,9 @@ class Span:
         self.status_code = status_code
         self.status_message = status_message
         self.pending = pending
+        # (time_ns, name, attributes) span events. A pending span has none:
+        # an event is only ever about something that already happened.
+        self.events = [] if pending else list(events or [])
 
 
 def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
@@ -142,6 +155,39 @@ def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     if kind_oi in ("LLM", "TOOL", "AGENT"):
         attrs["gen_ai.provider.name"] = PROVIDER_NAME
     return attrs
+
+
+def tool_error_type(tool_name: str, output: str) -> str:
+    """A short, low-cardinality class for a failed tool call.
+
+    `Bash.exit_1` for a command that exited non-zero, `<Tool>.tool_error`
+    for anything else. Not content: a tool name and an exit code.
+    """
+    tool = tool_name or "tool"
+    first = output.lstrip().split("\n", 1)[0]
+    match = _EXIT_CODE.match(first)
+    if match:
+        return "%s.exit_%s" % (tool, match.group(1))
+    return tool + ".tool_error"
+
+
+def tool_error_line(output: str, max_bytes: int = ERROR_MESSAGE_MAX_BYTES) -> str:
+    """The one line of a failed tool's output that says why it failed.
+
+    For a command, that is where its output ends: a traceback's last line,
+    `error: ...`, `fatal: ...`. Claude Code's own tool errors are a single
+    sentence in <tool_use_error> tags. The "Exit code N" line is left out,
+    since the error type already says it, unless it is all there is.
+    """
+    lines = [line.strip() for line in _TOOL_USE_ERROR_TAG.sub("", output).splitlines()
+             if line.strip()]
+    if not lines:
+        return ""
+    if _EXIT_CODE.match(lines[0]):
+        line = lines[-1]
+    else:
+        line = lines[0]
+    return truncate(line, max_bytes)
 
 
 def _content_attr(ctx: Ctx, attrs: Dict[str, Any], key: str, value: str) -> None:
@@ -219,23 +265,33 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
                     _content_attr(ctx, attrs, "output.value", content_str)
                     status_code = "ERROR" if is_error else "OK"
-                    # Status.message is content too: for a failed Bash call
-                    # it is the command's stdout+stderr. It must honour the
-                    # capture gate exactly like input.value/output.value do,
-                    # or RIUS_CAPTURE_CONTENT=false is not the guarantee the
+                    # Status.message is content too: it is a line of the
+                    # command's output. It must honour the capture gate
+                    # exactly like input.value/output.value do, or
+                    # RIUS_CAPTURE_CONTENT=false is not the guarantee the
                     # README makes it out to be.
-                    if not is_error:
-                        status_message = ""
-                    elif ctx.capture_content:
-                        status_message = truncate(content_str, ctx.max_attr_bytes)
-                    else:
-                        status_message = TOOL_ERROR_WITHHELD
+                    status_message = ""
+                    events = []
+                    if is_error:
+                        error_type = tool_error_type(open_tool["tool_name"], content_str)
+                        if ctx.capture_content:
+                            status_message = tool_error_line(content_str) or error_type
+                        else:
+                            status_message = TOOL_ERROR_WITHHELD
+                        attrs["error.type"] = error_type
+                        # The backend groups errors by this event's type and
+                        # message, and only falls back to the status message
+                        # without one.
+                        events.append((entry.timestamp_ns, "exception", {
+                            "exception.type": error_type,
+                            "exception.message": status_message,
+                        }))
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
                         parent_span_id=open_tool["parent_span_id"], name=open_tool["tool_name"],
                         kind_oi="TOOL", start_ns=open_tool["start_ns"], end_ns=entry.timestamp_ns,
                         attributes=attrs, status_code=status_code, status_message=status_message,
-                        pending=False,
+                        pending=False, events=events,
                     ))
             elif make_turns:
                 if entry.prompt_id and entry.prompt_id not in scope["open_turns"]:
