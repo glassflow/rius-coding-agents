@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 standard library only at runtime (`json`, `hashlib`, `struct`, `urllib.request`, `fcntl`, `os`, `subprocess`). `pytest` and `opentelemetry-proto==1.43.0` are test-only.
 
-**Spec:** `docs/superpowers/specs/2026-09-22-rius-claude-code-design.md` — read it before Task 1. The plan argues from the spec; where they disagree, the spec wins and the plan is wrong.
+**Spec:** `docs/design/specs/2026-09-22-rius-claude-code-design.md` — read it before Task 1. The plan argues from the spec; where they disagree, the spec wins and the plan is wrong.
 
 ## Global Constraints
 
