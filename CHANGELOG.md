@@ -22,6 +22,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   the subagent showed 0 tokens and no children, and its span ended at the
   acknowledgement. The file is now read for as long as it grows, and the
   subagent's span ends at its last line.
+- `gen_ai.usage.input_tokens` includes the cache reads and writes, as the
+  OTel GenAI conventions, the Rius attribute reference and the Rius SDKs
+  define it. Anthropic's own count leaves them out (2 fresh tokens next to
+  50k cached is normal), so Rius token totals left out every cached token.
+  Thinking tokens are sent as `gen_ai.usage.reasoning.output_tokens`.
 
 ## 0.4.1 (2026-09-30)
 

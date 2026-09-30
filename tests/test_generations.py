@@ -79,7 +79,7 @@ def test_usage_is_counted_once_per_response(fixtures_dir):
     # 300 + 120 + 20; a span per line would have summed 1200 + 122 + 20.
     assert outputs == [20, 120, 300]
     a = _by_output(gens)[300].attributes
-    assert a["gen_ai.usage.input_tokens"] == 2
+    assert a["gen_ai.usage.input_tokens"] == 2 + 1000 + 500
     assert a["gen_ai.usage.cache_read.input_tokens"] == 1000
     assert a["gen_ai.usage.cache_write.input_tokens"] == 500
     assert a["gen_ai.response.finish_reasons"] == ["tool_use"]
@@ -90,7 +90,7 @@ def test_streamed_response_takes_its_final_usage(fixtures_dir):
     its last line has the real count."""
     out, _ = _whole(fixtures_dir)
     b = _by_output(_gens(out))[120]
-    assert b.attributes["gen_ai.usage.input_tokens"] == 8
+    assert b.attributes["gen_ai.usage.input_tokens"] == 8 + 1500 + 40
     assert b.attributes["gen_ai.response.finish_reasons"] == ["tool_use"]
 
 
@@ -171,3 +171,34 @@ def test_lines_without_a_message_id_stay_one_span_each(fixtures_dir):
     assistant = [e for e in entries if e.kind == "assistant"]
     assert [s.span_id for s in llm] == [spans.span_id_for(e.uuid)
                                         for e in assistant]
+
+
+def test_input_tokens_include_the_cache_counts(fixtures_dir):
+    """Anthropic reports input_tokens EXCLUDING cache reads and writes (2
+    fresh tokens next to 50k cached, on a real call). The Rius attribute
+    reference, the OTel GenAI conventions and the Rius SDKs all send the
+    inclusive total, and the backend's token totals are input + output: sent
+    raw, a session's total left out 9.85M cached tokens."""
+    out, _ = _whole(fixtures_dir)
+    for s in _gens(out):
+        a = s.attributes
+        assert a["gen_ai.usage.input_tokens"] >= (
+            a["gen_ai.usage.cache_read.input_tokens"]
+            + a["gen_ai.usage.cache_write.input_tokens"])
+    c = _by_output(_gens(out))[20].attributes
+    assert c["gen_ai.usage.input_tokens"] == 2 + 1600 + 30
+    assert c["gen_ai.usage.cache_read.input_tokens"] == 1600
+    assert c["gen_ai.usage.cache_write.input_tokens"] == 30
+
+
+def test_thinking_tokens_are_reported_as_reasoning_tokens():
+    entry = transcript.parse_line(json.dumps({
+        "type": "assistant", "uuid": "r1", "timestamp": "2026-09-30T10:00:00Z",
+        "sessionId": "s", "message": {
+            "id": "msg_R", "model": "claude-opus-5", "content": [],
+            "usage": {"input_tokens": 2, "output_tokens": 198,
+                      "output_tokens_details": {"thinking_tokens": 45}}}}))
+    out = spans.build([entry], state.new_state(), _ctx())
+    gen = [s for s in out if s.kind_oi == "LLM"][0]
+    assert gen.attributes["gen_ai.usage.reasoning.output_tokens"] == 45
+    assert gen.attributes["gen_ai.usage.input_tokens"] == 2

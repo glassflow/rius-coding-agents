@@ -137,8 +137,9 @@ def test_subagent_token_usage_reaches_the_trace(fixtures_dir):
             continue
         total_in += s.attributes.get("gen_ai.usage.input_tokens", 0)
         total_out += s.attributes.get("gen_ai.usage.output_tokens", 0)
-    # main a1 (10/5) + subagent 100/20 + 200/30 + 300/40 + nested 50/10
-    assert total_in == 10 + 100 + 200 + 300 + 50
+    # main a1 (10/5) + subagent 100/20 + 200/30 + 300/40 + nested 50/10,
+    # and input is cache-inclusive: sa1 also read 5 and wrote 7.
+    assert total_in == 10 + (100 + 5 + 7) + 200 + 300 + 50
     assert total_out == 5 + 20 + 30 + 40 + 10
     emitted = set(s.span_id for s in out)
     for uuid in sub_ids:

@@ -239,6 +239,24 @@ def _latest(lines: List[Any], key: str) -> Any:
     return None
 
 
+def _input_tokens_inclusive(usage: Dict[str, Any]) -> int:
+    """The whole prompt, cached or not.
+
+    Anthropic's `input_tokens` counts only the uncached part (2 tokens next
+    to 50k cached is normal). The OTel GenAI conventions, the Rius attribute
+    reference and the Rius SDKs all send the inclusive total, with the cache
+    counts as subsets of it, and the backend adds input and output to get a
+    span's tokens. Sent raw, every cached token fell out of that total.
+    """
+    total = 0
+    for key in ("input_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
+
 def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
                      earlier_text: str) -> Span:
     """The LLM span for one response, from the lines of it seen so far.
@@ -256,9 +274,12 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         attrs["gen_ai.request.model"] = model
         attrs["gen_ai.response.model"] = model
     if "input_tokens" in usage:
-        attrs["gen_ai.usage.input_tokens"] = usage["input_tokens"]
+        attrs["gen_ai.usage.input_tokens"] = _input_tokens_inclusive(usage)
     if "output_tokens" in usage:
         attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
+    thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
+    if isinstance(thinking, int):
+        attrs["gen_ai.usage.reasoning.output_tokens"] = thinking
     if "cache_read_input_tokens" in usage:
         attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
     if "cache_creation_input_tokens" in usage:
