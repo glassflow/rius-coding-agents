@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in the plugin doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you paste logs or `/rius:status` output, remove API keys and anything your sessions captured (prompts, file contents, command output). Security problems go to a [private advisory](https://github.com/glassflow/rius-coding-agents/security/advisories/new) instead.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Checked first
+      options:
+        - label: I ran `/plugin marketplace update rius-coding-agents` and `/reload-plugins`, and the problem is still there.
+          required: true
+        - label: I searched existing issues.
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "`/rius:status` output"
+      description: Run it in the folder where the problem happens. The key is already redacted.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `~/.claude/rius/log/`. Set `RIUS_CLAUDE_DEBUG=true` for more detail.
+      render: text
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: From `claude --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS
+        - Linux
+        - Windows (Git Bash)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: From `python3 --version` (or `py --version` on Windows).
