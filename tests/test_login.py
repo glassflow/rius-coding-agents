@@ -848,16 +848,20 @@ def test_login_wait_on_production_needs_no_mcp_setting(tmp_path, server, capsys)
     assert 'Reconnect "rius" in /mcp to query your traces.' in out
 
 
-def test_login_wait_under_an_env_key_does_not_redirect_mcp(
+def test_login_wait_under_an_env_key_still_points_mcp_at_the_new_key(
         tmp_path, server, capsys, monkeypatch):
+    # Claude Code withholds credential-named variables from a plugin's
+    # headersHelper, so the bundled server uses the stored key regardless.
     home = str(tmp_path)
     _park(home, env="staging")
     server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
     monkeypatch.setenv("RIUS_API_KEY", "ri_env")
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
-    assert "RIUS_MCP_URL" not in out
-    assert "RIUS_API_KEY is set" in out
+    assert "RIUS_MCP_URL=%s" % STAGING_MCP in out
+    assert ("NOTE: RIUS_API_KEY is set in your environment and still wins "
+            "over this key for tracing. Unset it to trace with the new one. "
+            "The bundled MCP server uses the new key either way.") in out
 
 
 def test_a_key_without_an_mcp_url_is_not_flagged(tmp_path, server, capsys):
@@ -887,10 +891,51 @@ def test_status_follows_rius_mcp_url(tmp_path):
     assert "RIUS_MCP_URL=" not in r.stdout
 
 
-def test_status_does_not_flag_mcp_for_an_env_key(tmp_path):
+def test_status_under_an_env_key_still_flags_the_stored_key_s_mcp(tmp_path):
     home = str(tmp_path)
     _store(home, mcp_url=STAGING_MCP)
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home,
              {"RIUS_API_KEY": "ri_env"})
     assert "MCP: %s" % PROD_MCP in r.stdout
-    assert "RIUS_MCP_URL=" not in r.stdout
+    assert "MCP key: /rius:login" in r.stdout
+    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
+
+
+def test_status_under_an_env_key_alone_says_mcp_has_no_key(tmp_path):
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path),
+             {"RIUS_API_KEY": "ri_env"})
+    assert ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
+            "bundled MCP server; run /rius:login to query your traces.") in r.stdout
+
+
+def test_status_with_a_stored_key_names_it_as_the_mcp_key(tmp_path):
+    home = str(tmp_path)
+    _store(home)
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "MCP key: /rius:login" in r.stdout
+    assert 'Reconnect "rius" in /mcp' in r.stdout
+
+
+def test_a_staging_key_without_an_mcp_url_is_still_flagged(tmp_path):
+    home = str(tmp_path)
+    _store(home, env="staging")
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
+
+
+def test_a_key_of_an_unknown_environment_is_not_revoked_anywhere():
+    post = scripted()
+    assert login.revoke({"api_key": "ri_k", "env": "narnia",
+                         "workspace_id": "w"}, post=post) is False
+    assert post.calls == []
+
+
+def test_logout_of_an_unknown_environment_still_signs_out(tmp_path, server,
+                                                         capsys):
+    home = str(tmp_path)
+    _store(home, env="narnia")
+    fake = server()
+    rius_ctl.dispatch(["logout"], home)
+    assert "Signed out; could not revoke the key" in capsys.readouterr().out
+    assert fake.calls == []
+    assert not os.path.exists(login.credentials_path(home))

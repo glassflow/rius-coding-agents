@@ -49,9 +49,9 @@ region's ingest endpoint, and expires after 90 days. It never goes into
 Claude Code's settings. Signing in again replaces the key and revokes the old
 one.
 
-- `RIUS_API_KEY` in the environment still wins over the stored key, so an
-  existing setup keeps working unchanged. `/rius:status` says which one is
-  in use (`Key from:`).
+- `RIUS_API_KEY` in the environment still wins over the stored key for
+  tracing, so an existing setup keeps working unchanged. `/rius:status` says
+  which one is in use (`Key from:`).
 - `/rius:logout` revokes the key on the server, then deletes it locally. If
   the server cannot be reached it still signs out, and says the key stays
   valid until it expires.
@@ -59,8 +59,12 @@ one.
   folder. `/rius:disable-here` turns a folder (and everything under it) off
   again, even inside an enabled parent.
 - The plugin bundles the Rius MCP server as `rius`, authenticated with the
-  same key (via a `headersHelper`, so the key never lands in any MCP
-  config). After logging in, reconnect it in `/mcp` or restart Claude Code.
+  `/rius:login` key (via a `headersHelper`, so the key never lands in any
+  MCP config). After logging in, reconnect it in `/mcp` or restart Claude
+  Code. It never uses `RIUS_API_KEY`: Claude Code runs a plugin's
+  `headersHelper` without any credential-named variable (`KEY`, `TOKEN`,
+  `SECRET`, `PASSWORD`, `AUTH`), whether it is set in the shell or in a
+  settings `env` block. `/rius:status` prints which key it has (`MCP key:`).
   It connects to `https://mcp.eu.console.rius-glassflow.com/mcp` unless
   `RIUS_MCP_URL` says otherwise; `/rius:status` prints the one in use
   (`MCP:`).
@@ -263,7 +267,10 @@ Three reasons to keep the credential there rather than in the global
 If you would rather not have the key in a settings file at all, export
 `RIUS_API_KEY` in the shell that launches Claude Code, or use `/rius:login`,
 which stores its key in `~/.claude/rius/credentials.json` (mode 0600).
-`RIUS_API_KEY` wins when both are present.
+`RIUS_API_KEY` wins for tracing when both are present. The bundled MCP
+server only ever uses the `/rius:login` key; with `RIUS_API_KEY` alone,
+register the MCP server by hand, as in
+[Exploring your traces](#exploring-your-traces-from-claude-code).
 
 The full list of variables is in the README's
 [Settings](../README.md#settings) table.
@@ -313,7 +320,7 @@ If `Spans exported this session` stays at 0, go to
 
 The Rius MCP server lets you ask Claude questions about the traces this
 plugin is producing, from inside Claude Code. The plugin bundles it as
-`rius`, using the same key as tracing, so after `/rius:login` there is
+`rius`, using the key `/rius:login` stored, so after `/rius:login` there is
 nothing to install: reconnect `rius` in `/mcp` (or restart Claude Code) and
 it is there. It connects to production unless `RIUS_MCP_URL` says otherwise.
 
@@ -397,6 +404,7 @@ Common causes, in the order they actually happen:
 | A plugin change has no effect | The marketplace cache is stale | `/plugin marketplace update rius-coding-agents`, then `/reload-plugins` |
 | `Last export error: rejected the API key (HTTP 403)` right after editing a key's scopes | Granting `ingest` takes about 30 seconds to reach the receiver | Wait half a minute and send another prompt |
 | The MCP server returns 403 but the key works for ingest | The key has `ingest` but not `read` | Mint a key carrying `read`, or add the scope |
+| The bundled `rius` MCP server returns 401 though `RIUS_API_KEY` is set | Claude Code does not pass credential-named variables to a plugin's `headersHelper`, so the bundled server has no key (`/rius:status` shows `MCP key: none`) | Run `/rius:login`, or register the server by hand with `--header` |
 | The MCP server shows no auth support, or will not connect | It was registered as a stdio command server, not an HTTP URL | Re-add it with `--transport http` and a URL |
 | A local MCP dev server fails the TLS handshake | `https://` against a plain-HTTP local port | Use `http://` for local ports |
 | Auth fails on a self-hosted deployment with no obvious reason | The Auth0 audience or the email-claim key does not match the configured string exactly | Both are exact-string matches; compare them character for character with the deployment's configuration |

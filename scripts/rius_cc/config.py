@@ -18,7 +18,7 @@ from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
 # Must match the default in .mcp.json, which cannot read this module.
-DEFAULT_MCP_URL = "https://mcp.eu.console.rius-glassflow.com/mcp"
+DEFAULT_MCP_URL = login.ENVIRONMENTS[login.DEFAULT_ENVIRONMENT]["mcp_url"]
 DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
 
@@ -246,12 +246,16 @@ def mcp_url(env: Mapping[str, str]) -> str:
 
 def misdirected_mcp_url(env: Mapping[str, str], home: str) -> Optional[str]:
     """The stored key's MCP URL when the bundled server points elsewhere, so
-    `/mcp` would present that key to the wrong environment. None when the
-    key comes from RIUS_API_KEY, which carries no MCP URL of its own."""
-    if env.get("RIUS_API_KEY"):
-        return None
+    `/mcp` would present that key to the wrong environment.
+
+    RIUS_API_KEY does not enter into it: Claude Code runs a plugin's
+    headersHelper without credential-named variables, so the bundled server
+    only ever sees the stored key."""
     creds = login.read_credentials(home)
-    wanted = (creds or {}).get("mcp_url")
+    if not creds:
+        return None
+    wanted = (creds.get("mcp_url")
+              or login.ENVIRONMENTS.get(creds.get("env"), {}).get("mcp_url"))
     if not isinstance(wanted, str) or not wanted:
         return None
     if wanted.rstrip("/") == mcp_url(env).rstrip("/"):

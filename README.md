@@ -230,7 +230,7 @@ and project `.claude/settings.json`/`settings.local.json`).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored. With neither, tracing is disabled regardless of every other setting. |
+| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored, for tracing. With neither, tracing is disabled regardless of every other setting. The bundled MCP server never sees it: Claude Code withholds credential-named variables from a plugin's `headersHelper`. |
 | `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. A key from `/rius:login` brings its own. |
 | `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
 | `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
@@ -341,8 +341,10 @@ this be tightened without guessing.
 ## Asking Claude about your traces
 
 The plugin bundles the Rius MCP server as `rius`, so you can query the
-traces it produces from inside Claude Code. It uses the same key as tracing
-(through a `headersHelper`, so the key never lands in an MCP config) and
+traces it produces from inside Claude Code. It uses the key `/rius:login`
+stored (through a `headersHelper`, so the key never lands in an MCP config;
+`RIUS_API_KEY` never reaches it, because Claude Code withholds
+credential-named variables from a plugin's helper) and
 connects to `https://mcp.eu.console.rius-glassflow.com/mcp`. After
 `/rius:login`, reconnect `rius` in `/mcp` or restart Claude Code.
 

@@ -23,6 +23,9 @@ def test_stored_login_key_becomes_the_bearer(tmp_path):
 
 
 def test_env_key_wins_as_it_does_for_tracing(tmp_path):
+    # Unit-level only: under Claude Code a plugin's headersHelper runs without
+    # credential-named variables, so RIUS_API_KEY never reaches the script and
+    # the stored key is what the bundled server actually uses.
     login._write_private(login.credentials_path(str(tmp_path)),
                          {"api_key": "ri_stored", "endpoint": "https://x"})
     assert _headers(str(tmp_path), {"RIUS_API_KEY": "ri_env"}) == {

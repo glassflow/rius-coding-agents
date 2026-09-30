@@ -141,6 +141,9 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
     print("MCP: %s" % config.mcp_url(os.environ))
+    print(_mcp_key_line(home))
+    if login.read_credentials(home):
+        print(_mcp_hint(home, " with this key"))
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
@@ -175,7 +178,15 @@ def _print_account(home, creds):
     if creds.get("workspace_name"):
         print("Workspace: %s%s" % (creds["workspace_name"], _in_org(creds)))
     print("Key expires: %s" % _date(creds.get("expires_at")))
-    print(_mcp_hint(home, " with this key"))
+
+
+def _mcp_key_line(home):
+    if login.read_credentials(home):
+        return "MCP key: /rius:login"
+    if os.environ.get("RIUS_API_KEY"):
+        return ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
+                "bundled MCP server; run /rius:login to query your traces.")
+    return "MCP key: none; run /rius:login to query your traces."
 
 
 def _mcp_hint(home, suffix=""):
@@ -242,7 +253,8 @@ def _login_wait(home, cwd):
         print(moved)
     if os.environ.get("RIUS_API_KEY"):
         print("NOTE: RIUS_API_KEY is set in your environment and still wins "
-              "over this key. Unset it to use the new one.")
+              "over this key for tracing. Unset it to trace with the new one. "
+              "The bundled MCP server uses the new key either way.")
 
 
 def _in_org(creds):

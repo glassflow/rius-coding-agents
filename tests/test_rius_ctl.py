@@ -435,7 +435,7 @@ def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
     home = _fresh_home(tmp_path)
     from rius_cc import login as _login
     _login._write_private(_login.credentials_path(home), {
-        "api_key": "ri_secret", "endpoint": "https://ingest", "env": "staging",
+        "api_key": "ri_secret", "endpoint": "https://ingest", "env": "production",
         "workspace_id": "w", "workspace_name": "eng-shared", "org_name": "Acme",
         "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"})
     r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
