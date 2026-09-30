@@ -26,6 +26,15 @@ span with its usage counted once, and every tool it called hangs beneath it.
 A response whose lines arrive over several hook events is re-sent under the
 same span id; the backend keeps the latest copy.
 
+**Each generation says what its prompt held**, as sizes, in
+`rius.context.sizes` (the attribute the Rius SDKs send). The console's
+Context panel uses it to split a call's prompt into user and assistant
+history, the current turn, and each tool's calls and results. Only byte
+sizes and tool names are sent, so it is sent with content capture off too.
+It is an estimate from the transcript: Claude Code's system prompt, its tool
+definitions and the reminders it injects are not in the transcript, and the
+panel shows them as unattributed.
+
 **Subagents are drilled into.** Claude Code does not write a subagent's work
 into the session transcript -- each subagent gets its own file under
 `~/.claude/projects/<project>/<session-id>/subagents/`, and the sibling

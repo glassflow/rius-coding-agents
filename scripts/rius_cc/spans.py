@@ -10,6 +10,8 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional
 
+from . import context_sizes
+
 PROVIDER_NAME = "anthropic"
 
 # The tool that spawns a subagent. It is "Agent" in Claude Code 2.1.x and was
@@ -179,12 +181,13 @@ def new_scope() -> dict:
     only -- all of it is persisted between hook invocations.
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
-            "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None}
+            "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None,
+            "context": None}
 
 
 def _generation_for(entry: Any, scope: dict, root_span_id: str,
-                    inline_sidechains: bool) -> dict:
-    """The generation (one API response) this assistant line belongs to.
+                    inline_sidechains: bool):
+    """(generation, is_its_first_line) for one assistant line.
 
     Claude Code writes ONE response as one line per content block, and every
     line repeats the response's usage. The lines are contiguous apart from
@@ -197,7 +200,7 @@ def _generation_for(entry: Any, scope: dict, root_span_id: str,
     key = entry.generation_key()
     gen = scope.get("open_gen")
     if isinstance(gen, dict) and gen.get("key") == key:
-        return gen
+        return gen, False
     if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
         # Only the main transcript: a Claude Code version that wrote
         # sidechain entries inline still nests them under the tool call.
@@ -212,9 +215,11 @@ def _generation_for(entry: Any, scope: dict, root_span_id: str,
         "parent_span_id": parent_span_id,
         "start_ns": scope["last_ns"] or entry.timestamp_ns,
         "offset": entry.offset,
+        # What the prompt held when this call was made: sizes, not content.
+        "context_sizes": context_sizes.snapshot(scope),
     }
     scope["open_gen"] = gen
-    return gen
+    return gen, True
 
 
 def _earlier_text(ctx: Ctx, source_path: str, gen: dict,
@@ -299,6 +304,9 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
     if stop_reason:
         attrs["gen_ai.response.finish_reasons"] = [stop_reason]
+    if gen.get("context_sizes"):
+        # Sizes, not content: sent whatever the capture setting.
+        attrs["rius.context.sizes"] = gen["context_sizes"]
     _content_attr(ctx, attrs, "output.value",
                   earlier_text + "".join(line.text() for line in lines))
 
@@ -334,6 +342,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
         if entry.kind == "user":
             tool_results = entry.tool_results()
             if tool_results:
+                result_sizes = []
                 for tr in tool_results:
                     tool_use_id = tr.get("tool_use_id")
                     link = links.get(tool_use_id)
@@ -342,13 +351,15 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # finished; its own transcript has no closing entry.
                         link["end_ns"] = entry.timestamp_ns
                     open_tool = scope["open_tools"].pop(tool_use_id, None)
+                    content = tr.get("content")
+                    content_str = content if isinstance(content, str) else json.dumps(content)
+                    result_sizes.append(context_sizes.tool_result_part(
+                        open_tool["tool_name"] if open_tool else "", content_str))
                     if open_tool is None:
                         continue  # tool started before instrumentation was enabled
                     if open_tool["span_id"] in scope["open_task_spans"]:
                         scope["open_task_spans"].remove(open_tool["span_id"])
                     is_error = bool(tr.get("is_error"))
-                    content = tr.get("content")
-                    content_str = content if isinstance(content, str) else json.dumps(content)
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs["gen_ai.tool.name"] = open_tool["tool_name"]
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
@@ -372,7 +383,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         attributes=attrs, status_code=status_code, status_message=status_message,
                         pending=False,
                     ))
-            elif make_turns:
+                context_sizes.tool_results(scope, result_sizes)
+            else:
+                context_sizes.user_text(scope, entry)
+            if make_turns and not tool_results:
                 if entry.prompt_id and entry.prompt_id not in scope["open_turns"]:
                     # Namespaced by scope: a subagent transcript carries the
                     # PARENT's promptId, so "turn:" + promptId alone would
@@ -402,7 +416,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     ))
 
         elif entry.kind == "assistant":
-            gen = _generation_for(entry, scope, root_span_id, inline_sidechains)
+            gen, first_line = _generation_for(entry, scope, root_span_id,
+                                              inline_sidechains)
+            context_sizes.assistant_line(scope, entry, first_line)
             batch_lines = batch_gens.setdefault(gen["key"], (gen, []))[1]
             batch_lines.append(entry)
             llm_span_id = gen["span_id"]

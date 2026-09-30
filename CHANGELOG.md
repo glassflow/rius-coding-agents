@@ -27,6 +27,12 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   define it. Anthropic's own count leaves them out (2 fresh tokens next to
   50k cached is normal), so Rius token totals left out every cached token.
   Thinking tokens are sent as `gen_ai.usage.reasoning.output_tokens`.
+- Each generation carries `rius.context.sizes`: the byte sizes of what its
+  prompt held (user and assistant history, the current turn, each tool's
+  calls and results), estimated from the transcript. The console's Context
+  panel showed only "cached prefix" and "fresh input" for Claude Code
+  sessions because the plugin sent neither content nor sizes. Sizes are not
+  content and are sent with capture off too.
 
 ## 0.4.1 (2026-09-30)
 
