@@ -36,15 +36,18 @@ output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
 ```
 /plugin marketplace add glassflow/rius-coding-agents
 /plugin install rius@rius-coding-agents
+/rius:login
 /rius:enable-here
 /rius:status
 ```
 
-That is the whole flow once a Rius API key is in the environment Claude Code
-passes to hooks. If you don't have a key yet, or `/rius:status` doesn't say
-`on`, the [getting started guide](docs/getting-started.md) covers the rest
-end to end: workspace, key and scopes, endpoints, where to put the key,
-first trace, the Rius MCP server, and troubleshooting.
+`/rius:login` opens the Rius console (`https://console.rius-glassflow.com`)
+in the browser, where you sign in or sign up and pick the workspace this
+machine sends to; the plugin stores a key for it. That is the whole flow.
+If `/rius:status` doesn't say `on`, the
+[getting started guide](docs/getting-started.md) covers the rest end to end:
+workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
+server, and troubleshooting.
 
 ## Install
 
@@ -82,9 +85,7 @@ Your path rules and stored key live under `~/.claude/rius/` and carry over.
 /plugin install rius@rius-coding-agents
 ```
 
-This works against a private `github.com/glassflow/rius-coding-agents` repo
-using your existing git credentials -- no extra auth step is needed if you can
-already `git clone` the repo.
+The repo is public, so no GitHub credentials are needed.
 
 ### Updating an installed plugin
 
@@ -126,10 +127,12 @@ native run.
 
 ## Getting a Rius workspace and API key
 
-`RIUS_API_KEY` is the one thing the plugin cannot do without, and it comes
-from Rius, not from this repo. The short version:
+The plugin cannot do anything without a Rius API key. `/rius:login` gets
+you one without leaving Claude Code. To mint one by hand instead, for
+`RIUS_API_KEY`, the short version is:
 
-- Log in to the Rius console in a browser. A `Default` workspace is created
+- Log in to the Rius console (`https://console.rius-glassflow.com`) in a
+  browser. A `Default` workspace is created
   for an identity that has none the first time it lists workspaces, so for
   most people that is the whole workspace step. Creating further workspaces
   explicitly is restricted to organization admins.
@@ -165,14 +168,15 @@ default-off behavior exists so that installing the plugin can never silently
 start uploading a repo nobody has thought about -- see
 [What gets sent](#what-gets-sent----read-this-before-enabling-anything).
 
-You also need `RIUS_API_KEY` set (see [Settings](#settings)). Without it,
-tracing stays off regardless of any other setting.
+You also need a key: `/rius:login`, or `RIUS_API_KEY` (see
+[Settings](#settings)). Without one, tracing stays off regardless of any
+other setting.
 
 ## `/rius:*` commands
 
 | Command | Effect |
 |---|---|
-| `/rius:login` | Sign in in the browser, pick the workspace this machine sends to, and store a key for it. |
+| `/rius:login` | Sign in in the browser, pick the workspace this machine sends to, and store a key for it. Production by default; `/rius:login --env staging` for staging. |
 | `/rius:enable-here` | Add the current working directory to the persistent path rules. This is the normal way to turn tracing on. |
 | `/rius:disable-here` | Stop tracing the current working directory and everything under it. A disabled folder beats any enabled parent. |
 | `/rius:status` | Print the resolved on/off state, the rule that decided it, the signed-in account, the endpoint, the redacted API key, spans exported so far, and the last export error if there was one. |
@@ -226,8 +230,10 @@ and project `.claude/settings.json`/`settings.local.json`).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RIUS_API_KEY` | unset | Required. Without it, tracing is disabled regardless of every other setting. |
-| `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. |
+| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored. With neither, tracing is disabled regardless of every other setting. |
+| `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. A key from `/rius:login` brings its own. |
+| `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
+| `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
 | `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
 | `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
@@ -334,30 +340,24 @@ this be tightened without guessing.
 
 ## Asking Claude about your traces
 
-The Rius MCP server is a separate, optional install that lets you query the
-traces this plugin produces from inside Claude Code. Register it as an HTTP
-URL server -- registering it as a stdio command server is the most common
-setup mistake and surfaces as an auth failure:
+The plugin bundles the Rius MCP server as `rius`, so you can query the
+traces it produces from inside Claude Code. It uses the same key as tracing
+(through a `headersHelper`, so the key never lands in an MCP config) and
+connects to `https://mcp.eu.console.rius-glassflow.com/mcp`. After
+`/rius:login`, reconnect `rius` in `/mcp` or restart Claude Code.
 
-```bash
-claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp
-```
+A staging key needs `RIUS_MCP_URL` pointed at the staging MCP host before
+Claude Code starts: `.mcp.json` can only expand environment variables, so
+the plugin cannot follow the stored key there by itself. `/rius:login` and
+`/rius:status` print the exact setting when it is needed.
 
-That form uses the interactive OAuth browser login. For headless use, send a
-`read`-scoped key as a static bearer header instead:
-
-```bash
-claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp \
-  --header "Authorization: Bearer ${RIUS_API_KEY}"
-```
-
-The ingest-only key this plugin uses is rejected with a 403 there; the MCP
-server needs `read`. With it connected, questions like "which of my sessions
+The server needs a `read`-scoped key; a hand-minted ingest-only key is
+rejected with a 403. With it connected, questions like "which of my sessions
 in the last 24 hours cost the most, and what did the tokens go on?" or "show
 the waterfall for my last errored trace and say which tool call failed" are
 answerable in chat. The
 [getting started guide](docs/getting-started.md#exploring-your-traces-from-claude-code)
-lists all 13 tools.
+lists the main tools and how to register the server without the plugin.
 
 ## Heartbeat
 
@@ -384,7 +384,9 @@ resumed session continues the same trace but reports as a new instance.
 - Span exports go only to the configured `RIUS_ENDPOINT` (or the endpoint
   stored with the `/rius:login` key). `/rius:login`, `/rius:logout` and a
   re-login's revoke of the previous key also call the sign-in host
-  (`connect.staging.rius.glassflow.xyz` on staging). Nothing else is
+  (`connect.console.rius-glassflow.com`, or
+  `connect.staging.rius.glassflow.xyz` on staging), and the bundled MCP
+  server talks to `RIUS_MCP_URL` when you use it. Nothing else is
   contacted.
 - The API key is never logged. `/rius:status` and debug logs print it
   redacted (prefix plus an ellipsis).

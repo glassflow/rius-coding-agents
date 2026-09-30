@@ -297,6 +297,7 @@ cwd: /Users/you/some/repo
 session: 0f1d...
 Platform: darwin (locking: fcntl.flock, liveness: os.kill(pid, 0))
 Endpoint: https://ingest.eu.console.rius-glassflow.com
+MCP: https://mcp.eu.console.rius-glassflow.com/mcp
 API key: ri_…
 Spans exported this session: 12
 ```
