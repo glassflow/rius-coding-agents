@@ -65,6 +65,9 @@ _PENDING_ALLOWED_KEYS = {
     "cc.turn.source",
     "cc.subagent.id",
     "cc.subagent.depth",
+    # The session id this one continues (Claude Code moved the conversation
+    # to a new id). An id, not content.
+    "cc.continued_from",
 }
 
 
@@ -385,7 +388,7 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
     if entries and not state.get("root_started"):
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
-        attrs = _base_attrs(ctx, "AGENT")
+        attrs = _root_attrs(ctx, state)
         attrs["glassflow.span.pending"] = True
         out.append(Span(
             trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
@@ -477,6 +480,13 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     return out
 
 
+def _root_attrs(ctx: Ctx, state: dict) -> Dict[str, Any]:
+    attrs = _base_attrs(ctx, "AGENT")
+    if state.get("continued_from"):
+        attrs["cc.continued_from"] = state["continued_from"]
+    return attrs
+
+
 def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     """Close everything still open, so no span of the trace stays pending."""
     trace_id = trace_id_for(ctx.session_id)
@@ -492,7 +502,7 @@ def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
         # Unix epoch, which draws as a 56-year bar.
         return out
     root_span_id = span_id_for("session:" + ctx.session_id)
-    attrs = _base_attrs(ctx, "AGENT")
+    attrs = _root_attrs(ctx, state)
     out.append(Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
         name="claude-code session", kind_oi="AGENT",

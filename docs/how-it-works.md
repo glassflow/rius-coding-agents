@@ -62,6 +62,18 @@ what you'd expect from your Anthropic bill or API logs, expect it to run
 long, sometimes by a lot. There is no signal in the transcript that would let
 this be tightened without guessing.
 
+## A conversation moved to a new session id
+
+When Claude Code sends a session to the background, it continues the
+conversation under a new session id. It records the move in the old
+transcript (a `continued-in` entry naming the new id) and starts the new
+transcript with a copy of the whole history. The plugin follows that record:
+the new session's trace starts with the first new entry, skips the copied
+history the old session already sent, and carries `cc.continued_from` with the
+old session id. The old session gets no `SessionEnd`, so its trace is
+closed at the moment of the move. The conversation is then two traces, one
+before the move and one after, with nothing counted twice.
+
 ## Heartbeat
 
 A small background process pings the endpoint every 15 seconds while a

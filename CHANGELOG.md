@@ -9,6 +9,14 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 - `/rius:status` says when a session was stopped by a mid-session disable:
   it reads `Rius tracing: off` with a `Stopped:` line, instead of the `on`
   the folder rules alone would give.
+- A conversation Claude Code moves to a new session id (sending a session
+  to the background does this) is traced once. The new session's
+  transcript opens with a copy of the whole history, and the plugin sent it
+  all again as a second trace: both traces started at the same
+  millisecond, and every token, cost and error before the move counted
+  twice. The new session now skips what the old one sent and records
+  `cc.continued_from`, and the old session's trace, which never gets a
+  `SessionEnd`, is closed at the moment of the move.
 
 ## 0.4.1 (2026-09-30)
 

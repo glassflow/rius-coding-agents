@@ -12,8 +12,8 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, log as rius_log, otlp, platform_compat, spans,
-                     state, subagents, transcript)
+from rius_cc import (config, continuation, log as rius_log, otlp,
+                     platform_compat, spans, state, subagents, transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -175,7 +175,8 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg) -> int:
     return len(out)
 
 
-def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
+def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home,
+                 end_ns=None) -> int:
     """A session whose folder was disabled after its trace started.
 
     Disabling beats enabling for content, and for good: the session is
@@ -201,7 +202,7 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
         service_name=cfg.service_name, capture_content=False,
         max_attr_bytes=cfg.max_attr_bytes,
     )
-    now_ns = _now_ns()
+    now_ns = end_ns or _now_ns()
     out = []
     try:
         out += subagents.finalize(
@@ -221,8 +222,66 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
                  home, cfg)
 
 
+def _stop_heartbeat(session_id: str, home: str) -> None:
+    """What hook.py does on SessionEnd: tell that session's pinger to stop."""
+    try:
+        with open(os.path.join(state.state_dir(home),
+                               session_id + ".heartbeat.stop"), "w") as fh:
+            fh.write("")
+    except OSError:
+        pass
+
+
+def _close_predecessor(old_id, old_path, switch_ns, cwd, env, home) -> None:
+    """End the trace of the session this one continues, at the switch.
+
+    Its process never gets a SessionEnd, so without this its trace stays
+    open for good. It is closed exactly as its own SessionEnd would have
+    closed it -- including #7's rules for a session that was stopped -- and
+    only if it is still open.
+    """
+    if not state.trace_is_open(state.load(old_id, home)):
+        return
+    run("SessionEnd", {"session_id": old_id, "cwd": cwd,
+                       "transcript_path": old_path}, env, home,
+        end_ns=switch_ns or None)
+    _stop_heartbeat(old_id, home)
+
+
+def _skip_continued_history(st, entries, session_id, transcript_path, cwd,
+                            env, home, cfg):
+    """Drop the history Claude Code copied from the session this continues.
+
+    Checked once, on the first read that has entries: the copy is written
+    when the new session starts, before its first hook. The old
+    transcript's uuids are read only while the copied prefix lasts.
+    """
+    if entries and not st.get("continuation_checked"):
+        st["continuation_checked"] = True
+        found = continuation.find_predecessor(transcript_path, session_id)
+        if found:
+            old_id, old_path, switch_ns = found
+            st["continued_from"] = old_id
+            st["continued_from_path"] = old_path
+            st["skipping_copied"] = True
+            _log(home, cfg, "session %s: continues session %s; skipping the "
+                            "history it already sent" % (session_id, old_id))
+            try:
+                _close_predecessor(old_id, old_path, switch_ns, cwd, env, home)
+            except Exception as exc:
+                _log(home, cfg, "session %s: closing session %s failed: %r"
+                     % (session_id, old_id, exc), force=True)
+    if st.get("skipping_copied") and entries:
+        uuids = continuation.copied_uuids(st.get("continued_from_path") or "")
+        entries, ended = continuation.drop_copied(entries, uuids)
+        if ended:
+            st["skipping_copied"] = False
+    return entries
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
-        instance_id: str = "") -> int:
+        instance_id: str = "", end_ns=None) -> int:
+    """`end_ns` closes the session at that time instead of now (SessionEnd)."""
     cfg = None
     try:
         session_id = payload.get("session_id")
@@ -251,7 +310,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             st = state.load(session_id, home)
             if not cfg.enabled or st.get("content_stopped"):
                 return _run_stopped(event, st, cfg, session_id, cwd,
-                                    transcript_path, home)
+                                    transcript_path, home, end_ns=end_ns)
 
             # Mint and persist the instance id unconditionally, before any
             # export decision. A heartbeat pinger starts at SessionStart and
@@ -271,6 +330,9 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             entries, new_offset = transcript.read_from(
                 transcript_path, st.get("offset", 0), stats=read_stats)
             _note_skipped_lines(home, cfg, session_id, st, read_stats)
+            entries = _skip_continued_history(st, entries, session_id,
+                                              transcript_path, cwd, env, home,
+                                              cfg)
 
             first_cwd = cwd
             first_git_branch = ""
@@ -303,7 +365,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 _log(home, cfg, "session %s: subagent expansion failed: %r"
                      % (session_id, exc), force=True)
 
-            now_ns = _now_ns()
+            now_ns = end_ns or _now_ns()
             if event == "Stop":
                 out += spans.finalize_turn(st, ctx, now_ns)
             elif event == "SessionEnd":
