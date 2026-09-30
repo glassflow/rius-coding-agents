@@ -52,7 +52,7 @@ class Entry:
     __slots__ = (
         "uuid", "parent_uuid", "kind", "timestamp_ns", "session_id",
         "is_sidechain", "cwd", "git_branch", "cc_version", "prompt_id",
-        "message", "raw",
+        "message", "raw", "offset",
     )
 
     def __init__(self, raw: Dict[str, Any]) -> None:
@@ -68,6 +68,10 @@ class Entry:
         self.cc_version = raw.get("version") or ""
         self.prompt_id = raw.get("promptId")
         self.message = raw.get("message") or {}
+        # Byte offset of this entry's line in its file; -1 when it was not
+        # read from one. Lets a caller re-read a range later instead of
+        # keeping the entries' content in the state file.
+        self.offset = -1
 
     def _blocks(self, block_type: str) -> List[Dict[str, Any]]:
         content = self.message.get("content")
@@ -75,6 +79,18 @@ class Entry:
             return []
         return [b for b in content
                 if isinstance(b, dict) and b.get("type") == block_type]
+
+    def generation_key(self) -> str:
+        """What identifies the API response this line belongs to.
+
+        Claude Code writes one response as one line per content block, all
+        sharing `message.id`. A line without one (older versions,
+        hand-written fixtures) is its own response, keyed by its uuid.
+        """
+        mid = self.message.get("id")
+        if isinstance(mid, str) and mid:
+            return mid
+        return self.uuid
 
     def tool_uses(self) -> List[Dict[str, Any]]:
         return self._blocks("tool_use")
@@ -162,6 +178,7 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None
         if nl == -1:
             break
         raw_line = buf[start:nl]
+        line_offset = offset + start
         start = nl + 1
         consumed = offset + start
         try:
@@ -173,9 +190,39 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None
             continue
         entry, reason = parse_line_ex(text)
         if entry is not None:
+            entry.offset = line_offset
             entries.append(entry)
         elif reason is not None:
             skipped += 1
             if first_reason is None:
                 first_reason = reason
     return finish(entries, consumed)
+
+
+def read_between(path: str, start: int, end: int) -> List[Entry]:
+    """The complete entries whose lines start in [start, end) of `path`.
+
+    For re-reading a stretch the caller has already consumed; returns [] on
+    any trouble rather than raising, like read_from.
+    """
+    if start < 0 or end <= start:
+        return []
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            buf = fh.read(end - start)
+    except OSError:
+        return []
+    out: List[Entry] = []
+    pos = 0
+    for raw_line in buf.split(b"\n"):
+        line_offset = start + pos
+        pos += len(raw_line) + 1
+        try:
+            entry = parse_line(raw_line.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+        if entry is not None:
+            entry.offset = line_offset
+            out.append(entry)
+    return out

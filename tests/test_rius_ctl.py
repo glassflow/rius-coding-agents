@@ -519,3 +519,42 @@ def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
     assert "Key expires: 2026-12-26" in r.stdout
     assert 'Reconnect "rius" in /mcp' in r.stdout
     assert "ri_secret" not in r.stdout
+
+
+# --- a session stopped by a mid-session disable -------------------------------
+
+STOPPED_NOTE = ("Stopped: this session stopped tracing when its folder was "
+                "disabled, and stays stopped even if the folder is enabled "
+                "again. New sessions in this folder are traced as usual.")
+
+
+def _stop_session(home, sid="s1"):
+    from rius_cc import state as _state
+    _state.save(sid, home, {"root_started": True, "content_stopped": True})
+
+
+def test_status_of_a_stopped_session_in_an_enabled_folder_says_off(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    _stop_session(home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in r.stdout
+    assert "Rius tracing: on" not in r.stdout
+    assert STOPPED_NOTE in r.stdout
+
+
+def test_status_of_a_stopped_session_in_a_disabled_folder_explains_it(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    _stop_session(home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in r.stdout
+    assert STOPPED_NOTE in r.stdout
+
+
+def test_status_of_a_session_that_was_never_stopped_is_unchanged(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: on" in r.stdout
+    assert "Stopped:" not in r.stdout

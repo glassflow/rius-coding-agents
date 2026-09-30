@@ -6,6 +6,35 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## Unreleased
 
+- `/rius:status` says when a session was stopped by a mid-session disable:
+  it reads `Rius tracing: off` with a `Stopped:` line, instead of the `on`
+  the folder rules alone would give.
+- Each model API response is one generation span. Claude Code writes a
+  response as one transcript line per content block, each repeating the
+  usage, and the plugin made a span per line: tokens and cost were counted
+  once per block, often 2-6 times over. Lines are now grouped by
+  `message.id`, the usage is counted once (from the response's last line,
+  since streamed subagent lines carry partial counts), and the response's
+  tool calls all sit under it.
+- Background subagents' model calls are traced. A background subagent's
+  `Agent` call returns a launch acknowledgement at once, and the plugin
+  stopped reading the subagent's file there, when it held only the brief:
+  the subagent showed 0 tokens and no children, and its span ended at the
+  acknowledgement. The file is now read for as long as it grows, and the
+  subagent's span runs from its first line to its last, not from the
+  `Agent` tool_use line, which can be stamped tens of seconds before a
+  parallel batch of subagents starts.
+- `gen_ai.usage.input_tokens` includes the cache reads and writes, as the
+  OTel GenAI conventions, the Rius attribute reference and the Rius SDKs
+  define it. Anthropic's own count leaves them out (2 fresh tokens next to
+  50k cached is normal), so Rius token totals left out every cached token.
+  Thinking tokens are sent as `gen_ai.usage.reasoning.output_tokens`.
+- Each generation carries `rius.context.sizes`: the byte sizes of what its
+  prompt held (user and assistant history, the current turn, each tool's
+  calls and results), estimated from the transcript. The console's Context
+  panel showed only "cached prefix" and "fresh input" for Claude Code
+  sessions because the plugin sent neither content nor sizes. Sizes are not
+  content and are sent with capture off too.
 - A failed tool call carries an `exception` event whose type is the tool
   and how it failed (`Bash.exit_1`, `Write.tool_error`) and whose message is
   the one line that says why, such as a traceback's last line. The console

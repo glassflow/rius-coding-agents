@@ -161,7 +161,7 @@ versus
 
 ```
 Rius tracing: off
-Reason: off: RIUS_API_KEY is not set
+Reason: off: no API key: run `/rius:login` (or set RIUS_API_KEY)
 ```
 
 Those are different problems (folder not enabled vs. missing key), and the

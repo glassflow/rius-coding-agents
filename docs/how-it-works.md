@@ -10,13 +10,30 @@ One trace per Claude Code session, shaped as a waterfall:
 ```
 AGENT   session root
 └─ CHAIN  turn (one user prompt and everything it caused)
-   └─ LLM   generation (one assistant message: model, token counts, cache reads)
+   └─ LLM   generation (one model API response: model, token counts, cache reads)
       ├─ TOOL  tool call (input and output)
       └─ TOOL  Agent (the call that spawned a subagent)
          └─ AGENT  the subagent, named by its agent type
             └─ LLM   the subagent's own generation
                └─ TOOL  a tool the subagent called
 ```
+
+**One generation per API response.** Claude Code writes a single model
+response as several transcript lines, one per content block (thinking, text,
+each tool call), and every line repeats the response's token usage. The
+plugin groups the lines by their `message.id`, so each response is one `LLM`
+span with its usage counted once, and every tool it called hangs beneath it.
+A response whose lines arrive over several hook events is re-sent under the
+same span id; the backend keeps the latest copy.
+
+**Each generation says what its prompt held**, as sizes, in
+`rius.context.sizes` (the attribute the Rius SDKs send). The console's
+Context panel uses it to split a call's prompt into user and assistant
+history, the current turn, and each tool's calls and results. Only byte
+sizes and tool names are sent, so it is sent with content capture off too.
+It is an estimate from the transcript: Claude Code's system prompt, its tool
+definitions and the reminders it injects are not in the transcript, and the
+panel shows them as unattributed.
 
 **Subagents are drilled into.** Claude Code does not write a subagent's work
 into the session transcript -- each subagent gets its own file under
@@ -27,6 +44,14 @@ its generations and tool calls beneath. This is not a detail: in the session
 this was built against, **58% of all tokens and 71% of all model calls were
 inside subagents**, and a trace that stopped at the tool call reported less
 than half of what the session cost.
+
+Background subagents are followed to the end. Claude Code 2.1.x runs a
+subagent in the background by default: its `Agent` tool call returns a launch
+acknowledgement within a second, and the subagent keeps working for minutes
+afterwards. The plugin keeps reading the subagent's file as it grows, so its
+model calls land under its `AGENT` span, and that span runs from the
+subagent's first transcript line to its last rather than ending at the
+acknowledgement.
 
 The subagent's span carries `gen_ai.agent.name` (its agent type, e.g.
 `general-purpose`), its own model and its description, so each subagent is
@@ -55,7 +80,7 @@ timestamps (the entry carrying the `tool_use` and the matching
 Generation span durations are not. The Claude Code transcript only records
 *completion* times -- nothing in it marks when a request was actually
 dispatched to the model. So a generation's start is taken as the timestamp of
-the preceding entry, and its duration ends up absorbing whatever happened
+the entry before its first line, its end is the timestamp of its last line, and its duration ends up absorbing whatever happened
 before the call actually went out: user think time, a permission prompt,
 queuing behind a tool call. If you compare a generation's duration against
 what you'd expect from your Anthropic bill or API logs, expect it to run
