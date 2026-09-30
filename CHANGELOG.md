@@ -20,6 +20,10 @@ Production is the default.
 - `/rius:status` prints the MCP URL in use. When the stored key belongs to
   another environment, `/rius:status` and the login flow print the
   `RIUS_MCP_URL=` setting that fixes it.
+- The bundled MCP server always uses the `/rius:login` key. Claude Code
+  withholds credential-named variables from a plugin's headers helper, so
+  `RIUS_API_KEY` applies to tracing only. `/rius:status` prints which key
+  the MCP server has (`MCP key:`).
 - README and getting started cover production hosts, with staging as its
   own section. Reference material moved from the README into `docs/`
   pages, and the design records moved to `docs/design/`.
