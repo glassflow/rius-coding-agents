@@ -3,7 +3,7 @@
 
 Actions: on | off | clear | enable-here | disable-here | status | login |
          login-wait | logout
-Flags:   --session <id>   --cwd <path>
+Flags:   --session <id>   --cwd <path>   --env <name> (login only)
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
 to run without an explicit `--session`: guessing the session (from the most
@@ -28,7 +28,7 @@ from rius_cc import config, login, platform_compat, state  # noqa: E402
 USAGE = (
     "Usage: rius_ctl.py "
     "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout> "
-    "[--session <id>] [--cwd <path>]"
+    "[--session <id>] [--cwd <path>] [--env <production|staging>]"
 )
 
 # Actions that WRITE a per-session override. These must never guess which
@@ -65,19 +65,15 @@ def _parse_args(argv):
     # No action (just the flags) means `status`.
     has_action = bool(argv) and not argv[0].startswith("--")
     action = argv[0] if has_action else "status"
-    session_id = None
-    cwd = None
+    flags = {"--session": None, "--cwd": None, "--env": None}
     i = 1 if has_action else 0
     while i < len(argv):
-        if argv[i] == "--session" and i + 1 < len(argv):
-            session_id = argv[i + 1]
-            i += 2
-        elif argv[i] == "--cwd" and i + 1 < len(argv):
-            cwd = argv[i + 1]
+        if argv[i] in flags and i + 1 < len(argv):
+            flags[argv[i]] = argv[i + 1]
             i += 2
         else:
             i += 1
-    return action, session_id, cwd
+    return action, flags["--session"], flags["--cwd"], flags["--env"]
 
 
 def _most_recent_session(home):
@@ -144,12 +140,13 @@ def _print_status(session_id, cwd, home, inferred=False):
         print("session: %s" % session_id)
     print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
+    print("MCP: %s" % config.mcp_url(os.environ))
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
     _print_rule(cwd, home)
     if cfg.key_source == config.STORED_KEY_SOURCE:
-        _print_account(login.read_credentials(home) or {})
+        _print_account(home, login.read_credentials(home) or {})
     spans = _spans_exported(session_id, home)
     if spans is not None:
         print("Spans exported this session: %s" % spans)
@@ -172,19 +169,32 @@ def _print_rule(cwd, home):
               % (match[0], "enables" if match[1] else "disables"))
 
 
-def _print_account(creds):
+def _print_account(home, creds):
     if creds.get("email"):
         print("Signed in as: %s" % creds["email"])
     if creds.get("workspace_name"):
         print("Workspace: %s%s" % (creds["workspace_name"], _in_org(creds)))
     print("Key expires: %s" % _date(creds.get("expires_at")))
-    print('Reconnect "rius" in /mcp to query your traces with this key.')
+    print(_mcp_hint(home, " with this key"))
 
 
-def _login(home, cwd):
+def _mcp_hint(home, suffix=""):
+    wanted = config.misdirected_mcp_url(os.environ, home)
+    if wanted is None:
+        return 'Reconnect "rius" in /mcp to query your traces%s.' % suffix
+    return ('This key\'s MCP server is %s, but the bundled "rius" server points '
+            "at %s. To query your traces, restart Claude Code with "
+            "RIUS_MCP_URL=%s set." % (wanted, config.mcp_url(os.environ), wanted))
+
+
+def _login(home, cwd, env_flag=None):
     print(login.DISCLOSURE)
     print()
-    pending = login.start(home)
+    env_name = login.choose_environment(env_flag, os.environ)
+    pending = login.start(home, env_name)
+    if env_name != login.DEFAULT_ENVIRONMENT:
+        print("Environment: %s (%s)"
+              % (env_name, login.ENVIRONMENTS[env_name]["console_url"]))
     _open_browser(pending["connect_url"])
     print(_pending_line(cwd))
     print("Open:  %s" % pending["connect_url"])
@@ -226,7 +236,7 @@ def _login_wait(home, cwd):
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
-    print('Reconnect "rius" in /mcp to query your traces.')
+    print(_mcp_hint(home))
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
         print(moved)
@@ -268,10 +278,13 @@ def _date(timestamp):
     return timestamp[:10] if isinstance(timestamp, str) else "unknown"
 
 
-def _run_account_action(action, home, cwd):
-    handler = {"login": _login, "login-wait": _login_wait, "logout": _logout}[action]
+def _run_account_action(action, home, cwd, env_flag):
+    cwd = cwd or os.getcwd()
+    handlers = {"login": lambda: _login(home, cwd, env_flag),
+                "login-wait": lambda: _login_wait(home, cwd),
+                "logout": lambda: _logout(home, cwd)}
     try:
-        handler(home, cwd or os.getcwd())
+        handlers[action]()
     except (login.WaitInProgress, login.Superseded) as exc:
         print(exc)
     except login.LoginError as exc:
@@ -279,10 +292,10 @@ def _run_account_action(action, home, cwd):
 
 
 def dispatch(argv, home):
-    action, session_id, cwd = _parse_args(argv)
+    action, session_id, cwd, env_flag = _parse_args(argv)
 
     if action in ("login", "login-wait", "logout"):
-        _run_account_action(action, home, cwd)
+        _run_account_action(action, home, cwd, env_flag)
         return
 
     inferred = False

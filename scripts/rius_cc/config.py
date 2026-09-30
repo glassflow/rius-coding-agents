@@ -17,6 +17,8 @@ from . import login
 from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
+# Must match the default in .mcp.json, which cannot read this module.
+DEFAULT_MCP_URL = "https://mcp.eu.console.rius-glassflow.com/mcp"
 DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
 
@@ -234,6 +236,27 @@ def _credential(env: Mapping[str, str], home: str):
         return (creds["api_key"], endpoint, STORED_KEY_SOURCE,
                 creds.get("workspace_name"))
     return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
+
+
+def mcp_url(env: Mapping[str, str]) -> str:
+    """The URL the bundled MCP server connects to: .mcp.json expands
+    RIUS_MCP_URL and nothing else, so the stored credential cannot steer it."""
+    return env.get("RIUS_MCP_URL") or DEFAULT_MCP_URL
+
+
+def misdirected_mcp_url(env: Mapping[str, str], home: str) -> Optional[str]:
+    """The stored key's MCP URL when the bundled server points elsewhere, so
+    `/mcp` would present that key to the wrong environment. None when the
+    key comes from RIUS_API_KEY, which carries no MCP URL of its own."""
+    if env.get("RIUS_API_KEY"):
+        return None
+    creds = login.read_credentials(home)
+    wanted = (creds or {}).get("mcp_url")
+    if not isinstance(wanted, str) or not wanted:
+        return None
+    if wanted.rstrip("/") == mcp_url(env).rstrip("/"):
+        return None
+    return wanted
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:

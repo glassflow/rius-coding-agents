@@ -39,12 +39,17 @@ LOCK_WAIT_SECONDS = 10.0
 LOCK_RETRY_SECONDS = 0.25
 
 ENVIRONMENTS = {
+    "production": {
+        "link_base": "https://connect.console.rius-glassflow.com",
+        "console_url": "https://console.rius-glassflow.com",
+    },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
     },
 }
-DEFAULT_ENVIRONMENT = "staging"
+DEFAULT_ENVIRONMENT = "production"
+ENVIRONMENT_VAR = "RIUS_ENV"
 
 DISCLOSURE = (
     "Folders you enable send full sessions (prompts, replies, file contents, "
@@ -209,9 +214,22 @@ def _link_base(env_name: Optional[str]) -> str:
     return env["link_base"]
 
 
+def choose_environment(flag: Optional[str], env) -> str:
+    """`--env` beats RIUS_ENV beats production."""
+    return flag or env.get(ENVIRONMENT_VAR) or DEFAULT_ENVIRONMENT
+
+
+def _require_known(env_name: str) -> None:
+    # A typo must not quietly sign the user in to production instead.
+    if env_name not in ENVIRONMENTS:
+        raise LoginError("Unknown environment %r. Choose one of: %s."
+                         % (env_name, ", ".join(sorted(ENVIRONMENTS))))
+
+
 def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
           post: Callable = post_json, now: Callable = time.time) -> dict:
     """Create an agent link and park it on disk for `wait`."""
+    _require_known(env_name)
     url = _link_base(env_name) + "/v1/agent-links"
     try:
         status, body = post(url, {"client_name": socket.gethostname()[:64]})

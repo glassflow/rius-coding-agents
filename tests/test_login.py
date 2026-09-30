@@ -15,7 +15,8 @@ import rius_ctl
 from rius_cc import config, login, platform_compat
 
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
-LINK_BASE = login.ENVIRONMENTS["staging"]["link_base"]
+LINK_BASE = "https://connect.console.rius-glassflow.com"
+STAGING_LINK_BASE = "https://connect.staging.rius.glassflow.xyz"
 DEVICE_CODE = "dc_Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eHF1dXg"
 
 LINK_RESPONSE = {
@@ -25,8 +26,8 @@ LINK_RESPONSE = {
     "interval": 5, "expires_in": 900,
 }
 TOKEN_RESPONSE = {
-    "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.staging",
-    "mcp_url": "https://mcp.eu.staging/mcp",
+    "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console",
+    "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
     "workspace_id": "22222222-2222-2222-2222-222222222222",
     "workspace_name": "eng-shared", "org_name": "Acme",
     "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z",
@@ -76,7 +77,7 @@ def _mode(path):
 
 def _store(home, **overrides):
     creds = {"api_key": "ri_stored", "endpoint": "https://ingest.stored",
-             "env": "staging", "workspace_id": "33333333-3333-3333-3333-333333333333",
+             "env": "production", "workspace_id": "33333333-3333-3333-3333-333333333333",
              "workspace_name": "personal", "org_name": "Me",
              "email": "x@acme.com", "expires_at": "2026-12-01T00:00:00Z"}
     creds.update(overrides)
@@ -135,8 +136,9 @@ def test_pending_then_success_stores_private_credentials(tmp_path):
     post = scripted(PENDING, (200, TOKEN_RESPONSE))
     creds = _wait(home, clock, post)
     assert creds == {
-        "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.staging",
-        "mcp_url": "https://mcp.eu.staging/mcp", "env": "staging",
+        "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console",
+        "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
+        "env": "production",
         "workspace_id": "22222222-2222-2222-2222-222222222222",
         "workspace_name": "eng-shared", "org_name": "Acme",
         "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"}
@@ -489,12 +491,13 @@ def server(monkeypatch):
         monkeypatch.setattr(login, "_send", fake)
         monkeypatch.setattr(rius_ctl, "_open_browser", lambda url: None)
         return fake
-    monkeypatch.delenv("RIUS_API_KEY", raising=False)
+    for name in ("RIUS_API_KEY", "RIUS_ENV", "RIUS_MCP_URL"):
+        monkeypatch.delenv(name, raising=False)
     return install
 
 
 def _park(home, **overrides):
-    pending = {"env": "staging", "link_id": "l1", "device_code": DEVICE_CODE,
+    pending = {"env": "production", "link_id": "l1", "device_code": DEVICE_CODE,
                "user_code": "ABCD-EFGH", "connect_url": "https://c/pick",
                "interval": 0, "expires_at": 4102444800}
     pending.update(overrides)
@@ -707,3 +710,175 @@ def test_login_wait_without_login_fails_politely(tmp_path):
     r = _ctl(["login-wait"], str(tmp_path))
     assert r.returncode == 0
     assert "no sign-in in progress" in r.stdout
+
+
+# --- environments --------------------------------------------------------------
+
+def test_production_is_the_default_environment(tmp_path):
+    post = scripted((201, LINK_RESPONSE))
+    pending = login.start(str(tmp_path), post=post, now=Clock().now)
+    assert post.calls[0][0] == LINK_BASE + "/v1/agent-links"
+    assert pending["env"] == "production"
+    assert login.ENVIRONMENTS["production"]["console_url"] == \
+        "https://console.rius-glassflow.com"
+
+
+def test_staging_is_reached_only_when_asked_for(tmp_path):
+    post = scripted((201, LINK_RESPONSE))
+    pending = login.start(str(tmp_path), env_name="staging", post=post,
+                          now=Clock().now)
+    assert post.calls[0][0] == STAGING_LINK_BASE + "/v1/agent-links"
+    assert pending["env"] == "staging"
+
+
+def test_an_unknown_environment_is_refused_not_sent_to_production(tmp_path):
+    post = scripted()
+    with pytest.raises(login.LoginError, match="production, staging"):
+        login.start(str(tmp_path), env_name="stagin", post=post)
+    assert post.calls == []
+    assert not os.path.exists(login.pending_path(str(tmp_path)))
+
+
+def test_a_staging_link_is_polled_on_staging(tmp_path):
+    home, clock = str(tmp_path), Clock()
+    login.start(home, env_name="staging", post=scripted((201, LINK_RESPONSE)),
+                now=clock.now)
+    post = scripted((200, TOKEN_RESPONSE))
+    creds = _wait(home, clock, post)
+    assert post.calls[0][0] == STAGING_LINK_BASE + "/v1/agent-links/token"
+    assert creds["env"] == "staging"
+
+
+def test_a_staging_key_is_revoked_on_staging():
+    post = scripted((200, {}))
+    login.revoke({"api_key": "ri_k", "env": "staging", "workspace_id": "w"},
+                 post=post)
+    assert post.calls[0][0] == STAGING_LINK_BASE + "/v1/agent-keys/revoke"
+
+
+@pytest.mark.parametrize("argv,env,expected", [
+    ([], {}, LINK_BASE),
+    (["--env", "staging"], {}, STAGING_LINK_BASE),
+    ([], {"RIUS_ENV": "staging"}, STAGING_LINK_BASE),
+    (["--env", "production"], {"RIUS_ENV": "staging"}, LINK_BASE),
+])
+def test_login_picks_its_environment_from_flag_then_env_then_default(
+        tmp_path, server, monkeypatch, argv, env, expected):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    fake = server((201, LINK_RESPONSE))
+    rius_ctl.dispatch(["login"] + argv + ["--cwd", "/opt/proj"], str(tmp_path))
+    assert fake.calls[0][0] == expected + "/v1/agent-links"
+
+
+def test_login_names_a_non_default_environment(tmp_path, server, capsys):
+    server((201, LINK_RESPONSE))
+    rius_ctl.dispatch(["login", "--env", "staging", "--cwd", "/p"], str(tmp_path))
+    assert "Environment: staging (https://staging.rius.glassflow.xyz)" in \
+        capsys.readouterr().out
+
+
+def test_login_on_the_default_environment_does_not_name_it(tmp_path, server,
+                                                          capsys):
+    server((201, LINK_RESPONSE))
+    rius_ctl.dispatch(["login", "--cwd", "/p"], str(tmp_path))
+    assert "Environment:" not in capsys.readouterr().out
+
+
+def test_login_with_an_unknown_environment_says_so(tmp_path, server, capsys):
+    fake = server()
+    rius_ctl.dispatch(["login", "--env", "prod", "--cwd", "/p"], str(tmp_path))
+    out = capsys.readouterr().out
+    assert "Rius login failed: Unknown environment 'prod'" in out
+    assert fake.calls == []
+
+
+# --- MCP follows the stored environment ----------------------------------------
+
+PROD_MCP = "https://mcp.eu.console.rius-glassflow.com/mcp"
+STAGING_MCP = "https://mcp.eu.staging.rius.glassflow.xyz/mcp"
+
+
+def test_the_default_mcp_url_is_production():
+    assert config.DEFAULT_MCP_URL == PROD_MCP
+
+
+def test_login_wait_on_staging_says_how_to_point_mcp_at_it(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home, env="staging")
+    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "RIUS_MCP_URL=%s" % STAGING_MCP in out
+    assert 'Reconnect "rius" in /mcp' not in out
+
+
+def test_login_wait_is_quiet_about_mcp_when_it_already_points_there(
+        tmp_path, server, capsys, monkeypatch):
+    monkeypatch.setenv("RIUS_MCP_URL", STAGING_MCP + "/")
+    home = str(tmp_path)
+    _park(home, env="staging")
+    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "RIUS_MCP_URL" not in out
+    assert 'Reconnect "rius" in /mcp to query your traces.' in out
+
+
+def test_login_wait_on_production_needs_no_mcp_setting(tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home)
+    server((200, dict(TOKEN_RESPONSE, mcp_url=PROD_MCP)))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "RIUS_MCP_URL" not in out
+    assert 'Reconnect "rius" in /mcp to query your traces.' in out
+
+
+def test_login_wait_under_an_env_key_does_not_redirect_mcp(
+        tmp_path, server, capsys, monkeypatch):
+    home = str(tmp_path)
+    _park(home, env="staging")
+    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
+    monkeypatch.setenv("RIUS_API_KEY", "ri_env")
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert "RIUS_MCP_URL" not in out
+    assert "RIUS_API_KEY is set" in out
+
+
+def test_a_key_without_an_mcp_url_is_not_flagged(tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home)
+    body = dict(TOKEN_RESPONSE)
+    del body["mcp_url"]
+    server((200, body))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    assert "RIUS_MCP_URL" not in capsys.readouterr().out
+
+
+def test_status_shows_the_mcp_url_and_flags_a_mismatch(tmp_path):
+    home = str(tmp_path)
+    _store(home, mcp_url=STAGING_MCP)
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "MCP: %s" % PROD_MCP in r.stdout
+    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
+
+
+def test_status_follows_rius_mcp_url(tmp_path):
+    home = str(tmp_path)
+    _store(home, mcp_url=STAGING_MCP)
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home,
+             {"RIUS_MCP_URL": STAGING_MCP})
+    assert "MCP: %s" % STAGING_MCP in r.stdout
+    assert "RIUS_MCP_URL=" not in r.stdout
+
+
+def test_status_does_not_flag_mcp_for_an_env_key(tmp_path):
+    home = str(tmp_path)
+    _store(home, mcp_url=STAGING_MCP)
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home,
+             {"RIUS_API_KEY": "ri_env"})
+    assert "MCP: %s" % PROD_MCP in r.stdout
+    assert "RIUS_MCP_URL=" not in r.stdout

@@ -3,7 +3,7 @@ import os
 import subprocess
 import pathlib
 
-from rius_cc import login
+from rius_cc import config, login
 
 SH = str(pathlib.Path(__file__).parent.parent / "scripts" / "mcp_headers.sh")
 MCP_JSON = pathlib.Path(__file__).parent.parent / ".mcp.json"
@@ -38,3 +38,9 @@ def test_bundled_server_uses_the_helper():
     assert server["type"] == "http"
     assert "mcp_headers.sh" in server["headersHelper"]
     assert "headers" not in server  # a static header would bake in a key
+
+
+def test_bundled_server_defaults_to_production_and_obeys_rius_mcp_url():
+    url = json.loads(MCP_JSON.read_text())["mcpServers"]["rius"]["url"]
+    assert url == "${RIUS_MCP_URL:-%s}" % config.DEFAULT_MCP_URL
+    assert config.DEFAULT_MCP_URL == "https://mcp.eu.console.rius-glassflow.com/mcp"
