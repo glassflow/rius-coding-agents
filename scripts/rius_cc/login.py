@@ -33,6 +33,8 @@ from rius_cc import platform_compat
 # `wait` can pick it up, instead of being killed mid-poll.
 WAIT_BUDGET_SECONDS = 540
 MAX_BACKOFF_SECONDS = 60
+# The sign-in host rate-limits per IP, whatever interval the server names.
+MIN_POLL_SECONDS = 2
 REQUEST_TIMEOUT_SECONDS = 15.0
 # Long enough for a superseded wait to notice at its next poll and let go.
 LOCK_WAIT_SECONDS = 10.0
@@ -269,7 +271,8 @@ def _is_transient(status: int) -> bool:
 
 
 def _backoff(interval: int, failures: int) -> float:
-    return min(interval * (2 ** failures), MAX_BACKOFF_SECONDS)
+    return min(max(interval, MIN_POLL_SECONDS) * (2 ** failures),
+               MAX_BACKOFF_SECONDS)
 
 
 def poll_for_key(pending: dict, post: Callable = post_json,

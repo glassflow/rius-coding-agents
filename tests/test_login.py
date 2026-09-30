@@ -172,6 +172,16 @@ def test_network_blips_and_5xx_back_off_and_keep_polling(tmp_path):
     assert clock.sleeps == [5, 10, 20, 5]
 
 
+def test_a_zero_interval_still_polls_at_a_sane_rate(tmp_path):
+    # The sign-in host rate-limits per IP; a server that says interval 0
+    # must not turn the wait into a tight loop.
+    home, clock = str(tmp_path), Clock()
+    login.start(home, post=scripted((201, dict(LINK_RESPONSE, interval=0))),
+                now=clock.now)
+    _wait(home, clock, scripted(PENDING, PENDING, (200, TOKEN_RESPONSE)))
+    assert clock.sleeps and min(clock.sleeps) >= login.MIN_POLL_SECONDS >= 1
+
+
 def test_a_socket_timeout_is_a_blip_too(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
@@ -490,6 +500,8 @@ def server(monkeypatch):
         fake = FakeServer(*responses)
         monkeypatch.setattr(login, "_send", fake)
         monkeypatch.setattr(rius_ctl, "_open_browser", lambda url: None)
+        # These run the real sleep; the floor has its own clock-driven test.
+        monkeypatch.setattr(login, "MIN_POLL_SECONDS", 0)
         return fake
     for name in ("RIUS_API_KEY", "RIUS_ENV", "RIUS_MCP_URL"):
         monkeypatch.delenv(name, raising=False)
