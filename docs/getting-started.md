@@ -384,7 +384,8 @@ decided, verbatim:
 | `Reason` line | What it means |
 |---|---|
 | `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. Run `/rius:enable-here`. |
-| `off: RIUS_API_KEY is not set` | The folder is enabled, but no key reached the hook process. |
+| ``off: no API key: run `/rius:login` (or set RIUS_API_KEY)`` | The folder is enabled, but there is no key: no `/rius:login` key stored, and no `RIUS_API_KEY` reached the hook process. |
+| ``<reason>; also no API key: run `/rius:login` (or set RIUS_API_KEY)`` | Tracing is off for `<reason>`, and it would stay off without a key even once that is fixed. |
 | `off: RIUS_CLAUDE_ENABLED` | An environment variable is turning it off, above the path rules. |
 | `off: session override` | A `/rius:off` override is in force for this session. `/rius:on` flips it; a new session starts without it. |
 | `on: path rule '<rule>' enables <cwd>` | Working as intended, unless a `Stopped:` line follows (see below). |
