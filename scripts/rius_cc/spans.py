@@ -555,7 +555,10 @@ def note_titles(state: dict, ctx: Ctx, titles: Dict[str, str]) -> None:
 
     Titles are content: an ai-title summarises the first prompt, and a bare
     /rename generates one from the conversation. With capture off none is
-    kept, and one kept while capture was on is dropped.
+    kept, one kept while capture was on is dropped, and build() then
+    sends and records the default name. The only title that outlives this
+    is on a stopped session, which never gets here: it closes under the
+    name it had already sent (finalize_session).
     """
     if not ctx.capture_content:
         state.pop("title_custom", None)
@@ -612,13 +615,16 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
         state["root_name_sent"] = name
         out.append(_pending_root(ctx, trace_id, root_span_id,
                                  entries[0].timestamp_ns, name))
-    elif (state.get("root_started") and not state.get("finalized")
+    elif (state.get("root_started")
           and name != state.get("root_name_sent", DEFAULT_ROOT_NAME)):
-        # Renamed: the same span id and start, so the backend replaces the
-        # row it has rather than adding one.
+        # Renamed, or capture turned off. Recorded even on a closed trace,
+        # which the next SessionEnd re-closes under this name. An open one
+        # gets a pending copy now: the same span id and start, so the
+        # backend replaces the row it has rather than adding one.
         state["root_name_sent"] = name
-        out.append(_pending_root(ctx, trace_id, root_span_id,
-                                 state["root_start_ns"], name))
+        if not state.get("finalized"):
+            out.append(_pending_root(ctx, trace_id, root_span_id,
+                                     state["root_start_ns"], name))
 
     out += emit_entries(entries, state, ctx, trace_id, root_span_id,
                         state["sub_links"], depth=0, key_prefix="",

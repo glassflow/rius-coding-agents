@@ -182,6 +182,21 @@ def test_a_rename_mid_session_renames_the_trace(home, sent, tmp_path):
     assert not _last_root(sent).pending
 
 
+def test_every_copy_of_the_root_shares_one_start(home, sent, tmp_path):
+    # The start is in the backend's sort key: a copy that differs by one
+    # nanosecond is a second root row, not a replacement.
+    path = _transcript(tmp_path, custom_title("before"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    _append(path, custom_title("after"),
+            prompt("u2", "p2", "2026-09-30T10:05:00.000Z"))
+    _run("Stop", path, home)
+    _run("SessionEnd", path, home)
+    roots = _roots(sent)
+    assert [r.pending for r in roots] == [True, True, False]
+    assert len({r.start_ns for r in roots}) == 1
+
+
 def test_an_unchanged_name_does_not_resend_the_root(home, sent, tmp_path):
     path = _transcript(tmp_path, custom_title("same"),
                        prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
@@ -239,6 +254,28 @@ def test_turning_capture_off_drops_a_stored_title(home, sent, tmp_path):
 
     _append(path, prompt("u2", "p2", "2026-09-30T10:05:00.000Z"))
     _run("SessionEnd", path, home, env=NO_CAPTURE)
+    assert _last_root(sent).name == DEFAULT
+    assert "sent-while-on" not in pathlib.Path(
+        state.state_path(SID, home)).read_text()
+
+
+def test_re_closing_a_finished_trace_with_capture_off_sends_no_title(
+        home, sent, tmp_path):
+    # A resumed session that ends before writing a new entry re-closes the
+    # root without build() seeing anything new to emit.
+    path = _transcript(tmp_path, custom_title("sent-while-on"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("SessionEnd", path, home)
+    assert _last_root(sent).name == "sent-while-on"
+
+    # A finished trace gets no pending copy: it would never replace the
+    # finished row, only sit behind it.
+    before = len(_roots(sent))
+    _run("Stop", path, home, env=NO_CAPTURE)
+    assert len(_roots(sent)) == before
+
+    _run("SessionEnd", path, home, env=NO_CAPTURE)
+    assert [r.pending for r in _roots(sent)[before:]] == [False]
     assert _last_root(sent).name == DEFAULT
     assert "sent-while-on" not in pathlib.Path(
         state.state_path(SID, home)).read_text()
