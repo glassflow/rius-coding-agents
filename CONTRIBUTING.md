@@ -20,6 +20,10 @@ python -m pytest -q
 claude plugin validate .
 ```
 
+`opentelemetry-proto` needs Python 3.10 or later. On 3.9, install only
+`pytest`: the tests that check the wire format against it skip themselves,
+which is what CI's 3.9 job does.
+
 To run your checkout inside Claude Code, add it as a local marketplace:
 
 ```
