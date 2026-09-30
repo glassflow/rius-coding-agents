@@ -4,7 +4,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.4.0 (unreleased)
+## Unreleased
+
+- The README leads with what Rius shows and how to install. Reference
+  material moved into `docs/` pages (installing and updating, how it works,
+  API keys), and the design records moved to `docs/design/`.
+
+## 0.4.0 (2026-09-30)
 
 Production is the default.
 
@@ -25,8 +31,7 @@ Production is the default.
   `RIUS_API_KEY` applies to tracing only. `/rius:status` prints which key
   the MCP server has (`MCP key:`).
 - README and getting started cover production hosts, with staging as its
-  own section. Reference material moved from the README into `docs/`
-  pages, and the design records moved to `docs/design/`.
+  own section.
 
 ## 0.3.0 (2026-09-27)
 
