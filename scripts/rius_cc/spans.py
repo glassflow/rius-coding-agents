@@ -27,7 +27,10 @@ TOOL_ERROR_WITHHELD = "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
 
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
-# was piped after, say) must never be it.
+# was piped after, say) must never be it. The cap bounds the SIZE, not the
+# sensitivity: that line is still command output, and only the capture gate
+# (RIUS_CAPTURE_CONTENT) keeps it off the wire. Raising the cap is safe;
+# removing the gate is not.
 ERROR_MESSAGE_MAX_BYTES = 256
 
 # How Claude Code opens a failed Bash call's result.
