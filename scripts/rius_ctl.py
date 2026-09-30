@@ -110,7 +110,45 @@ def _enable_here(cwd, home):
     if match and not match[1]:
         print(STILL_OFF % match[0])
     else:
-        print("Rius tracing enabled for %s." % cwd)
+        print(_enabled_disclosure(cwd, home))
+
+
+SENDS_CONTENT = ("Sessions here %s prompts, replies, the contents of files "
+                 "Claude reads and command output to %s.")
+SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing) "
+                   "to %s; RIUS_CAPTURE_CONTENT=false withholds prompts, "
+                   "replies, file contents and command output.")
+STOP_WITH_CONTENT = ("Set RIUS_CAPTURE_CONTENT=false to send structure only "
+                     "(models, tokens, timing), or run /rius:disable-here to "
+                     "stop.")
+STOP_WITHOUT_CONTENT = "Run /rius:disable-here to stop."
+
+
+def _enabled_disclosure(cwd, home):
+    """RIUS-969: enabling a folder is the consent act, so say what it will
+    upload, where to, and how to stop -- and only what is true right now."""
+    cfg = config.resolve("", cwd, os.environ, home)
+    if cfg.api_key:
+        verb, dest = "now send", cfg.workspace_name or "your Rius workspace"
+    else:
+        verb = "will send"
+        dest = "the workspace you pick once you sign in with /rius:login"
+    sends, stop = ((SENDS_CONTENT, STOP_WITH_CONTENT) if cfg.capture_content
+                   else (SENDS_STRUCTURE, STOP_WITHOUT_CONTENT))
+    return "\n".join([_enabled_scope(cwd, home), sends % (verb, dest), stop])
+
+
+def _enabled_scope(cwd, home):
+    carved_out = config.disabled_below(cwd, home)
+    if not carved_out:
+        return "Rius tracing enabled for %s and everything under it." % cwd
+    return ("Rius tracing enabled for %s and everything under it, except %s "
+            "(disabled)." % (cwd, _and_list(carved_out)))
+
+
+def _and_list(items):
+    return items[0] if len(items) == 1 else "%s and %s" % (", ".join(items[:-1]),
+                                                           items[-1])
 
 
 def _disable_here(cwd, home):
