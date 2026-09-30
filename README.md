@@ -46,8 +46,8 @@ Two things bound this:
 2. **`RIUS_CAPTURE_CONTENT=false`** turns off content capture entirely, for
    every folder you've enabled. You still get full structure: span
    hierarchy, model names, token counts (including cache reads), cost, timing
-   and status. You lose prompt text, assistant text, and tool input/output
-   values.
+   and status. You lose prompt text, assistant text, tool input/output
+   values, and the session's name.
 
 Only enable a folder you're comfortable having its file reads and command
 output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
@@ -188,7 +188,7 @@ and project `.claude/settings.json`/`settings.local.json`).
 | `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
 | `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
-| `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
+| `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description, the session's name (the trace is titled `claude-code session` instead) and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 

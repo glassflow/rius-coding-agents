@@ -10,6 +10,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 CONVERSATIONAL = ("user", "assistant")
 
+# The records Claude Code names a session with, and the key holding the name:
+# "custom" is /rename, --name or a hook's sessionTitle; "ai" is the summary it
+# writes of the first prompt. Both are rewritten throughout the session.
+TITLE_RECORDS = {
+    "custom-title": ("custom", "customTitle"),
+    "ai-title": ("ai", "aiTitle"),
+}
+
 
 def _timestamp_ns(value: str) -> int:
     """RFC3339 -> integer Unix nanoseconds.
@@ -137,8 +145,23 @@ def parse_line(line: str) -> Optional[Entry]:
     return parse_line_ex(line)[0]
 
 
-def read_from(path: str, offset: int, stats: Optional[dict] = None
-              ) -> Tuple[List[Entry], int]:
+def title_record(line: str) -> Optional[Tuple[str, str]]:
+    """("custom" | "ai", title) for a line that names the session."""
+    if "-title" not in line:
+        return None
+    try:
+        raw = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(raw, dict) or raw.get("type") not in TITLE_RECORDS:
+        return None
+    kind, key = TITLE_RECORDS[raw["type"]]
+    title = raw.get(key)
+    return (kind, title) if isinstance(title, str) else None
+
+
+def read_from(path: str, offset: int, stats: Optional[dict] = None,
+              titles: Optional[dict] = None) -> Tuple[List[Entry], int]:
     """Read complete lines from `offset`. Returns (entries, new_offset).
 
     A trailing partial line is left unconsumed -- the exporter races the writer,
@@ -148,6 +171,9 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None
     ours but could not be read) and "first_skipped_reason". The caller is
     expected to persist and log those: silently dropping every line looks
     exactly like a session where nothing happened.
+
+    `titles`, if given, gets the latest "custom" and "ai" session title seen
+    in the range, keyed as title_record() names them.
     """
     skipped = 0
     first_reason = None
@@ -196,6 +222,10 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None
             skipped += 1
             if first_reason is None:
                 first_reason = reason
+        elif titles is not None:
+            record = title_record(text)
+            if record is not None:
+                titles[record[0]] = record[1]
     return finish(entries, consumed)
 
 

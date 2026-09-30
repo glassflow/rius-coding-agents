@@ -4,6 +4,14 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## Unreleased
+
+- The trace is titled with the Claude Code session's name instead of
+  `claude-code session`: the `/rename` or `--name` title, else the title
+  Claude Code generates from the first prompt. A rename mid-session renames
+  the trace at the next hook event. With `RIUS_CAPTURE_CONTENT=false` no
+  name is sent. The agent stays `claude-code`.
+
 ## 0.4.2 (2026-09-30)
 
 - `/rius:status` says when a session was stopped by a mid-session disable:

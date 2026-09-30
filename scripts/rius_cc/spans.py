@@ -15,6 +15,14 @@ from . import context_sizes
 
 PROVIDER_NAME = "anthropic"
 
+# The root span's name is the trace's title in the console. It is the
+# session's own name when Claude Code has one and capture is on, else this.
+DEFAULT_ROOT_NAME = "claude-code session"
+
+# Claude Code caps a session name at 200 characters; so does the plugin, for
+# a transcript written by a version that did not.
+TITLE_MAX_CHARS = 200
+
 # The tool that spawns a subagent. It is "Agent" in Claude Code 2.1.x and was
 # "Task" before that; matching only one of them means every subagent in that
 # version is invisible, which is exactly what happened. Both, always.
@@ -36,6 +44,7 @@ ERROR_MESSAGE_MAX_BYTES = 256
 # How Claude Code opens a failed Bash call's result.
 _EXIT_CODE = re.compile(r"Exit code (\d+)\s*$")
 _TOOL_USE_ERROR_TAG = re.compile(r"</?tool_use_error>")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 # A "user" entry whose text opens with one of these was injected by the
 # harness, not typed by the user: a slash-command caveat, a background-task
@@ -536,31 +545,80 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     return out
 
 
+def clean_title(title: str) -> str:
+    """One line, trimmed and capped: a title is shown as a trace's name."""
+    return " ".join(_CONTROL_CHARS.sub(" ", title).split())[:TITLE_MAX_CHARS]
+
+
+def note_titles(state: dict, ctx: Ctx, titles: Dict[str, str]) -> None:
+    """Keep the session's latest titles in state, while capture is on.
+
+    Titles are content: an ai-title summarises the first prompt, and a bare
+    /rename generates one from the conversation. With capture off none is
+    kept, and one kept while capture was on is dropped.
+    """
+    if not ctx.capture_content:
+        state.pop("title_custom", None)
+        state.pop("title_ai", None)
+        return
+    for kind, title in titles.items():
+        state["title_" + kind] = clean_title(title)
+
+
+def root_name(state: dict) -> str:
+    """The name the user gave the session, else Claude Code's, else ours.
+
+    note_titles() keeps no title with capture off, so that is the default.
+    """
+    return (state.get("title_custom") or state.get("title_ai")
+            or DEFAULT_ROOT_NAME)
+
+
+def _pending_root(ctx: Ctx, trace_id: str, root_span_id: str, start_ns: int,
+                  name: str) -> Span:
+    attrs = _base_attrs(ctx, "AGENT")
+    attrs["glassflow.span.pending"] = True
+    return Span(
+        trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
+        name=name, kind_oi="AGENT", start_ns=start_ns, end_ns=start_ns,
+        attributes=attrs, status_code="UNSET", status_message="",
+        pending=True,
+    )
+
+
 def build(entries: List[Any], state: dict, ctx: Ctx,
-          source_path: str = "") -> List[Any]:
+          source_path: str = "",
+          titles: Optional[Dict[str, str]] = None) -> List[Any]:
     """The MAIN transcript. Subagent transcripts are separate files; see
-    subagents.expand(), which feeds them through emit_entries() too."""
+    subagents.expand(), which feeds them through emit_entries() too.
+
+    `titles` are the session titles transcript.read_from() found in the same
+    range as `entries`.
+    """
     out: List[Span] = []
     trace_id = trace_id_for(ctx.session_id)
     root_span_id = span_id_for("session:" + ctx.session_id)
     if "sub_links" not in state:
         state["sub_links"] = {}
 
+    note_titles(state, ctx, titles or {})
+    name = root_name(state)
     if entries:
         # A resumed session carries on after an earlier SessionEnd closed it.
         state["finalized"] = False
     if entries and not state.get("root_started"):
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
-        attrs = _base_attrs(ctx, "AGENT")
-        attrs["glassflow.span.pending"] = True
-        out.append(Span(
-            trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
-            name="claude-code session", kind_oi="AGENT",
-            start_ns=entries[0].timestamp_ns, end_ns=entries[0].timestamp_ns,
-            attributes=attrs, status_code="UNSET", status_message="",
-            pending=True,
-        ))
+        state["root_name_sent"] = name
+        out.append(_pending_root(ctx, trace_id, root_span_id,
+                                 entries[0].timestamp_ns, name))
+    elif (state.get("root_started") and not state.get("finalized")
+          and name != state.get("root_name_sent", DEFAULT_ROOT_NAME)):
+        # Renamed: the same span id and start, so the backend replaces the
+        # row it has rather than adding one.
+        state["root_name_sent"] = name
+        out.append(_pending_root(ctx, trace_id, root_span_id,
+                                 state["root_start_ns"], name))
 
     out += emit_entries(entries, state, ctx, trace_id, root_span_id,
                         state["sub_links"], depth=0, key_prefix="",
@@ -661,9 +719,12 @@ def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
         return out
     root_span_id = span_id_for("session:" + ctx.session_id)
     attrs = _base_attrs(ctx, "AGENT")
+    # The name last sent, never a newer one: build() has already caught up
+    # with the transcript, except on a stopped session, where nothing read
+    # after the disable may leave the machine.
     out.append(Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
-        name="claude-code session", kind_oi="AGENT",
+        name=state.get("root_name_sent") or DEFAULT_ROOT_NAME, kind_oi="AGENT",
         start_ns=state.get("root_start_ns") or now_ns,
         end_ns=now_ns, attributes=attrs, status_code="OK", status_message="",
         pending=False,
