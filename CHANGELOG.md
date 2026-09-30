@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.4.3 (2026-09-30)
+## Unreleased
 
 - A conversation Claude Code moves to a new session id (sending a session
   to the background does this) stays one trace, like a resumed session.
