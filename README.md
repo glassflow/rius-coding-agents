@@ -247,7 +247,7 @@ and more. Anything that already emits OpenTelemetry, whether through
 [OpenInference](https://docs.glassflow.ai/rius/interoperability/openinference),
 a plain [OTel SDK](https://docs.glassflow.ai/rius/interoperability/otel-sdks)
 or a [Collector](https://docs.glassflow.ai/rius/interoperability/collector),
-can send to Rius without code changes.
+can send to Rius as it is.
 
 ## Privacy and security posture
 
