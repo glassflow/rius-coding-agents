@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="260" viewBox="0 0 940 260" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>How the rius plugin works</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f9c078"/></marker></defs>
+<rect x="10" y="70" width="190" height="84" rx="10" fill="#2b1600" stroke="#5c4428" stroke-width="1.5"/>
+<text x="26" y="100" font-size="16" font-weight="600" fill="#fcfcfc">Claude Code</text>
+<text x="26" y="122" font-size="13" fill="#c9b9a3">your session, on your</text>
+<text x="26" y="140" font-size="13" fill="#c9b9a3">machine</text>
+<rect x="250" y="70" width="200" height="84" rx="10" fill="#2b1600" stroke="#5c4428" stroke-width="1.5"/>
+<text x="266" y="100" font-size="16" font-weight="600" fill="#fcfcfc">rius plugin</text>
+<text x="266" y="122" font-size="13" fill="#c9b9a3">hooks + transcript reader,</text>
+<text x="266" y="140" font-size="13" fill="#c9b9a3">Python stdlib only</text>
+<rect x="500" y="70" width="190" height="84" rx="10" fill="#2b1600" stroke="#5c4428" stroke-width="1.5"/>
+<text x="516" y="100" font-size="16" font-weight="600" fill="#fcfcfc">Rius</text>
+<text x="516" y="122" font-size="13" fill="#c9b9a3">ingest.eu.console.</text>
+<text x="516" y="140" font-size="13" fill="#c9b9a3">rius-glassflow.com</text>
+<rect x="740" y="10" width="190" height="84" rx="10" fill="#2b1600" stroke="#5c4428" stroke-width="1.5"/>
+<text x="756" y="40" font-size="16" font-weight="600" fill="#fcfcfc">Console</text>
+<text x="756" y="62" font-size="13" fill="#c9b9a3">waterfall, tokens, cost,</text>
+<text x="756" y="80" font-size="13" fill="#c9b9a3">errors, alerts</text>
+<rect x="740" y="130" width="190" height="84" rx="10" fill="#2b1600" stroke="#5c4428" stroke-width="1.5"/>
+<text x="756" y="160" font-size="16" font-weight="600" fill="#fcfcfc">Rius MCP server</text>
+<text x="756" y="182" font-size="13" fill="#c9b9a3">query traces from chat</text>
+<text x="756" y="200" font-size="13" fill="#c9b9a3">(bundled as rius)</text>
+<line x1="200" y1="112" x2="248" y2="112" stroke="#f9c078" stroke-width="2" marker-end="url(#a)"/>
+<text x="224" y="104" font-size="12" fill="#c9b9a3" text-anchor="middle">hooks</text>
+<line x1="450" y1="112" x2="498" y2="112" stroke="#f9c078" stroke-width="2" marker-end="url(#a)"/>
+<text x="474" y="104" font-size="12" fill="#c9b9a3" text-anchor="middle">OTLP</text>
+<line x1="690" y1="100" x2="738" y2="60" stroke="#f9c078" stroke-width="2" marker-end="url(#a)"/>
+<text x="0" y="0" font-size="12" fill="#c9b9a3" text-anchor="middle"></text>
+<line x1="690" y1="124" x2="738" y2="166" stroke="#f9c078" stroke-width="2" marker-end="url(#a)"/>
+<text x="0" y="0" font-size="12" fill="#c9b9a3" text-anchor="middle"></text>
+<path d="M835,214 L835,244 L105,244 L105,156" fill="none" stroke="#f9c078" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<text x="470" y="238" font-size="12" fill="#c9b9a3" text-anchor="middle">ask Claude about your traces</text>
+</svg>

@@ -1,7 +1,7 @@
 {
   "name": "rius-coding-agents",
   "description": "Rius observability for coding agents",
-  "owner": { "name": "GlassFlow", "url": "https://glassflow.dev" },
+  "owner": { "name": "GlassFlow", "url": "https://www.glassflow.ai" },
   "plugins": [
     {
       "name": "rius",
@@ -9,7 +9,7 @@
       "source": "./",
       "version": "0.4.0",
       "category": "monitoring",
-      "tags": ["observability", "otel", "tracing", "rius"]
+      "tags": ["observability", "opentelemetry", "tracing", "llm", "mcp", "rius"]
     }
   ]
 }

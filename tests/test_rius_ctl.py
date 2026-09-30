@@ -273,7 +273,8 @@ def test_slash_command_line_runs_end_to_end(tmp_path):
     assert "glassflow_k" not in r.stdout
 
 
-PRINTED_TREES = ("scripts", "docs/getting-started.md", "README.md")
+PRINTED_TREES = ("scripts", "docs/getting-started.md", "docs/install.md",
+                 "docs/how-it-works.md", "docs/api-keys.md", "README.md", "CHANGELOG.md")
 
 
 def _text_files():

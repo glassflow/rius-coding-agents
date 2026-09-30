@@ -6,7 +6,7 @@ are more instructive than the final code.
 
 Branch: feat/rius-claude-code (in-place, not a worktree)
 BASE: f5a5770d3c5789d80312ce3823912dea31978dc5
-Spec: docs/superpowers/specs/2026-09-22-rius-claude-code-design.md (reachable)
+Spec: docs/design/specs/2026-09-22-rius-claude-code-design.md (reachable)
 
 Ruling: work in-place on branch feat/rius-claude-code rather than a git worktree — repo is
 brand new with no competing work, and the plugin dev loop installs from this exact path, which a

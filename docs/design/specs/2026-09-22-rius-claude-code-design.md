@@ -563,7 +563,7 @@ scripts/rius_cc/
     state.py                 # offset + open_spans, flock
 commands/rius.md
 tests/
-docs/superpowers/specs/
+docs/design/specs/
 README.md
 ```
 
