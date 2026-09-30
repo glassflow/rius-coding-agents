@@ -3,7 +3,7 @@ import os
 import subprocess
 import pathlib
 
-from rius_cc import login
+from rius_cc import config, login
 
 SH = str(pathlib.Path(__file__).parent.parent / "scripts" / "mcp_headers.sh")
 MCP_JSON = pathlib.Path(__file__).parent.parent / ".mcp.json"
@@ -23,6 +23,9 @@ def test_stored_login_key_becomes_the_bearer(tmp_path):
 
 
 def test_env_key_wins_as_it_does_for_tracing(tmp_path):
+    # Unit-level only: under Claude Code a plugin's headersHelper runs without
+    # credential-named variables, so RIUS_API_KEY never reaches the script and
+    # the stored key is what the bundled server actually uses.
     login._write_private(login.credentials_path(str(tmp_path)),
                          {"api_key": "ri_stored", "endpoint": "https://x"})
     assert _headers(str(tmp_path), {"RIUS_API_KEY": "ri_env"}) == {
@@ -38,3 +41,9 @@ def test_bundled_server_uses_the_helper():
     assert server["type"] == "http"
     assert "mcp_headers.sh" in server["headersHelper"]
     assert "headers" not in server  # a static header would bake in a key
+
+
+def test_bundled_server_defaults_to_production_and_obeys_rius_mcp_url():
+    url = json.loads(MCP_JSON.read_text())["mcpServers"]["rius"]["url"]
+    assert url == "${RIUS_MCP_URL:-%s}" % config.DEFAULT_MCP_URL
+    assert config.DEFAULT_MCP_URL == "https://mcp.eu.console.rius-glassflow.com/mcp"

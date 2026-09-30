@@ -1,5 +1,6 @@
 ---
 description: Sign in to Rius in the browser and pick the workspace this machine sends traces to
+argument-hint: "[--env staging]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)
 ---
 

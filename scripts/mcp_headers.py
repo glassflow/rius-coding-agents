@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """headersHelper for the bundled Rius MCP server.
 
-Prints the Authorization header for the same key tracing uses -- the one
-`/rius:login` stored, or RIUS_API_KEY -- so one sign-in serves both. With no
-key it prints `{}` and the server's 401 tells the user to sign in.
+Prints the Authorization header for the key `/rius:login` stored, so one
+sign-in serves tracing and MCP. With no key it prints `{}` and the server's
+401 tells the user to sign in.
+
+RIUS_API_KEY is honoured if present, but under Claude Code it never is:
+a plugin's headersHelper runs without credential-named variables (verified
+on 2.1.284, for the shell and for settings `env` alike).
 """
 import json
 import os
