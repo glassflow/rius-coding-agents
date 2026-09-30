@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## Unreleased
+## 0.4.2 (2026-09-30)
 
 - `/rius:status` says when a session was stopped by a mid-session disable:
   it reads `Rius tracing: off` with a `Stopped:` line, instead of the `on`
