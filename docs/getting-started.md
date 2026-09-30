@@ -9,7 +9,7 @@ in the README before you enable any folder. By default this plugin sends
 full session content, including the contents of files Claude Code reads and
 the output of commands it runs.
 
-- [Quick start: `/rius:login` (staging)](#quick-start-riuslogin-staging)
+- [Quick start: `/rius:login`](#quick-start-riuslogin)
 - [1. Get a Rius workspace](#1-get-a-rius-workspace)
 - [2. Mint an API key](#2-mint-an-api-key)
 - [3. Pick an endpoint](#3-pick-an-endpoint)
@@ -21,9 +21,9 @@ the output of commands it runs.
 - [Troubleshooting](#troubleshooting)
 - [Uninstall and local state](#uninstall-and-local-state)
 
-## Quick start: `/rius:login` (staging)
+## Quick start: `/rius:login`
 
-On staging, steps 1, 2, 3 and 5 below collapse into one command:
+Steps 1, 2, 3 and 5 below collapse into one command:
 
 ```
 /plugin marketplace add glassflow/rius-coding-agents
@@ -32,7 +32,8 @@ On staging, steps 1, 2, 3 and 5 below collapse into one command:
 /rius:enable-here    # in the folder you want traced
 ```
 
-`/rius:login` prints a short code and opens the Rius portal. There you sign
+`/rius:login` prints a short code and opens the Rius portal
+(`https://console.rius-glassflow.com`). There you sign
 in (or sign up), check that the page shows the same code and this machine's
 name, and pick the workspace this machine should send to: one of yours, or
 one you are only a member of. The plugin then prints where it landed:
@@ -60,10 +61,38 @@ one.
 - The plugin bundles the Rius MCP server as `rius`, authenticated with the
   same key (via a `headersHelper`, so the key never lands in any MCP
   config). After logging in, reconnect it in `/mcp` or restart Claude Code.
-  `RIUS_MCP_URL` points it elsewhere; it defaults to staging.
+  It connects to `https://mcp.eu.console.rius-glassflow.com/mcp` unless
+  `RIUS_MCP_URL` says otherwise; `/rius:status` prints the one in use
+  (`MCP:`).
 - A key minted seconds ago can be rejected with 401 for up to ~30s while it
   propagates to the receiver.
-- Production has no agent-link sign-in yet; there, follow the steps below.
+
+### Signing in to staging
+
+Production is the default. Staging is only reached when you ask for it:
+
+```
+/rius:login --env staging
+```
+
+or with `RIUS_ENV=staging` in the environment Claude Code runs in (`--env`
+wins over `RIUS_ENV`). An unknown name is refused rather than sent to
+production. The key stored afterwards remembers its environment, so its
+ingest endpoint, `/rius:logout` and the revoke on the next sign-in all go
+to staging too.
+
+The bundled MCP server is the exception. Claude Code reads its URL from
+`.mcp.json`, which can only expand environment variables, so the plugin
+cannot point it at the stored key's environment for you. After a staging
+sign-in, `/rius:login` says so and prints the setting to use; start Claude
+Code with it:
+
+```bash
+RIUS_MCP_URL=https://mcp.eu.staging.rius.glassflow.xyz/mcp claude
+```
+
+or put `RIUS_MCP_URL` in the `env` block of `~/.claude/settings.json`.
+`/rius:status` keeps flagging the mismatch until the two agree.
 
 ### Upgrading from `rius-claude-code`
 
@@ -144,17 +173,16 @@ There is no rotate or revoke tool on the MCP server either. Rotation is
 `RIUS_ENDPOINT` is a base URL with no path. The plugin appends `/v1/traces`
 and `/v1/heartbeat` itself.
 
-| Environment | Ingest endpoint (`RIUS_ENDPOINT`) | Console |
-|---|---|---|
-| Production (default) | `https://ingest.eu.console.rius-glassflow.com` | confirm with your Rius admin |
-| Staging | `https://ingest.staging.rius.glassflow.xyz` | `https://staging.rius.glassflow.xyz` |
+| Environment | Ingest endpoint (`RIUS_ENDPOINT`) | MCP server (`RIUS_MCP_URL`) | Console |
+|---|---|---|---|
+| Production (default) | `https://ingest.eu.console.rius-glassflow.com` | `https://mcp.eu.console.rius-glassflow.com/mcp` | `https://console.rius-glassflow.com` |
+| Staging | `https://ingest.eu.staging.rius.glassflow.xyz` | `https://mcp.eu.staging.rius.glassflow.xyz/mcp` | `https://staging.rius.glassflow.xyz` |
 
-The production ingest host is the plugin's built-in default, so on
-production you do not need to set `RIUS_ENDPOINT` at all. The matching
-production console URL is deliberately not printed here: it could not be
-confirmed from a single authoritative source, and a wrong URL in a setup
-guide is worse than an absent one. Ask a Rius admin, or start on staging,
-where both halves are known.
+The production hosts are the plugin's built-in defaults, so on production
+you do not need to set `RIUS_ENDPOINT` or `RIUS_MCP_URL` at all. A key from
+`/rius:login` carries its own ingest endpoint, so it needs neither on staging
+either, apart from the MCP caveat in
+[Signing in to staging](#signing-in-to-staging).
 
 Staging and production are separate deployments with separate stores, so
 expect a key to work only against the deployment that issued it. Mint a
@@ -283,32 +311,34 @@ If `Spans exported this session` stays at 0, go to
 ## Exploring your traces from Claude Code
 
 The Rius MCP server lets you ask Claude questions about the traces this
-plugin is producing, from inside Claude Code. It is a separate thing to
-install; this plugin does not need it and does not depend on it.
+plugin is producing, from inside Claude Code. The plugin bundles it as
+`rius`, using the same key as tracing, so after `/rius:login` there is
+nothing to install: reconnect `rius` in `/mcp` (or restart Claude Code) and
+it is there. It connects to production unless `RIUS_MCP_URL` says otherwise.
 
-**Register it as an HTTP URL server, not a stdio command server.** That is
-the single most common setup mistake, and it fails in a way that reads as an
-auth problem.
+To use the MCP server without the plugin, register it yourself -- **as an
+HTTP URL server, not a stdio command server**. That is the single most
+common setup mistake, and it fails in a way that reads as an auth problem.
 
 Interactive (OAuth in the browser, same account as the console):
 
 ```bash
-claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp
+claude mcp add --transport http rius https://mcp.eu.console.rius-glassflow.com/mcp
 ```
 
 Headless, with a `read`-scoped key as a static bearer header:
 
 ```bash
-claude mcp add --transport http rius https://mcp.staging.rius.glassflow.xyz/mcp \
+claude mcp add --transport http rius https://mcp.eu.console.rius-glassflow.com/mcp \
   --header "Authorization: Bearer ${RIUS_API_KEY}"
 ```
 
-Substitute the MCP host for your environment; the staging host is shown
-because it is the one this guide can state with confidence. Use `/mcp`
-inside Claude Code to trigger or inspect the OAuth flow.
+Use the staging host from [3. Pick an endpoint](#3-pick-an-endpoint) for a
+staging key. Use `/mcp` inside Claude Code to trigger or inspect the OAuth
+flow.
 
-The server exposes 13 tools. These are the ones worth knowing once traces
-are flowing:
+`/mcp` lists every tool the server exposes. These are the ones worth
+knowing once traces are flowing:
 
 | Tool | What it answers |
 |---|---|
@@ -318,12 +348,8 @@ are flowing:
 | `get_agent_trace` | The span waterfall for one trace, with its errors. |
 | `agent_traces_summary` | Counts, error rate, cost, tokens and latency for a window. |
 | `workspace_metrics_overview` | The same, fuller, with deltas and breakdowns. |
-| `list_metrics_catalog` | Every metric the platform computes, with units. |
-| `get_error_pattern` | A window's failures grouped by error signature. |
-| `get_last_known_good` | The last successful run of a step before a cutoff. |
-| `get_open_incidents` | Incidents Rius opened for repeating failures. |
-| `update_incident_status` | Advance an incident's status, forward-only. |
-| `log_resolution` | Append a resolution note to an incident. |
+| `agent_error_groups` | A window's failures grouped by error signature. |
+| `list_alerts` | Alerts Rius raised for this workspace. |
 | `create_api_key` | Mint another workspace key. Interactive sessions only. |
 
 Questions this makes answerable in chat:
