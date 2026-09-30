@@ -654,3 +654,81 @@ def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
     log = home / ".claude" / "rius" / "log" / "bootstrap.log"
     assert log.exists(), "no Python and no explanation anywhere"
     assert "no Python interpreter found" in log.read_text()
+
+
+# --- a session disabled mid-way still gets its SessionEnd ---------------------
+
+def _disabled_env_with_open_trace(tmp_path, sid, open_trace=True, key=True):
+    env, home = _enabled_env(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": [str(tmp_path)],
+                   "disabled_paths": [str(tmp_path / "proj")]}, fh)
+    if open_trace:
+        state.save(sid, home, {"root_started": True, "instance_id": "i-1"})
+    if not key:
+        env.pop("RIUS_API_KEY")
+    return env, home
+
+
+def _payload_in_disabled(tmp_path, sid):
+    return {"session_id": sid, "cwd": str(tmp_path / "proj"),
+            "transcript_path": "/nonexistent.jsonl"}
+
+
+def _spawned(calls):
+    return [pathlib.Path(c["argv"][1]).name for c in calls]
+
+
+def test_a_disabled_session_with_an_open_trace_still_reaches_the_exporter(
+        tmp_path, monkeypatch):
+    sid = "stopped-1"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid)
+    for event in ("PostToolUse", "Stop", "SessionEnd"):
+        calls = _run_in_process(monkeypatch, event,
+                                _payload_in_disabled(tmp_path, sid), env, home)
+        assert _spawned(calls) == ["exporter.py"], event
+
+
+def test_session_end_of_a_stopped_session_stops_its_pinger(tmp_path, monkeypatch):
+    sid = "stopped-2"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid)
+    _run_in_process(monkeypatch, "SessionEnd",
+                    _payload_in_disabled(tmp_path, sid), env, home)
+    assert os.path.exists(os.path.join(state.state_dir(home),
+                                       sid + ".heartbeat.stop"))
+
+
+def test_a_stopped_session_starting_again_gets_no_pinger(tmp_path, monkeypatch):
+    sid = "stopped-3"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid)
+    calls = _run_in_process(monkeypatch, "SessionStart",
+                            dict(_payload_in_disabled(tmp_path, sid),
+                                 source="resume"), env, home)
+    assert _spawned(calls) == ["exporter.py"]
+    assert state.load(sid, home)["instance_id"] == "i-1"
+
+
+def test_a_disabled_session_never_traced_spawns_nothing(tmp_path, monkeypatch):
+    sid = "stopped-4"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid, open_trace=False)
+    calls = _run_in_process(monkeypatch, "SessionEnd",
+                            _payload_in_disabled(tmp_path, sid), env, home)
+    assert calls == []
+    assert not os.path.exists(os.path.join(state.state_dir(home),
+                                           sid + ".heartbeat.stop"))
+
+
+def test_a_closed_trace_is_not_reopened_by_a_disabled_session(tmp_path,
+                                                              monkeypatch):
+    sid = "stopped-5"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid)
+    state.save(sid, home, {"root_started": True, "finalized": True})
+    assert _run_in_process(monkeypatch, "SessionEnd",
+                           _payload_in_disabled(tmp_path, sid), env, home) == []
+
+
+def test_a_disabled_session_without_a_key_spawns_nothing(tmp_path, monkeypatch):
+    sid = "stopped-6"
+    env, home = _disabled_env_with_open_trace(tmp_path, sid, key=False)
+    assert _run_in_process(monkeypatch, "SessionEnd",
+                           _payload_in_disabled(tmp_path, sid), env, home) == []

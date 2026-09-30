@@ -62,6 +62,11 @@ def lock_path(session_id: str, home: str) -> str:
     return os.path.join(state_dir(home), session_id + ".lock")
 
 
+def trace_is_open(st: dict) -> bool:
+    """The session's root span was sent and no SessionEnd has closed it."""
+    return bool(st.get("root_started")) and not st.get("finalized")
+
+
 def load(session_id: str, home: str) -> dict:
     path = state_path(session_id, home)
     try:
