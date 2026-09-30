@@ -38,7 +38,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      placeholder: "0.4.0"
+      description: The `version` in `/plugin` (installed plugins), or in `.claude-plugin/plugin.json`.
     validations:
       required: true
   - type: input

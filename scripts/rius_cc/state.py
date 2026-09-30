@@ -31,6 +31,11 @@ def new_state() -> dict:
         "root_start_ns": 0,
         "last_ns": 0,
         "open_task_spans": [],
+        # The API response whose lines are still arriving (ids and start
+        # only; see spans._generation_for).
+        "open_gen": None,
+        # Running prompt-size account (context_sizes.py): sizes, no content.
+        "context": None,
         # Subagent drilldown. A subagent's transcript is a separate file, so
         # each one needs its own byte offset and its own span bookkeeping,
         # keyed by agent id; sub_links maps the spawning tool_use id to the

@@ -122,7 +122,9 @@ def test_subagent_agent_span_starts_pending_and_then_closes(fixtures_dir):
     assert pending.attributes["gen_ai.agent.name"] == "general-purpose"
     # the tool_result in the MAIN transcript is what ends the subagent
     assert final.end_ns == transcript._timestamp_ns("2026-09-22T10:00:09.000Z")
-    assert final.start_ns == transcript._timestamp_ns("2026-09-22T10:00:01.000Z")
+    # ...and it starts with its own first line (10:00:02), not with the
+    # Agent tool_use that asked for it (10:00:01).
+    assert final.start_ns == transcript._timestamp_ns("2026-09-22T10:00:02.000Z")
     assert final.status_code == "OK"
 
 
@@ -137,8 +139,9 @@ def test_subagent_token_usage_reaches_the_trace(fixtures_dir):
             continue
         total_in += s.attributes.get("gen_ai.usage.input_tokens", 0)
         total_out += s.attributes.get("gen_ai.usage.output_tokens", 0)
-    # main a1 (10/5) + subagent 100/20 + 200/30 + 300/40 + nested 50/10
-    assert total_in == 10 + 100 + 200 + 300 + 50
+    # main a1 (10/5) + subagent 100/20 + 200/30 + 300/40 + nested 50/10,
+    # and input is cache-inclusive: sa1 also read 5 and wrote 7.
+    assert total_in == 10 + (100 + 5 + 7) + 200 + 300 + 50
     assert total_out == 5 + 20 + 30 + 40 + 10
     emitted = set(s.span_id for s in out)
     for uuid in sub_ids:

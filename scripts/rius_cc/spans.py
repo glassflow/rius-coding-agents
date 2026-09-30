@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional
+
+from . import context_sizes
 
 PROVIDER_NAME = "anthropic"
 
@@ -21,6 +24,18 @@ SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
 TOOL_ERROR_WITHHELD = "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+
+# A failed tool's error message is one line that says why, capped here. The
+# backend groups errors by it, so the whole output (an 80-line file a grep
+# was piped after, say) must never be it. The cap bounds the SIZE, not the
+# sensitivity: that line is still command output, and only the capture gate
+# (RIUS_CAPTURE_CONTENT) keeps it off the wire. Raising the cap is safe;
+# removing the gate is not.
+ERROR_MESSAGE_MAX_BYTES = 256
+
+# How Claude Code opens a failed Bash call's result.
+_EXIT_CODE = re.compile(r"Exit code (\d+)\s*$")
+_TOOL_USE_ERROR_TAG = re.compile(r"</?tool_use_error>")
 
 # A "user" entry whose text opens with one of these was injected by the
 # harness, not typed by the user: a slash-command caveat, a background-task
@@ -120,7 +135,7 @@ class Ctx:
 class Span:
     def __init__(self, trace_id, span_id, parent_span_id, name, kind_oi,
                  start_ns, end_ns, attributes, status_code, status_message,
-                 pending):
+                 pending, events=None):
         self.trace_id = trace_id
         self.span_id = span_id
         self.parent_span_id = parent_span_id
@@ -132,6 +147,9 @@ class Span:
         self.status_code = status_code
         self.status_message = status_message
         self.pending = pending
+        # (time_ns, name, attributes) span events. A pending span has none:
+        # an event is only ever about something that already happened.
+        self.events = [] if pending else list(events or [])
 
 
 def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
@@ -145,6 +163,39 @@ def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     if kind_oi in ("LLM", "TOOL", "AGENT"):
         attrs["gen_ai.provider.name"] = PROVIDER_NAME
     return attrs
+
+
+def tool_error_type(tool_name: str, output: str) -> str:
+    """A short, low-cardinality class for a failed tool call.
+
+    `Bash.exit_1` for a command that exited non-zero, `<Tool>.tool_error`
+    for anything else. Not content: a tool name and an exit code.
+    """
+    tool = tool_name or "tool"
+    first = output.lstrip().split("\n", 1)[0]
+    match = _EXIT_CODE.match(first)
+    if match:
+        return "%s.exit_%s" % (tool, match.group(1))
+    return tool + ".tool_error"
+
+
+def tool_error_line(output: str, max_bytes: int = ERROR_MESSAGE_MAX_BYTES) -> str:
+    """The one line of a failed tool's output that says why it failed.
+
+    For a command, that is where its output ends: a traceback's last line,
+    `error: ...`, `fatal: ...`. Claude Code's own tool errors are a single
+    sentence in <tool_use_error> tags. The "Exit code N" line is left out,
+    since the error type already says it, unless it is all there is.
+    """
+    lines = [line.strip() for line in _TOOL_USE_ERROR_TAG.sub("", output).splitlines()
+             if line.strip()]
+    if not lines:
+        return ""
+    if _EXIT_CODE.match(lines[0]):
+        line = lines[-1]
+    else:
+        line = lines[0]
+    return truncate(line, max_bytes)
 
 
 def _content_attr(ctx: Ctx, attrs: Dict[str, Any], key: str, value: str) -> None:
@@ -182,13 +233,148 @@ def new_scope() -> dict:
     only -- all of it is persisted between hook invocations.
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
-            "last_ns": 0, "started": False, "start_ns": 0}
+            "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None,
+            "context": None}
+
+
+def _generation_for(entry: Any, scope: dict, root_span_id: str,
+                    inline_sidechains: bool):
+    """(generation, is_its_first_line) for one assistant line.
+
+    Claude Code writes ONE response as one line per content block, and every
+    line repeats the response's usage. The lines are contiguous apart from
+    the tool_results of tools that already ran, so the response in progress
+    is the only one that can still grow. Its id, parent and start are fixed
+    by its first line and persisted: a later hook re-emits the span, and the
+    backend collapses the copies only if the span id and start match.
+    Nothing here is content; the text is re-read from the file when needed.
+    """
+    key = entry.generation_key()
+    gen = scope.get("open_gen")
+    if isinstance(gen, dict) and gen.get("key") == key:
+        return gen, False
+    if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
+        # Only the main transcript: a Claude Code version that wrote
+        # sidechain entries inline still nests them under the tool call.
+        # Inside a subagent's own file every entry is a sidechain entry and
+        # belongs to that subagent, not to the nested tool call it follows.
+        parent_span_id = scope["open_task_spans"][-1]
+    else:
+        parent_span_id = _current_turn_parent(scope, root_span_id)
+    gen = {
+        "key": key,
+        "span_id": span_id_for(key),
+        "parent_span_id": parent_span_id,
+        "start_ns": scope["last_ns"] or entry.timestamp_ns,
+        "offset": entry.offset,
+        # What the prompt held when this call was made: sizes, not content.
+        "context_sizes": context_sizes.snapshot(scope),
+    }
+    scope["open_gen"] = gen
+    return gen, True
+
+
+def _earlier_text(ctx: Ctx, source_path: str, gen: dict,
+                  lines: List[Any]) -> str:
+    """Text from lines of this response that an earlier hook already read."""
+    if not ctx.capture_content or not source_path:
+        return ""
+    start = gen.get("offset", -1)
+    end = lines[0].offset
+    if start is None or start < 0 or end <= start:
+        return ""
+    from . import transcript
+    return "".join(e.text() for e in transcript.read_between(source_path, start, end)
+                   if e.kind == "assistant" and e.generation_key() == gen["key"])
+
+
+def _latest(lines: List[Any], key: str) -> Any:
+    for line in reversed(lines):
+        value = line.message.get(key)
+        if value:
+            return value
+    return None
+
+
+def _input_tokens_inclusive(usage: Dict[str, Any]) -> int:
+    """The whole prompt, cached or not.
+
+    Anthropic's `input_tokens` counts only the uncached part (2 tokens next
+    to 50k cached is normal). The OTel GenAI conventions, the Rius attribute
+    reference and the Rius SDKs all send the inclusive total, with the cache
+    counts as subsets of it, and the backend adds input and output to get a
+    span's tokens. Sent raw, every cached token fell out of that total.
+    """
+    total = 0
+    for key in ("input_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
+
+def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
+                     earlier_text: str) -> Span:
+    """The LLM span for one response, from the lines of it seen so far.
+
+    Usage comes from the LATEST line: in the main transcript every line has
+    the same final usage, but a streamed subagent line can carry a partial
+    count (output_tokens=1, stop_reason=None) that only its last line fixes.
+    """
+    model = _latest(lines, "model") or ""
+    usage = _latest(lines, "usage") or {}
+    stop_reason = _latest(lines, "stop_reason")
+
+    attrs = _base_attrs(ctx, "LLM")
+    if model:
+        attrs["gen_ai.request.model"] = model
+        attrs["gen_ai.response.model"] = model
+    if "input_tokens" in usage:
+        attrs["gen_ai.usage.input_tokens"] = _input_tokens_inclusive(usage)
+    if "output_tokens" in usage:
+        attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
+    thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
+    if isinstance(thinking, int):
+        attrs["gen_ai.usage.reasoning.output_tokens"] = thinking
+    if "cache_read_input_tokens" in usage:
+        attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
+    if "cache_creation_input_tokens" in usage:
+        # Upstream OTel GenAI semconv renamed this attribute to
+        # gen_ai.usage.cache_write.input_tokens (semantic-
+        # conventions-genai#440). We emit BOTH keys with the same
+        # value, deliberately, not belt-and-braces: a Rius backend
+        # at migration 000011 (before 000013_spans_cache_write_
+        # rename) reads only the old key, and dropping it would
+        # silently zero its cache-write count -- this project's
+        # signature failure mode. A backend at 000013+ prefers the
+        # new key, so emitting it too means we stop depending on a
+        # compatibility fallback that will eventually be removed.
+        # Revisit and drop the legacy key once every deployment is
+        # known to be at 000013+.
+        attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
+        attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
+    if stop_reason:
+        attrs["gen_ai.response.finish_reasons"] = [stop_reason]
+    if gen.get("context_sizes"):
+        # Sizes, not content: sent whatever the capture setting.
+        attrs["rius.context.sizes"] = gen["context_sizes"]
+    _content_attr(ctx, attrs, "output.value",
+                  earlier_text + "".join(line.text() for line in lines))
+
+    return Span(
+        trace_id=trace_id, span_id=gen["span_id"],
+        parent_span_id=gen["parent_span_id"], name=model or "assistant",
+        kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
+        attributes=attrs, status_code="OK", status_message="", pending=False,
+    )
 
 
 def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                  root_span_id: str, links: dict, depth: int = 0,
                  key_prefix: str = "", make_turns: bool = True,
-                 inline_sidechains: bool = True) -> List[Any]:
+                 inline_sidechains: bool = True,
+                 source_path: str = "") -> List[Any]:
     """Entries of ONE transcript -> spans, parented under `root_span_id`.
 
     Used for both the main transcript (scope == the session state, root ==
@@ -196,12 +382,19 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     scope, root == that agent's AGENT span). `links` collects every
     subagent-spawning tool_use seen, so subagents.expand() can find the
     transcript each one wrote -- including the ones a subagent spawns.
+
+    `source_path` is the file `entries` came from. It is only read to recover
+    the text of a response whose earlier lines an earlier hook consumed.
     """
     out: List[Span] = []
+    # One generation span per API response in this batch, emitted after the
+    # loop so it carries every line of the response that has arrived.
+    batch_gens: Dict[str, Any] = {}
     for entry in entries:
         if entry.kind == "user":
             tool_results = entry.tool_results()
             if tool_results:
+                result_sizes = []
                 for tr in tool_results:
                     tool_use_id = tr.get("tool_use_id")
                     link = links.get(tool_use_id)
@@ -210,37 +403,52 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # finished; its own transcript has no closing entry.
                         link["end_ns"] = entry.timestamp_ns
                     open_tool = scope["open_tools"].pop(tool_use_id, None)
+                    content = tr.get("content")
+                    content_str = content if isinstance(content, str) else json.dumps(content)
+                    result_sizes.append(context_sizes.tool_result_part(
+                        open_tool["tool_name"] if open_tool else "", content_str))
                     if open_tool is None:
                         continue  # tool started before instrumentation was enabled
                     if open_tool["span_id"] in scope["open_task_spans"]:
                         scope["open_task_spans"].remove(open_tool["span_id"])
                     is_error = bool(tr.get("is_error"))
-                    content = tr.get("content")
-                    content_str = content if isinstance(content, str) else json.dumps(content)
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs["gen_ai.tool.name"] = open_tool["tool_name"]
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
                     _content_attr(ctx, attrs, "output.value", content_str)
                     status_code = "ERROR" if is_error else "OK"
-                    # Status.message is content too: for a failed Bash call
-                    # it is the command's stdout+stderr. It must honour the
-                    # capture gate exactly like input.value/output.value do,
-                    # or RIUS_CAPTURE_CONTENT=false is not the guarantee the
+                    # Status.message is content too: it is a line of the
+                    # command's output. It must honour the capture gate
+                    # exactly like input.value/output.value do, or
+                    # RIUS_CAPTURE_CONTENT=false is not the guarantee the
                     # README makes it out to be.
-                    if not is_error:
-                        status_message = ""
-                    elif ctx.capture_content:
-                        status_message = truncate(content_str, ctx.max_attr_bytes)
-                    else:
-                        status_message = TOOL_ERROR_WITHHELD
+                    status_message = ""
+                    events = []
+                    if is_error:
+                        error_type = tool_error_type(open_tool["tool_name"], content_str)
+                        if ctx.capture_content:
+                            status_message = tool_error_line(content_str) or error_type
+                        else:
+                            status_message = TOOL_ERROR_WITHHELD
+                        attrs["error.type"] = error_type
+                        # The backend groups errors by this event's type and
+                        # message, and only falls back to the status message
+                        # without one.
+                        events.append((entry.timestamp_ns, "exception", {
+                            "exception.type": error_type,
+                            "exception.message": status_message,
+                        }))
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
                         parent_span_id=open_tool["parent_span_id"], name=open_tool["tool_name"],
                         kind_oi="TOOL", start_ns=open_tool["start_ns"], end_ns=entry.timestamp_ns,
                         attributes=attrs, status_code=status_code, status_message=status_message,
-                        pending=False,
+                        pending=False, events=events,
                     ))
-            elif make_turns:
+                context_sizes.tool_results(scope, result_sizes)
+            else:
+                context_sizes.user_text(scope, entry)
+            if make_turns and not tool_results:
                 if entry.prompt_id and entry.prompt_id not in scope["open_turns"]:
                     # Namespaced by scope: a subagent transcript carries the
                     # PARENT's promptId, so "turn:" + promptId alone would
@@ -270,57 +478,12 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     ))
 
         elif entry.kind == "assistant":
-            if inline_sidechains and entry.is_sidechain and scope["open_task_spans"]:
-                # Only the main transcript: a Claude Code version that wrote
-                # sidechain entries inline still nests them under the tool
-                # call. Inside a subagent's own file every entry is a
-                # sidechain entry and belongs to that subagent, not to the
-                # nested tool call it happens to follow.
-                parent_span_id = scope["open_task_spans"][-1]
-            else:
-                parent_span_id = _current_turn_parent(scope, root_span_id)
-
-            model = entry.message.get("model") or ""
-            usage = entry.message.get("usage") or {}
-            stop_reason = entry.message.get("stop_reason")
-            llm_span_id = span_id_for(entry.uuid)
-            start_ns = scope["last_ns"] or entry.timestamp_ns
-
-            attrs = _base_attrs(ctx, "LLM")
-            if model:
-                attrs["gen_ai.request.model"] = model
-                attrs["gen_ai.response.model"] = model
-            if "input_tokens" in usage:
-                attrs["gen_ai.usage.input_tokens"] = usage["input_tokens"]
-            if "output_tokens" in usage:
-                attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
-            if "cache_read_input_tokens" in usage:
-                attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
-            if "cache_creation_input_tokens" in usage:
-                # Upstream OTel GenAI semconv renamed this attribute to
-                # gen_ai.usage.cache_write.input_tokens (semantic-
-                # conventions-genai#440). We emit BOTH keys with the same
-                # value, deliberately, not belt-and-braces: a Rius backend
-                # at migration 000011 (before 000013_spans_cache_write_
-                # rename) reads only the old key, and dropping it would
-                # silently zero its cache-write count -- this project's
-                # signature failure mode. A backend at 000013+ prefers the
-                # new key, so emitting it too means we stop depending on a
-                # compatibility fallback that will eventually be removed.
-                # Revisit and drop the legacy key once every deployment is
-                # known to be at 000013+.
-                attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
-                attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
-            if stop_reason:
-                attrs["gen_ai.response.finish_reasons"] = [stop_reason]
-            _content_attr(ctx, attrs, "output.value", entry.text())
-
-            out.append(Span(
-                trace_id=trace_id, span_id=llm_span_id, parent_span_id=parent_span_id,
-                name=model or "assistant", kind_oi="LLM", start_ns=start_ns,
-                end_ns=entry.timestamp_ns, attributes=attrs, status_code="OK",
-                status_message="", pending=False,
-            ))
+            gen, first_line = _generation_for(entry, scope, root_span_id,
+                                              inline_sidechains)
+            context_sizes.assistant_line(scope, entry, first_line)
+            batch_lines = batch_gens.setdefault(gen["key"], (gen, []))[1]
+            batch_lines.append(entry)
+            llm_span_id = gen["span_id"]
 
             for block in entry.tool_uses():
                 tool_id = block.get("id")
@@ -370,10 +533,14 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
         scope["last_ns"] = entry.timestamp_ns
 
+    for gen, lines in batch_gens.values():
+        earlier = _earlier_text(ctx, source_path, gen, lines)
+        out.append(_generation_span(ctx, trace_id, gen, lines, earlier))
     return out
 
 
-def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
+def build(entries: List[Any], state: dict, ctx: Ctx,
+          source_path: str = "") -> List[Any]:
     """The MAIN transcript. Subagent transcripts are separate files; see
     subagents.expand(), which feeds them through emit_entries() too."""
     out: List[Span] = []
@@ -400,7 +567,8 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
 
     out += emit_entries(entries, state, ctx, trace_id, root_span_id,
                         state["sub_links"], depth=0, key_prefix="",
-                        make_turns=True, inline_sidechains=True)
+                        make_turns=True, inline_sidechains=True,
+                        source_path=source_path)
     return out
 
 
