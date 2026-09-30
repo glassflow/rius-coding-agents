@@ -36,6 +36,13 @@ this was built against, **58% of all tokens and 71% of all model calls were
 inside subagents**, and a trace that stopped at the tool call reported less
 than half of what the session cost.
 
+Background subagents are followed to the end. Claude Code 2.1.x runs a
+subagent in the background by default: its `Agent` tool call returns a launch
+acknowledgement within a second, and the subagent keeps working for minutes
+afterwards. The plugin keeps reading the subagent's file as it grows, so its
+model calls land under its `AGENT` span, and that span ends at the
+subagent's last transcript line rather than at the acknowledgement.
+
 The subagent's span carries `gen_ai.agent.name` (its agent type, e.g.
 `general-purpose`), its own model and its description, so each subagent is
 filterable as a named agent in the Rius UI rather than an anonymous span.

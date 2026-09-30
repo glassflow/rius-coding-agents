@@ -16,6 +16,12 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   `message.id`, the usage is counted once (from the response's last line,
   since streamed subagent lines carry partial counts), and the response's
   tool calls all sit under it.
+- Background subagents' model calls are traced. A background subagent's
+  `Agent` call returns a launch acknowledgement at once, and the plugin
+  stopped reading the subagent's file there, when it held only the brief:
+  the subagent showed 0 tokens and no children, and its span ended at the
+  acknowledgement. The file is now read for as long as it grows, and the
+  subagent's span ends at its last line.
 
 ## 0.4.1 (2026-09-30)
 

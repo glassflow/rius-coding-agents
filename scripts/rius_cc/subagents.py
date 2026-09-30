@@ -181,12 +181,29 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
         make_turns=False, inline_sidechains=False, source_path=path,
     )
 
+    # The tool_result is when the Agent CALL returned. For a foreground
+    # subagent that is also when it finished; a background one (Claude Code
+    # 2.1.x's default) returns a launch acknowledgement at once and keeps
+    # writing its file for minutes. So the subagent ends at whichever is
+    # later, and its span is re-sent, same id and start, as its file grows.
     end_ns = link.get("end_ns")
-    if end_ns is not None and not link.get("closed"):
-        link["closed"] = True
-        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
-                               end_ns=end_ns, pending=False))
+    if end_ns is not None:
+        agent_end = max(end_ns, scope.get("last_ns") or 0)
+        if not link.get("closed") or agent_end > (link.get("emitted_end_ns") or 0):
+            link["closed"] = True
+            link["emitted_end_ns"] = agent_end
+            out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
+                                   end_ns=agent_end, pending=False))
     return out
+
+
+def _has_news(state: dict, subdir: str, agent_id: str) -> bool:
+    """Whether a subagent's file has grown past what was already read."""
+    try:
+        size = os.path.getsize(os.path.join(subdir, agent_id + ".jsonl"))
+    except OSError:
+        return False
+    return size > (state["sub_offsets"].get(agent_id) or 0)
 
 
 def expand(state: dict, ctx, subdir: str) -> List[Any]:
@@ -214,7 +231,11 @@ def expand(state: dict, ctx, subdir: str) -> List[Any]:
         for tool_use_id in todo:
             seen.add(tool_use_id)
             link = state["sub_links"][tool_use_id]
-            if link.get("closed") and link.get("agent_id"):
+            # A closed link is NOT finished with: a background subagent keeps
+            # writing after its tool call returned. Only a file that has not
+            # grown is skipped, and that costs one stat, not an index.
+            if (link.get("closed") and link.get("agent_id")
+                    and not _has_news(state, subdir, link["agent_id"])):
                 continue
             if (link.get("depth") or 1) > MAX_DEPTH:
                 continue
