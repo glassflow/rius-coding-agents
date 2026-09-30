@@ -1,7 +1,45 @@
 """Shared fixtures. `pythonpath = ["scripts"]` in pyproject makes rius_cc importable."""
+import os
 import pathlib
+import re
 
 import pytest
+
+# The developer's REAL state directory, resolved before any test can
+# override HOME. No test may write there.
+REAL_STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "rius",
+                              "state")
+
+# Real Claude Code session ids are uuid4s. Test ids never are ("s1",
+# "11111111-1111-...", "aaaaaaaa-0000-..."), so a new file that does not
+# start with one is a test leaking into the real directory; files of the
+# developer's live sessions, which may appear while the suite runs, are not.
+_REAL_SESSION = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+
+
+def leaked(before, after):
+    """Names that appeared in the real state dir and are not a live session's."""
+    return sorted(n for n in set(after) - set(before)
+                  if not _REAL_SESSION.match(n))
+
+
+def _listing(path):
+    try:
+        return os.listdir(path)
+    except OSError:
+        return []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_state_dir_is_untouched():
+    before = _listing(REAL_STATE_DIR)
+    yield
+    new = leaked(before, _listing(REAL_STATE_DIR))
+    if new:
+        pytest.fail("the test suite wrote into the real %s: %s -- a test ran "
+                    "without an isolated HOME" % (REAL_STATE_DIR, new),
+                    pytrace=False)
 
 
 @pytest.fixture
