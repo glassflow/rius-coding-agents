@@ -122,7 +122,9 @@ def test_subagent_agent_span_starts_pending_and_then_closes(fixtures_dir):
     assert pending.attributes["gen_ai.agent.name"] == "general-purpose"
     # the tool_result in the MAIN transcript is what ends the subagent
     assert final.end_ns == transcript._timestamp_ns("2026-09-22T10:00:09.000Z")
-    assert final.start_ns == transcript._timestamp_ns("2026-09-22T10:00:01.000Z")
+    # ...and it starts with its own first line (10:00:02), not with the
+    # Agent tool_use that asked for it (10:00:01).
+    assert final.start_ns == transcript._timestamp_ns("2026-09-22T10:00:02.000Z")
     assert final.status_code == "OK"
 
 

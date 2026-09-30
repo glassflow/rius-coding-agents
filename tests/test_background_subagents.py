@@ -152,9 +152,19 @@ def test_background_subagent_span_ends_when_its_work_ends(tmp_path):
     final = _latest(s.out)[agent_span_id]
     assert final.pending is False
     assert final.attributes["gen_ai.agent.name"] == "general-purpose"
-    # From the Agent call (10:00:01) to the subagent's last line (10:00:30),
+    # From the subagent's first line (10:00:01.5) to its last (10:00:30),
     # not to the launch acknowledgement (10:00:02).
-    assert final.end_ns - final.start_ns == 29_000_000_000
+    assert final.end_ns - final.start_ns == 28_500_000_000
+
+
+def test_a_subagent_starts_when_its_own_transcript_does(tmp_path):
+    """Claude Code timestamps a tool_use line when the block has streamed,
+    and a parallel batch of Agent calls runs only once the whole response
+    has: in the real session a subagent's file began 24 s after its Agent
+    tool_use line. The subagent ran from its file's first line."""
+    s = _run(tmp_path)
+    final = _latest(s.out)[spans.span_id_for("subagent:" + AGENT)]
+    assert final.start_ns == transcript._timestamp_ns(_ts(1.5))
 
 
 def test_the_agent_tool_span_itself_still_ends_at_its_result(tmp_path):

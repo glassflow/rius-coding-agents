@@ -49,8 +49,9 @@ Background subagents are followed to the end. Claude Code 2.1.x runs a
 subagent in the background by default: its `Agent` tool call returns a launch
 acknowledgement within a second, and the subagent keeps working for minutes
 afterwards. The plugin keeps reading the subagent's file as it grows, so its
-model calls land under its `AGENT` span, and that span ends at the
-subagent's last transcript line rather than at the acknowledgement.
+model calls land under its `AGENT` span, and that span runs from the
+subagent's first transcript line to its last rather than ending at the
+acknowledgement.
 
 The subagent's span carries `gen_ai.agent.name` (its agent type, e.g.
 `general-purpose`), its own model and its description, so each subagent is
