@@ -12,9 +12,18 @@ a copy of the whole history: the same entry uuids, a new sessionId and new
 promptIds. The old process gets no SessionEnd.
 
 The link is Claude Code's own record, matched exactly; nothing is inferred
-from uuids alone. Once it is found, the new session skips the copied entries
-(the old session already sent them) until the first entry the old
-transcript does not have.
+from uuids alone.
+
+The rule is the resume rule: the same conversation continuing stays ONE
+trace. So at the switch the new id takes the conversation over (link()):
+the conversation's id -- whose trace and root every span keeps -- the root's
+bookkeeping, the open turn and tools, the stop flag and the prompt-size
+account all move into the new id's state, and the old id is marked handed
+off. From then on the new id owns closing the root; the old id never does.
+The old id's subagents keep their bookkeeping in its state, and the new id
+keeps reading them (see exporter). The copied history the old id already
+sent is skipped by the new id; anything the old process wrote but never
+sent is sent once, by the new id.
 
 Standard library only.
 """
@@ -24,6 +33,7 @@ import json
 import os
 from typing import Any, List, Optional, Set, Tuple
 
+from . import state as state_mod
 from . import transcript
 
 RECORD = "continued-in"
@@ -89,10 +99,12 @@ def find_predecessor(transcript_path: str, session_id: str
     return None
 
 
-def copied_uuids(path: str) -> Set[str]:
-    """The uuids of the conversational entries in the old transcript."""
+def copied_uuids(path: str, until: int = -1) -> Set[str]:
+    """The uuids of the old transcript's entries the old session already
+    sent: those before its transcript offset (`until`; -1 = all of them)."""
     entries, _ = transcript.read_from(path, 0)
-    return {e.uuid for e in entries if e.uuid}
+    return {e.uuid for e in entries
+            if e.uuid and (until < 0 or e.offset < until)}
 
 
 def drop_copied(entries: List[Any], uuids: Set[str]) -> Tuple[List[Any], bool]:
@@ -105,3 +117,103 @@ def drop_copied(entries: List[Any], uuids: Set[str]) -> Tuple[List[Any], bool]:
         ended = True
         kept.append(entry)
     return kept, ended
+
+
+# What moves from the old id's state to the new one at the switch: the root
+# (so the new id neither opens a second root nor forgets to close this one),
+# the stop flag (the stop belongs to the conversation, not to an id), and the
+# main transcript's open work. The subagent bookkeeping stays with the old
+# id: it names files under the old id's directory.
+_MOVED = ("root_started", "root_start_ns", "content_stopped", "open_turns",
+          "open_tools", "open_task_spans", "last_ns", "context")
+
+HANDOFF_LOCK_TIMEOUT_S = 1.0
+
+
+def _stop_heartbeat(session_id: str, home: str) -> None:
+    """What hook.py does on SessionEnd: tell that id's pinger to stop."""
+    try:
+        with open(os.path.join(state_mod.state_dir(home),
+                               session_id + ".heartbeat.stop"), "w") as fh:
+            fh.write("")
+    except OSError:
+        pass
+
+
+def _take_over(st: dict, old_id: str, old_path: str, switch_ns: int,
+               old: dict) -> None:
+    conversation = old.get("conversation") or old_id
+    st["conversation"] = conversation
+    st["continued_from"] = old_id
+    st["continued_from_path"] = old_path
+    st["switch_ns"] = switch_ns
+    st["copied_until"] = old.get("offset", 0)
+    st["skipping_copied"] = True
+    adopted = [a for a in (old.get("adopted") or []) if isinstance(a, dict)]
+    st["adopted"] = adopted + [{"session_id": old_id, "transcript_path": old_path}]
+    for key in _MOVED:
+        if key in old:
+            st[key] = old[key]
+    # A root the old id had already closed is re-closed, later, by this id.
+    st["finalized"] = False
+    gen = old.get("open_gen")
+    if isinstance(gen, dict):
+        # Its byte offset points into the OLD file; never re-read with it.
+        st["open_gen"] = dict(gen, offset=-1)
+    old["open_turns"] = {}
+    old["open_tools"] = {}
+    old["open_task_spans"] = []
+    old["open_gen"] = None
+    old["finalized"] = True
+
+
+def link(session_id: str, transcript_path: str, home: str,
+         st: Optional[dict] = None, final: bool = False) -> Optional[str]:
+    """Take the conversation over if this id continues another one.
+
+    Returns the old id when this call made the switch, else None. `st` is
+    this id's state when the caller already holds its lock (the exporter);
+    without it the lock is taken here (hook.py, at SessionStart, which must
+    stop the old id's pinger before it starts this one's). Looked up until
+    found, or until `final` says the transcript has entries and none is
+    coming: the copy is written when the new session starts.
+    """
+    own_lock = st is None
+    if own_lock:
+        with state_mod.session_lock(session_id, home,
+                                    block_timeout=HANDOFF_LOCK_TIMEOUT_S) as got:
+            if not got:
+                return None
+            st = state_mod.load(session_id, home)
+            old_id = _link_into(st, session_id, transcript_path, home, final)
+            state_mod.save(session_id, home, st)
+            return old_id
+    return _link_into(st, session_id, transcript_path, home, final)
+
+
+def _link_into(st: dict, session_id: str, transcript_path: str, home: str,
+               final: bool) -> Optional[str]:
+    if st.get("continuation_checked") or not transcript_path:
+        return None
+    found = find_predecessor(transcript_path, session_id)
+    if found is None:
+        if final:
+            st["continuation_checked"] = True
+        return None
+    old_id, old_path, switch_ns = found
+    with state_mod.session_lock(old_id, home,
+                                block_timeout=HANDOFF_LOCK_TIMEOUT_S) as got:
+        if not got:
+            return None                     # try again on the next event
+        old = state_mod.load(old_id, home)
+        if old.get("handed_off_to"):
+            # Taken over already, and its open work moved with it: doing it
+            # twice would move nothing and forget the root.
+            st["continuation_checked"] = True
+            return None
+        _take_over(st, old_id, old_path, switch_ns, old)
+        old["handed_off_to"] = session_id
+        state_mod.save(old_id, home, old)
+    st["continuation_checked"] = True
+    _stop_heartbeat(old_id, home)
+    return old_id

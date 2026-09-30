@@ -80,9 +80,10 @@ _PENDING_ALLOWED_KEYS = {
     "cc.turn.source",
     "cc.subagent.id",
     "cc.subagent.depth",
-    # The session id this one continues (Claude Code moved the conversation
-    # to a new id). An id, not content.
+    # The session id a turn's conversation continued from, and the id it
+    # runs under now (Claude Code moved the conversation). Ids, not content.
     "cc.continued_from",
+    "cc.claude_session_id",
 }
 
 
@@ -122,8 +123,15 @@ class Ctx:
     """Plain, mutable context. Tests mutate `capture_content` post-construction."""
 
     def __init__(self, session_id, cwd, git_branch, cc_version, service_name,
-                 capture_content, max_attr_bytes):
+                 capture_content, max_attr_bytes, conversation_id="",
+                 continued_from=""):
         self.session_id = session_id
+        # The conversation this session id carries on. It is the session id
+        # itself unless Claude Code moved the conversation to a new id; the
+        # trace, the root and `session.id` are the conversation's, so a moved
+        # conversation stays one trace (continuation.py).
+        self.conversation_id = conversation_id or session_id
+        self.continued_from = continued_from
         self.cwd = cwd
         self.git_branch = git_branch
         self.cc_version = cc_version
@@ -155,7 +163,7 @@ class Span:
 def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {
         "openinference.span.kind": kind_oi,
-        "session.id": ctx.session_id,
+        "session.id": ctx.conversation_id,
     }
     op = _OPERATION_BY_KIND.get(kind_oi)
     if op is not None:
@@ -467,8 +475,17 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # fill input.value, which the gate drops anyway.
                         "text": entry.text() if ctx.capture_content else "",
                     }
+                    if ctx.continued_from and not key_prefix:
+                        # This turn is the conversation carrying on under a
+                        # new session id, in the same trace. Kept with the
+                        # turn so its finished row says so too.
+                        scope["open_turns"][entry.prompt_id]["continued"] = {
+                            "cc.continued_from": ctx.continued_from,
+                            "cc.claude_session_id": ctx.session_id,
+                        }
                     attrs = _base_attrs(ctx, "CHAIN")
                     attrs["cc.turn.source"] = source
+                    attrs.update(scope["open_turns"][entry.prompt_id].get("continued") or {})
                     attrs["glassflow.span.pending"] = True
                     out.append(Span(
                         trace_id=trace_id, span_id=turn_span_id, parent_span_id=root_span_id,
@@ -544,8 +561,8 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
     """The MAIN transcript. Subagent transcripts are separate files; see
     subagents.expand(), which feeds them through emit_entries() too."""
     out: List[Span] = []
-    trace_id = trace_id_for(ctx.session_id)
-    root_span_id = span_id_for("session:" + ctx.session_id)
+    trace_id = trace_id_for(ctx.conversation_id)
+    root_span_id = span_id_for("session:" + ctx.conversation_id)
     if "sub_links" not in state:
         state["sub_links"] = {}
 
@@ -555,7 +572,7 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
     if entries and not state.get("root_started"):
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
-        attrs = _root_attrs(ctx, state)
+        attrs = _base_attrs(ctx, "AGENT")
         attrs["glassflow.span.pending"] = True
         out.append(Span(
             trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
@@ -612,10 +629,11 @@ def subagent_span(ctx: Ctx, trace_id: str, span_id: str, parent_span_id: str,
 
 def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     out: List[Span] = []
-    trace_id = trace_id_for(ctx.session_id)
+    trace_id = trace_id_for(ctx.conversation_id)
     for prompt_id, turn in list(state["open_turns"].items()):
         attrs = _base_attrs(ctx, "CHAIN")
         attrs["cc.turn.source"] = turn.get("source") or "user"
+        attrs.update(turn.get("continued") or {})
         _content_attr(ctx, attrs, "input.value", turn.get("text", ""))
         out.append(Span(
             trace_id=trace_id, span_id=turn["span_id"], parent_span_id=turn["parent_span_id"],
@@ -648,29 +666,26 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     return out
 
 
-def _root_attrs(ctx: Ctx, state: dict) -> Dict[str, Any]:
-    attrs = _base_attrs(ctx, "AGENT")
-    if state.get("continued_from"):
-        attrs["cc.continued_from"] = state["continued_from"]
-    return attrs
-
-
 def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     """Close everything still open, so no span of the trace stays pending."""
-    trace_id = trace_id_for(ctx.session_id)
+    trace_id = trace_id_for(ctx.conversation_id)
     out = finalize_turn(state, ctx, now_ns)
     for scope in [state] + list((state.get("sub_scopes") or {}).values()):
         if scope.get("open_tools"):
             out += _close_open_tools(scope, ctx, trace_id, now_ns)
     state["finalized"] = True
+    if state.get("handed_off_to"):
+        # The conversation moved to another session id, which owns the root
+        # now and closes it when IT ends (continuation.py).
+        return out
     if not state.get("root_started"):
         # build() never saw an entry: the user opened a session in an enabled
         # folder, typed nothing and quit. There is no root span to close --
         # closing one anyway emits a span starting at root_start_ns == 0, the
         # Unix epoch, which draws as a 56-year bar.
         return out
-    root_span_id = span_id_for("session:" + ctx.session_id)
-    attrs = _root_attrs(ctx, state)
+    root_span_id = span_id_for("session:" + ctx.conversation_id)
+    attrs = _base_attrs(ctx, "AGENT")
     out.append(Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
         name="claude-code session", kind_oi="AGENT",
