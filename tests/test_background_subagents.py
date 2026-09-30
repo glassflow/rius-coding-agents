@@ -181,3 +181,28 @@ def test_a_finished_subagent_is_not_re_emitted_when_nothing_changed(tmp_path):
     s.hook()
     s.hook()
     assert len(s.out) == before
+
+
+def test_a_subagent_whose_file_is_still_empty_starts_at_its_first_line(tmp_path):
+    """meta.json can exist before the subagent has written a line; the span
+    must not be pinned to the Agent tool_use time because of that."""
+    s = Session(tmp_path)
+    s.append(s.main,
+             _user("u1", 0, "count the words in parallel"),
+             _assistant("a1", 1, "msg_main1",
+                        [{"type": "tool_use", "id": "toolu_bg", "name": "Agent",
+                          "input": {"prompt": "count words",
+                                    "run_in_background": True}}],
+                        40, "tool_use"))
+    s.hook()                                   # meta.json there, file empty
+    s.append(s.sub, _user("s1", 5, "count words", sidechain=True))
+    s.append(s.main, _user("u2", 6, _result("toolu_bg", "Async agent launched")))
+    s.hook()
+    s.append(s.sub, _assistant("s2", 9, "msg_sub1",
+                               [{"type": "text", "text": "done"}], 5,
+                               "end_turn", sidechain=True))
+    s.hook()
+    agent_span_id = spans.span_id_for("subagent:" + AGENT)
+    copies = [x for x in s.out if x.span_id == agent_span_id]
+    assert {x.start_ns for x in copies} == {transcript._timestamp_ns(_ts(5))}
+    assert _latest(s.out)[agent_span_id].end_ns == transcript._timestamp_ns(_ts(9))

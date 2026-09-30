@@ -162,15 +162,17 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
     state["sub_offsets"][agent_id] = new_offset
 
     if not scope.get("started"):
+        if not entries:
+            # meta.json can be written before the subagent's first line.
+            # Nothing has run yet; open the span once something has.
+            return out
         scope["started"] = True
         # The subagent starts with its own first line. The Agent tool_use is
         # stamped when that block finished streaming, and a parallel batch of
         # Agent calls only runs once the whole response has: 24 s earlier,
         # in one real session. Fixed here, once: the backend collapses the
         # pending and final copies only if the start matches.
-        start_ns = link.get("start_ns") or 0
-        if entries and entries[0].timestamp_ns > start_ns:
-            start_ns = entries[0].timestamp_ns
+        start_ns = max(link.get("start_ns") or 0, entries[0].timestamp_ns)
         scope["start_ns"] = start_ns
         # Pending first, exactly like the session root and every tool span:
         # a subagent that is still running should draw as in-progress rather
