@@ -178,24 +178,43 @@ def link(session_id: str, transcript_path: str, home: str,
     found, or until `final` says the transcript has entries and none is
     coming: the copy is written when the new session starts.
     """
-    own_lock = st is None
-    if own_lock:
-        with state_mod.session_lock(session_id, home,
-                                    block_timeout=HANDOFF_LOCK_TIMEOUT_S) as got:
-            if not got:
-                return None
-            st = state_mod.load(session_id, home)
-            old_id = _link_into(st, session_id, transcript_path, home, final)
-            state_mod.save(session_id, home, st)
-            return old_id
-    return _link_into(st, session_id, transcript_path, home, final)
-
-
-def _link_into(st: dict, session_id: str, transcript_path: str, home: str,
-               final: bool) -> Optional[str]:
-    if st.get("continuation_checked") or not transcript_path:
+    if st is not None:
+        if st.get("continuation_checked") or not transcript_path:
+            return None
+        return _link_into(st, session_id, home, final,
+                          find_predecessor(transcript_path, session_id))
+    # hook.py runs this for every SessionStart that has a key, in folders
+    # that are off too. Read-only until there is a conversation to take
+    # over: an untraced session must leave nothing on disk.
+    if not transcript_path:
         return None
     found = find_predecessor(transcript_path, session_id)
+    if found is None or not _was_traced(found[0], home):
+        return None
+    with state_mod.session_lock(session_id, home,
+                                block_timeout=HANDOFF_LOCK_TIMEOUT_S) as got:
+        if not got:
+            return None
+        st = state_mod.load(session_id, home)
+        if st.get("continuation_checked"):
+            return None
+        old_id = _link_into(st, session_id, home, final, found)
+        if old_id:
+            state_mod.save(session_id, home, st)
+        return old_id
+
+
+def _was_traced(session_id: str, home: str) -> bool:
+    """Whether the old id has state: a conversation never traced has
+    nothing to take over, and looking must not create its files."""
+    return os.path.exists(os.path.join(home, ".claude", "rius", "state",
+                                       session_id + ".json"))
+
+
+def _link_into(st: dict, session_id: str, home: str, final: bool,
+               found) -> Optional[str]:
+    if found is not None and not _was_traced(found[0], home):
+        found = None
     if found is None:
         if final:
             st["continuation_checked"] = True

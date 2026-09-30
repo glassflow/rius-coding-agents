@@ -533,3 +533,44 @@ def test_the_old_id_sends_nothing_after_the_switch(tmp_path, home, sent):
     c.run("Stop", sid=OLD)
     c.run("SessionEnd", sid=OLD)
     assert len([s for s in sent if s.span_id == spans.span_id_for("msg_late")]) == 1
+
+
+def test_a_session_start_in_a_disabled_folder_writes_nothing(
+        tmp_path, home, sent, monkeypatch):
+    """Tracing is off by default, and a folder that is off leaves no trace
+    on disk: the continuation lookup must be read-only until there is a
+    conversation to take over."""
+    from tests.test_hook import _run_in_process
+    _enable(home, [])
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    new = proj / (NEW + ".jsonl")
+    _write(new, [_user(NEW, "x1", "2026-09-30T10:00:00.000Z", "hello", "p1")])
+    _decoy(proj, "dddddddd-0000-0000-0000-000000000004",
+           "eeeeeeee-0000-0000-0000-000000000005")
+    payload = {"session_id": NEW, "cwd": "/tmp/proj",
+               "transcript_path": str(new), "hook_event_name": "SessionStart"}
+    calls = _run_in_process(monkeypatch, "SessionStart", payload,
+                            dict(ENV, HOME=home, USERPROFILE=home), home)
+    assert calls == []
+    state_dir = os.path.join(home, ".claude", "rius", "state")
+    left = os.listdir(state_dir) if os.path.isdir(state_dir) else []
+    assert left == [], "a disabled folder wrote %s" % left
+
+
+def test_moving_an_untraced_conversation_writes_nothing(
+        tmp_path, home, sent, monkeypatch):
+    """A conversation that was never traced has nothing to take over, even
+    when Claude Code moved it: still no files for either id."""
+    from tests.test_hook import _run_in_process
+    _enable(home, [])
+    c = Conv(tmp_path, home)
+    _write(c.old, _history(OLD, "p-old"))          # never hooked: untraced
+    c.switch()
+    payload = {"session_id": NEW, "cwd": "/tmp/proj",
+               "transcript_path": str(c.new), "hook_event_name": "SessionStart"}
+    _run_in_process(monkeypatch, "SessionStart", payload,
+                    dict(ENV, HOME=home, USERPROFILE=home), home)
+    state_dir = os.path.join(home, ".claude", "rius", "state")
+    left = os.listdir(state_dir) if os.path.isdir(state_dir) else []
+    assert left == [], "an untraced conversation wrote %s" % left
