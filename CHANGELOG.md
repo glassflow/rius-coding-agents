@@ -30,6 +30,9 @@ Production is the default.
   withholds credential-named variables from a plugin's headers helper, so
   `RIUS_API_KEY` applies to tracing only. `/rius:status` prints which key
   the MCP server has (`MCP key:`).
+- `/rius:enable-here` says what the folder will upload and to which
+  workspace (or that it will send once you sign in, when there is no key
+  yet), names disabled subfolders it does not reach, and shows how to stop.
 - README and getting started cover production hosts, with staging as its
   own section.
 
