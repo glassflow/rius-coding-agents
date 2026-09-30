@@ -114,7 +114,26 @@ def _enable_here(cwd, home):
     if match and not match[1]:
         print(STILL_OFF % match[0])
     else:
-        print("Rius tracing enabled for %s." % cwd)
+        print(_enabled_disclosure(cwd, home))
+
+
+ENABLED_WITH_CONTENT = (
+    "Rius tracing enabled for %s and everything under it. Sessions here now "
+    "send prompts, replies, the contents of files Claude reads and command "
+    "output to %s. Set RIUS_CAPTURE_CONTENT=false to send structure only "
+    "(models, tokens, timing), or run /rius:disable-here to stop.")
+ENABLED_WITHOUT_CONTENT = (
+    "Rius tracing enabled for %s and everything under it. Sessions here now "
+    "send structure only (models, tokens, timing) to %s; "
+    "RIUS_CAPTURE_CONTENT=false withholds prompts, replies, file contents and "
+    "command output. Run /rius:disable-here to stop.")
+
+
+def _enabled_disclosure(cwd, home):
+    # RIUS-969: enabling a folder is the consent act, so say what it uploads.
+    cfg = config.resolve("", cwd, os.environ, home)
+    template = ENABLED_WITH_CONTENT if cfg.capture_content else ENABLED_WITHOUT_CONTENT
+    return template % (cwd, cfg.workspace_name or "your Rius workspace")
 
 
 def _disable_here(cwd, home):
