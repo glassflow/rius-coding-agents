@@ -387,7 +387,7 @@ decided, verbatim:
 | `off: RIUS_API_KEY is not set` | The folder is enabled, but no key reached the hook process. |
 | `off: RIUS_CLAUDE_ENABLED` | An environment variable is turning it off, above the path rules. |
 | `off: session override` | A `/rius:off` override is in force for this session. `/rius:on` flips it; a new session starts without it. |
-| `on: path rule '<rule>' enables <cwd>` | Working as intended. |
+| `on: path rule '<rule>' enables <cwd>` | Working as intended, unless a `Stopped:` line follows (see below). |
 
 A `Stopped:` line under `Reason` means this session's folder was disabled
 while it was running. That session sends nothing more, even if the folder is
