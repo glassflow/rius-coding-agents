@@ -102,7 +102,11 @@ def main() -> None:
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
-        if not cfg.enabled:
+        # A session disabled after its trace started still needs the
+        # exporter: it records the stop, and on SessionEnd closes the trace.
+        stopped = not cfg.enabled
+        if stopped and not (cfg.api_key
+                            and state.trace_is_open(state.load(session_id, home))):
             return
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -110,7 +114,7 @@ def main() -> None:
         # Mint BEFORE anything is spawned, so both children are handed the
         # same id and neither has to race the other for it.
         instance_id = ""
-        if event == "SessionStart":
+        if event == "SessionStart" and not stopped:
             source = payload.get("source", "")
             instance_id = _mint_instance_id(state, session_id, home, source)
             _clear_stop_file(state, session_id, home)
@@ -134,7 +138,7 @@ def main() -> None:
                 **detach
             )
 
-            if event == "SessionStart":
+            if event == "SessionStart" and not stopped:
                 # The heartbeat pinger watches this process's parent (the live
                 # Claude Code process that invoked this hook), not this
                 # short-lived hook process itself.

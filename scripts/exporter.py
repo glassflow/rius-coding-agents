@@ -154,6 +154,73 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     return 0
 
 
+def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg) -> int:
+    """Export `out` (if any), then persist the state and the new offset."""
+    if out:
+        body = otlp.encode(resource_attrs, out)
+        status = otlp.export(cfg.endpoint, cfg.api_key, body)
+        _log(home, cfg, "session %s: exported %d spans, status=%s"
+             % (session_id, len(out), status))
+
+        if not (status and 200 <= status < 300):
+            return _handle_export_failure(
+                session_id, home, cfg, st, new_offset, status)
+
+        st["spans_exported"] = st.get("spans_exported", 0) + len(out)
+        st["consecutive_export_failures"] = 0
+        st.pop("last_export_error", None)
+
+    st["offset"] = new_offset
+    state.save(session_id, home, st)
+    return len(out)
+
+
+def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
+    """A session whose folder was disabled after its trace started.
+
+    Disabling beats enabling for content, and for good: the session is
+    marked stopped, so re-enabling the folder mid-session does not resume it
+    (its transcript offset has not moved, so resuming would upload what was
+    said while it was off). Nothing is read from the transcript. SessionEnd
+    still closes every open span -- with capture off, so the closing spans
+    carry no content -- because a single pending span keeps the whole
+    session out of the backend's finished-trace counts.
+    """
+    if not state.trace_is_open(st):
+        _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
+        return 0
+    st["content_stopped"] = True
+    if event != "SessionEnd":
+        state.save(session_id, home, st)
+        _log(home, cfg, "session %s: stopped (%s); not exporting %s"
+             % (session_id, cfg.reason, event))
+        return 0
+
+    ctx = spans.Ctx(
+        session_id=session_id, cwd=cwd, git_branch="", cc_version="",
+        service_name=cfg.service_name, capture_content=False,
+        max_attr_bytes=cfg.max_attr_bytes,
+    )
+    now_ns = _now_ns()
+    out = []
+    try:
+        out += subagents.finalize(
+            st, ctx, subagents.dir_for(transcript_path, session_id), now_ns)
+    except Exception as exc:
+        _log(home, cfg, "session %s: subagent finalize failed: %r"
+             % (session_id, exc), force=True)
+    out += spans.finalize_session(st, ctx, now_ns)
+    resource_attrs = {
+        "service.name": cfg.service_name,
+        "service.instance.id": st.get("instance_id") or "",
+        "cc.version": "",
+        "cc.cwd": cwd,
+        "cc.git_branch": "",
+    }
+    return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
+                 home, cfg)
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         instance_id: str = "") -> int:
     cfg = None
@@ -168,7 +235,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         cfg = config.resolve(session_id, cwd, env, home)
         _log(home, cfg, "session %s: resolved config, api_key=%s, endpoint=%s"
              % (session_id, config.redact(cfg.api_key), cfg.endpoint))
-        if not cfg.enabled:
+        if not cfg.enabled and not cfg.api_key:
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
 
@@ -182,6 +249,9 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                 return 0
 
             st = state.load(session_id, home)
+            if not cfg.enabled or st.get("content_stopped"):
+                return _run_stopped(event, st, cfg, session_id, cwd,
+                                    transcript_path, home)
 
             # Mint and persist the instance id unconditionally, before any
             # export decision. A heartbeat pinger starts at SessionStart and
@@ -244,31 +314,15 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
                          % (session_id, exc), force=True)
                 out += spans.finalize_session(st, ctx, now_ns)
 
-            if out:
-                resource_attrs = {
-                    "service.name": cfg.service_name,
-                    "service.instance.id": instance_id,
-                    "cc.version": first_cc_version,
-                    "cc.cwd": first_cwd,
-                    "cc.git_branch": first_git_branch,
-                }
-                body = otlp.encode(resource_attrs, out)
-                status = otlp.export(cfg.endpoint, cfg.api_key, body)
-                _log(home, cfg, "session %s: exported %d spans, status=%s"
-                     % (session_id, len(out), status))
-
-                if not (status and 200 <= status < 300):
-                    return _handle_export_failure(
-                        session_id, home, cfg, st, new_offset, status)
-
-                st["spans_exported"] = st.get("spans_exported", 0) + len(out)
-                st["consecutive_export_failures"] = 0
-                st.pop("last_export_error", None)
-
-            st["offset"] = new_offset
-            state.save(session_id, home, st)
-
-            return len(out)
+            resource_attrs = {
+                "service.name": cfg.service_name,
+                "service.instance.id": instance_id,
+                "cc.version": first_cc_version,
+                "cc.cwd": first_cwd,
+                "cc.git_branch": first_git_branch,
+            }
+            return _ship(out, resource_attrs, st, new_offset, session_id,
+                         home, cfg)
     except BaseException as exc:  # never raise out of run()
         try:
             # force=True deliberately: an unhandled crash is logged even with

@@ -379,6 +379,9 @@ def build(entries: List[Any], state: dict, ctx: Ctx) -> List[Any]:
     if "sub_links" not in state:
         state["sub_links"] = {}
 
+    if entries:
+        # A resumed session carries on after an earlier SessionEnd closed it.
+        state["finalized"] = False
     if entries and not state.get("root_started"):
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
@@ -452,15 +455,42 @@ def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     return out
 
 
+def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
+                      now_ns: int) -> List[Any]:
+    """A tool whose result never arrived (interrupted, or the session ended
+    mid-call) must still get a finished row: the backend counts a trace only
+    when every one of its spans has one."""
+    out: List[Span] = []
+    for tool in scope["open_tools"].values():
+        attrs = _base_attrs(ctx, "TOOL")
+        attrs["gen_ai.tool.name"] = tool["tool_name"]
+        _content_attr(ctx, attrs, "input.value", tool.get("input_json", ""))
+        out.append(Span(
+            trace_id=trace_id, span_id=tool["span_id"],
+            parent_span_id=tool["parent_span_id"], name=tool["tool_name"],
+            kind_oi="TOOL", start_ns=tool["start_ns"], end_ns=now_ns,
+            attributes=attrs, status_code="UNSET", status_message="",
+            pending=False,
+        ))
+    scope["open_tools"] = {}
+    scope["open_task_spans"] = []
+    return out
+
+
 def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
+    """Close everything still open, so no span of the trace stays pending."""
+    trace_id = trace_id_for(ctx.session_id)
     out = finalize_turn(state, ctx, now_ns)
+    for scope in [state] + list((state.get("sub_scopes") or {}).values()):
+        if scope.get("open_tools"):
+            out += _close_open_tools(scope, ctx, trace_id, now_ns)
+    state["finalized"] = True
     if not state.get("root_started"):
         # build() never saw an entry: the user opened a session in an enabled
         # folder, typed nothing and quit. There is no root span to close --
         # closing one anyway emits a span starting at root_start_ns == 0, the
         # Unix epoch, which draws as a 56-year bar.
         return out
-    trace_id = trace_id_for(ctx.session_id)
     root_span_id = span_id_for("session:" + ctx.session_id)
     attrs = _base_attrs(ctx, "AGENT")
     out.append(Span(

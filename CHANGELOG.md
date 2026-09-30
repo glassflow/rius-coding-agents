@@ -4,8 +4,16 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## Unreleased
+## 0.4.1 (2026-09-30)
 
+- A session whose folder is disabled mid-session (`/rius:disable-here`,
+  `/rius:off`, `RIUS_CLAUDE_ENABLED=false`) still closes its trace when it
+  ends, so it is counted on the console's Agents and Users tabs. Nothing
+  from after the disable is sent, the closing spans carry no content, and
+  re-enabling the folder does not resume that session; a new session does.
+- A tool call that never returned (interrupted, or the session ended
+  mid-call) is closed at session end instead of staying pending, which kept
+  the whole session out of those counts too.
 - The README leads with what Rius shows and how to install. Reference
   material moved into `docs/` pages (installing and updating, how it works,
   API keys), and the design records moved to `docs/design/`.

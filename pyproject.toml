@@ -1,6 +1,6 @@
 [project]
 name = "rius"
-version = "0.4.0"
+version = "0.4.1"
 description = "Stream Claude Code sessions to Rius as OTLP GenAI traces"
 requires-python = ">=3.9"
 dependencies = []
