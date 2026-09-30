@@ -53,7 +53,9 @@ def test_generation_span_carries_usage(fixtures_dir):
     gen = [s for s in out if s.kind_oi == "LLM"][0]
     a = gen.attributes
     assert a["gen_ai.request.model"] == "claude-opus-5"
-    assert a["gen_ai.usage.input_tokens"] == 10
+    # Cache-INCLUSIVE, as semconv and the Rius attribute reference define it:
+    # Anthropic's own input_tokens (10) excludes the 100 read and 200 written.
+    assert a["gen_ai.usage.input_tokens"] == 10 + 100 + 200
     assert a["gen_ai.usage.output_tokens"] == 5
     assert a["gen_ai.usage.cache_read.input_tokens"] == 100
     # Both the current semconv name and the legacy one are emitted with the

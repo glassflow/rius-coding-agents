@@ -135,7 +135,8 @@ def first_prompt(path: str) -> str:
     return ""
 
 
-def _agent_span(ctx, trace_id, link, agent_id, meta, path, end_ns, pending):
+def _agent_span(ctx, trace_id, link, agent_id, meta, path, end_ns, pending,
+                start_ns=None):
     # A pending span carries no content, so the file is not even opened for
     # one -- and with capture off it is never opened for this at all.
     prompt = ""
@@ -146,7 +147,7 @@ def _agent_span(ctx, trace_id, link, agent_id, meta, path, end_ns, pending):
         span_id=spans.span_id_for("subagent:" + agent_id),
         parent_span_id=link["span_id"], meta=meta, agent_id=agent_id,
         depth=link.get("depth") or 1,
-        start_ns=link.get("start_ns") or 0, end_ns=end_ns,
+        start_ns=start_ns or link.get("start_ns") or 0, end_ns=end_ns,
         prompt=prompt, pending=pending,
     )
 
@@ -156,20 +157,29 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
     out: List[Any] = []
     scope = _scope_for(state, agent_id)
     agent_span_id = spans.span_id_for("subagent:" + agent_id)
-    start_ns = link.get("start_ns") or 0
+    offset = state["sub_offsets"].get(agent_id) or 0
+    entries, new_offset = transcript.read_from(path, offset)
+    state["sub_offsets"][agent_id] = new_offset
 
     if not scope.get("started"):
+        if not entries:
+            # meta.json can be written before the subagent's first line.
+            # Nothing has run yet; open the span once something has.
+            return out
         scope["started"] = True
+        # The subagent starts with its own first line. The Agent tool_use is
+        # stamped when that block finished streaming, and a parallel batch of
+        # Agent calls only runs once the whole response has: 24 s earlier,
+        # in one real session. Fixed here, once: the backend collapses the
+        # pending and final copies only if the start matches.
+        start_ns = max(link.get("start_ns") or 0, entries[0].timestamp_ns)
         scope["start_ns"] = start_ns
         # Pending first, exactly like the session root and every tool span:
         # a subagent that is still running should draw as in-progress rather
         # than appear only once it finishes.
         out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
-                               end_ns=start_ns, pending=True))
-
-    offset = state["sub_offsets"].get(agent_id) or 0
-    entries, new_offset = transcript.read_from(path, offset)
-    state["sub_offsets"][agent_id] = new_offset
+                               end_ns=start_ns, pending=True,
+                               start_ns=start_ns))
 
     out += spans.emit_entries(
         entries, scope, ctx, trace_id, agent_span_id, state["sub_links"],
@@ -178,15 +188,33 @@ def _expand_one(state: dict, ctx, trace_id: str, link: dict, agent_id: str,
         # A subagent's generations hang off its own AGENT span. Its entries
         # are all sidechain entries, so the main transcript's inline-sidechain
         # re-parenting would put them under whatever tool ran last.
-        make_turns=False, inline_sidechains=False,
+        make_turns=False, inline_sidechains=False, source_path=path,
     )
 
+    # The tool_result is when the Agent CALL returned. For a foreground
+    # subagent that is also when it finished; a background one (Claude Code
+    # 2.1.x's default) returns a launch acknowledgement at once and keeps
+    # writing its file for minutes. So the subagent ends at whichever is
+    # later, and its span is re-sent, same id and start, as its file grows.
     end_ns = link.get("end_ns")
-    if end_ns is not None and not link.get("closed"):
-        link["closed"] = True
-        out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
-                               end_ns=end_ns, pending=False))
+    if end_ns is not None:
+        agent_end = max(end_ns, scope.get("last_ns") or 0)
+        if not link.get("closed") or agent_end > (link.get("emitted_end_ns") or 0):
+            link["closed"] = True
+            link["emitted_end_ns"] = agent_end
+            out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
+                                   end_ns=agent_end, pending=False,
+                                   start_ns=scope.get("start_ns")))
     return out
+
+
+def _has_news(state: dict, subdir: str, agent_id: str) -> bool:
+    """Whether a subagent's file has grown past what was already read."""
+    try:
+        size = os.path.getsize(os.path.join(subdir, agent_id + ".jsonl"))
+    except OSError:
+        return False
+    return size > (state["sub_offsets"].get(agent_id) or 0)
 
 
 def expand(state: dict, ctx, subdir: str) -> List[Any]:
@@ -214,7 +242,11 @@ def expand(state: dict, ctx, subdir: str) -> List[Any]:
         for tool_use_id in todo:
             seen.add(tool_use_id)
             link = state["sub_links"][tool_use_id]
-            if link.get("closed") and link.get("agent_id"):
+            # A closed link is NOT finished with: a background subagent keeps
+            # writing after its tool call returned. Only a file that has not
+            # grown is skipped, and that costs one stat, not an index.
+            if (link.get("closed") and link.get("agent_id")
+                    and not _has_news(state, subdir, link["agent_id"])):
                 continue
             if (link.get("depth") or 1) > MAX_DEPTH:
                 continue
@@ -256,5 +288,6 @@ def finalize(state: dict, ctx, subdir: str, now_ns: int) -> List[Any]:
             continue
         link["closed"] = True
         out.append(_agent_span(ctx, trace_id, link, agent_id, meta, path,
-                               end_ns=now_ns, pending=False))
+                               end_ns=now_ns, pending=False,
+                               start_ns=scope.get("start_ns")))
     return out
