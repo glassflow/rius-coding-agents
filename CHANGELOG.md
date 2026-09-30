@@ -6,6 +6,17 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## Unreleased
 
+- A conversation Claude Code moves to a new session id (sending a session
+  to the background does this) stays one trace, like a resumed session.
+  The new session's transcript opens with a copy of the whole history, and
+  the plugin sent it all again as a second trace: both traces started at
+  the same millisecond, every token, cost and error before the move counted
+  twice, and the first trace never closed. The new session now skips the
+  copied history and carries on in the same trace, under the same root and
+  `session.id`, as a new instance. Its turns carry `cc.continued_from`.
+  Subagents still running at the move keep landing in the trace, the
+  conversation's root closes at the continued session's end, and a
+  mid-session disable carries over to the continued session.
 - The trace is titled with the Claude Code session's name instead of
   `claude-code session`: the `/rename` or `--name` title, else the title
   Claude Code generates from the first prompt. A rename mid-session renames

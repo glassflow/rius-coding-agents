@@ -96,15 +96,30 @@ def main() -> None:
             return
 
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rius_cc import config, platform_compat, state
+        from rius_cc import config, continuation, platform_compat, state
 
         home = platform_compat.home_dir(os.environ)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
+        if event == "SessionStart" and cfg.api_key:
+            # A conversation Claude Code moved to this new id is taken over
+            # HERE, before anything is spawned: the old id's pinger is told
+            # to stop before this id's starts (one pinger per root), and the
+            # gate below sees the conversation's open trace even when this
+            # folder is disabled.
+            try:
+                continuation.link(session_id, payload.get("transcript_path", ""),
+                                  home)
+            except Exception:
+                pass
         # A session disabled after its trace started still needs the
         # exporter: it records the stop, and on SessionEnd closes the trace.
-        stopped = not cfg.enabled
+        # So does a conversation that brought its stop with it.
+        stopped = not cfg.enabled or (
+            event == "SessionStart"
+            and bool(state.load(session_id, home).get("continued_from"))
+            and bool(state.load(session_id, home).get("content_stopped")))
         if stopped and not (cfg.api_key
                             and state.trace_is_open(state.load(session_id, home))):
             return
