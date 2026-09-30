@@ -1,0 +1,20 @@
+name: Feature request
+description: Something the plugin should do that it doesn't.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you'd want it to work. Rough is fine.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you've tried instead

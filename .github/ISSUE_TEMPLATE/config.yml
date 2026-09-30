@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/glassflow/rius-coding-agents/security/advisories/new
+    about: Please report vulnerabilities privately, not as an issue.
+  - name: Rius documentation
+    url: https://docs.glassflow.ai/rius
+    about: The console, alerts, MCP tools and SDKs.
+  - name: Questions about your Rius account or workspace
+    url: mailto:help@glassflow.ai
+    about: Billing, access and anything that isn't about this plugin's code.
