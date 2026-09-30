@@ -324,20 +324,23 @@ plugin is producing, from inside Claude Code. The plugin bundles it as
 nothing to install: reconnect `rius` in `/mcp` (or restart Claude Code) and
 it is there. It connects to production unless `RIUS_MCP_URL` says otherwise.
 
-To use the MCP server without the plugin, register it yourself -- **as an
-HTTP URL server, not a stdio command server**. That is the single most
-common setup mistake, and it fails in a way that reads as an auth problem.
+To use the MCP server without the plugin, or with a `RIUS_API_KEY` the
+bundled server cannot see, register it yourself -- **as an HTTP URL server,
+not a stdio command server**. That is the single most common setup mistake,
+and it fails in a way that reads as an auth problem. The examples name it
+`glassflow`, so it does not share a name with the plugin's bundled `rius`;
+with both installed, both entries show in `/mcp`.
 
 Interactive (OAuth in the browser, same account as the console):
 
 ```bash
-claude mcp add --transport http rius https://mcp.eu.console.rius-glassflow.com/mcp
+claude mcp add --transport http glassflow https://mcp.eu.console.rius-glassflow.com/mcp
 ```
 
 Headless, with a `read`-scoped key as a static bearer header:
 
 ```bash
-claude mcp add --transport http rius https://mcp.eu.console.rius-glassflow.com/mcp \
+claude mcp add --transport http glassflow https://mcp.eu.console.rius-glassflow.com/mcp \
   --header "Authorization: Bearer ${RIUS_API_KEY}"
 ```
 
@@ -404,7 +407,7 @@ Common causes, in the order they actually happen:
 | A plugin change has no effect | The marketplace cache is stale | `/plugin marketplace update rius-coding-agents`, then `/reload-plugins` |
 | `Last export error: rejected the API key (HTTP 403)` right after editing a key's scopes | Granting `ingest` takes about 30 seconds to reach the receiver | Wait half a minute and send another prompt |
 | The MCP server returns 403 but the key works for ingest | The key has `ingest` but not `read` | Mint a key carrying `read`, or add the scope |
-| The bundled `rius` MCP server returns 401 though `RIUS_API_KEY` is set | Claude Code does not pass credential-named variables to a plugin's `headersHelper`, so the bundled server has no key (`/rius:status` shows `MCP key: none`) | Run `/rius:login`, or register the server by hand with `--header` |
+| The bundled `rius` MCP server returns 401 though `RIUS_API_KEY` is set | Claude Code does not pass credential-named variables to a plugin's `headersHelper`, so the bundled server has no key (`/rius:status` shows `MCP key: none`) | Run `/rius:login`, or register the server by hand under another name with `--header` (see [Exploring your traces](#exploring-your-traces-from-claude-code)) |
 | The MCP server shows no auth support, or will not connect | It was registered as a stdio command server, not an HTTP URL | Re-add it with `--transport http` and a URL |
 | A local MCP dev server fails the TLS handshake | `https://` against a plain-HTTP local port | Use `http://` for local ports |
 | Auth fails on a self-hosted deployment with no obvious reason | The Auth0 audience or the email-claim key does not match the configured string exactly | Both are exact-string matches; compare them character for character with the deployment's configuration |
