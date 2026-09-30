@@ -4,6 +4,12 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## Unreleased
+
+- `/rius:status` says when a session was stopped by a mid-session disable:
+  it reads `Rius tracing: off` with a `Stopped:` line, instead of the `on`
+  the folder rules alone would give.
+
 ## 0.4.1 (2026-09-30)
 
 - A session whose folder is disabled mid-session (`/rius:disable-here`,

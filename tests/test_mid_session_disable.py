@@ -194,3 +194,17 @@ def test_new_activity_after_a_session_end_reopens_the_session(home, sent,
     _append(path, LATER_PROMPT)            # a resumed session carries on
     _run("PostToolUse", path, home)
     assert state.load(SID, home)["finalized"] is False
+
+
+def test_a_stopped_session_never_moves_its_transcript_offset(home, sent,
+                                                             tmp_path):
+    # The offset staying put is why the stop has to be sticky; it must not
+    # quietly advance, or a later change to the stickiness would look safe.
+    path = _transcript(tmp_path, 2)
+    _run("PostToolUse", path, home)
+    offset = state.load(SID, home)["offset"]
+    _disable(home)
+    _append(path, LATER_PROMPT)
+    for event in ("PostToolUse", "Stop", "SessionEnd"):
+        _run(event, path, home)
+        assert state.load(SID, home)["offset"] == offset, event
