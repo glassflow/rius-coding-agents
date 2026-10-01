@@ -6,18 +6,24 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.4.4 (2026-10-01)
 
-- On macOS, a folder under `/tmp` (or any folder reached through a
-  symlink) enabled with `/rius:enable-here` is now traced. The rule kept
-  the shell's spelling, `/tmp/proj`, while Claude Code gives the hooks the
-  resolved folder, `/private/tmp/proj`. No rule matched, so every hook
-  quietly sent nothing, and `/rius:status` still said `on` with 0 spans
-  exported. Rules and folders are now compared both as written and
-  resolved, and `/rius:disable-here` through a symlink also beats an enable.
-  A rule that resolves to `/` (a symlink to the root) still matches nothing.
-- `/rius:status` shows the folder the hooks see when it differs, as in
-  `cwd: /tmp/proj (hooks see /private/tmp/proj)`. When tracing is on but no
-  hook has traced the session, it says so and says to restart Claude
-  Code. A plugin installed mid-session is not hooked into that session.
+- On macOS, `/rius:enable-here` in a folder under `/tmp`, or in any folder
+  reached through a symlink, now works. The rule kept the shell's
+  spelling, `/tmp/proj`, while Claude Code gives the hooks the resolved
+  folder, `/private/tmp/proj`. No rule matched, so every hook quietly sent
+  nothing, and `/rius:status` still said `on` with 0 spans exported.
+  `/rius:enable-here` and `/rius:disable-here` now store the resolved
+  folder. Rules are still matched as written: a rule never follows a
+  symlink that is created or repointed later. A rule an earlier version wrote
+  through a symlink still does not match. `/rius:status` names it; run
+  `/rius:enable-here` (or `/rius:disable-here`) in that folder again to
+  replace it.
+- `/rius:status` decides for the folder the hooks see and shows it when it
+  differs, as in `cwd: /tmp/proj (hooks see /private/tmp/proj)`. When
+  tracing is on but no hook has traced the session, it says to restart
+  Claude Code. A plugin installed mid-session is not hooked into that
+  session.
+- A path rule whose fixed part is the filesystem root, such as `/*` or
+  `C:\*`, matches nothing, like `/` already did.
 
 ## 0.4.3 (2026-10-01)
 
