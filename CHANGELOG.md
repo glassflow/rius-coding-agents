@@ -4,6 +4,21 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.4.4 (2026-10-01)
+
+- On macOS, a folder under `/tmp` (or any folder reached through a
+  symlink) enabled with `/rius:enable-here` is now traced. The rule kept
+  the shell's spelling, `/tmp/proj`, while Claude Code gives the hooks the
+  resolved folder, `/private/tmp/proj`. No rule matched, so every hook
+  quietly sent nothing, and `/rius:status` still said `on` with 0 spans
+  exported. Rules and folders are now compared both as written and
+  resolved, and `/rius:disable-here` through a symlink also beats an enable.
+  A rule that resolves to `/` (a symlink to the root) still matches nothing.
+- `/rius:status` shows the folder the hooks see when it differs, as in
+  `cwd: /tmp/proj (hooks see /private/tmp/proj)`. When tracing is on but no
+  hook has traced the session, it says so and says to restart Claude
+  Code. A plugin installed mid-session is not hooked into that session.
+
 ## 0.4.3 (2026-10-01)
 
 - A conversation Claude Code moves to a new session id (sending a session
