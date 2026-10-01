@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from rius_cc import platform_compat as pc
+from tests.platforms import posix_only
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +285,7 @@ def test_windows_unreadable_exit_code_assumes_alive():
     assert pc._windows_pid_alive(1, kernel32=k32) is True
 
 
-def test_posix_liveness_natively():
+def test_liveness_natively():
     assert pc.pid_alive(os.getpid()) is True
     assert pc.pid_alive(999999) is False
 
@@ -369,6 +370,7 @@ def test_windows_unlock_never_raises(tmp_path, fake_msvcrt):
     pc._windows_unlock(fd)          # bad descriptor: must be swallowed
 
 
+@posix_only("calls the fcntl branch directly")
 def test_posix_lock_natively(tmp_path):
     path = str(tmp_path / "s.lock")
     a = pc.open_lock_file(path)
@@ -385,6 +387,7 @@ def test_posix_lock_natively(tmp_path):
 # TRAP 3 -- detached spawn
 # ---------------------------------------------------------------------------
 
+@posix_only("start_new_session is the POSIX detach")
 def test_posix_detach_uses_start_new_session():
     assert pc.detached_child_kwargs() == {"start_new_session": True}
 
@@ -402,7 +405,7 @@ def test_windows_detach_uses_creationflags_not_start_new_session(as_windows):
 # TRAP 5 -- parent pid
 # ---------------------------------------------------------------------------
 
-def test_posix_parent_pid_natively():
+def test_parent_pid_natively():
     assert pc.parent_pid_of(os.getpid()) == os.getppid()
 
 
@@ -443,6 +446,7 @@ def test_parent_pid_of_zero_is_zero():
 # Home directory
 # ---------------------------------------------------------------------------
 
+@posix_only("/home/kiran is not a native Windows path, so home_dir rightly rejects it")
 def test_posix_home_prefers_env_home():
     assert pc.home_dir({"HOME": "/home/kiran"}) == "/home/kiran"
 

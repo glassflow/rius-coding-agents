@@ -2,6 +2,7 @@ import json
 import os
 
 from rius_cc import config
+from tests.platforms import posix_only
 
 
 def _home(tmp_path):
@@ -236,8 +237,9 @@ def test_windows_disabled_rule_still_wins(tmp_path, as_windows):
                           BASE_ENV, home).enabled is False
 
 
-def test_posix_rules_are_unchanged_by_the_windows_support(tmp_path):
+def test_posix_rules_are_unchanged_by_the_windows_support(tmp_path, monkeypatch):
     """The Windows spellings must not have widened anything on POSIX."""
+    monkeypatch.setattr(config, "IS_WINDOWS", False)
     home = _home(tmp_path)
     with open(config.path_rules_path(home), "w") as fh:
         json.dump({"enabled_paths": ["/opt/example"]}, fh)
@@ -267,6 +269,7 @@ def _write_rules(home, **rules):
         json.dump(rules, fh)
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_resolved_is_the_folder_the_hooks_are_handed(tmp_path):
     real, link = _linked_dir(tmp_path)
     assert config.resolved(link) == real
@@ -311,6 +314,7 @@ def test_a_windows_glob_on_a_bare_drive_matches_nothing(tmp_path, monkeypatch):
     assert config.resolve("s1", "C:\\Users", BASE_ENV, home).enabled is False
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_symlinked_rules_names_rules_the_hooks_never_match(tmp_path):
     home = _home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -319,6 +323,7 @@ def test_symlinked_rules_names_rules_the_hooks_never_match(tmp_path):
     assert config.symlinked_rules(real, home) == []
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_same_folder_merges_symlinked_spellings_only(tmp_path):
     real, link = _linked_dir(tmp_path)
     assert config.same_folder(real, link)
@@ -331,6 +336,7 @@ def _case_insensitive(tmp_path):
     return (tmp_path / "CASEPROBE").is_dir()
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_resolved_spells_the_folder_in_its_own_letter_case(tmp_path):
     """macOS: `cd ABC` into folder `abc` leaves $PWD and realpath at ABC,
     while Claude Code's cwd is abc."""
@@ -340,6 +346,7 @@ def test_resolved_spells_the_folder_in_its_own_letter_case(tmp_path):
     assert config.resolved(str(tmp_path / "ABC")) == str(tmp_path / "abc")
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_resolved_rule_resolves_the_fixed_part_of_a_glob(tmp_path):
     real, link = _linked_dir(tmp_path)
     assert config.resolved_rule(link + "/s*") == real + "/s*"
@@ -347,6 +354,7 @@ def test_resolved_rule_resolves_the_fixed_part_of_a_glob(tmp_path):
     assert config.resolved_rule("/*") == "/*"
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_resolved_rule_through_a_link_to_the_root_stays_well_formed(tmp_path):
     root_link = tmp_path / "rl"
     root_link.symlink_to("/", target_is_directory=True)

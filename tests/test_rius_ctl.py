@@ -5,6 +5,8 @@ import pathlib
 
 import pytest
 
+from tests.platforms import BASH, IS_WINDOWS, minimal_env, posix_only
+
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 
 
@@ -265,13 +267,37 @@ def test_slash_command_line_runs_end_to_end(tmp_path):
            "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k",
            "CLAUDE_SESSION_ID": "s-e2e"}
     line = _command_line("status").replace("$ARGUMENTS", "")
-    r = subprocess.run(["/bin/bash", "-c", line], cwd=str(tmp_path),
+    r = subprocess.run([BASH, "-c", line], cwd=str(tmp_path),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     assert "off" in r.stdout.lower()
     assert "session: s-e2e\n" in r.stdout
     assert "glassflow_k" not in r.stdout
 
+
+
+def test_enable_here_command_line_enables_the_folder_the_hooks_see(tmp_path):
+    """The rule comes from the shell's $PWD; the hook's cwd from Claude
+    Code's process.cwd(). On Windows the first is a Git Bash path (/c/...)
+    and the second a native one (C:\\...), so this is the one place the
+    two spellings meet."""
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    env = {"HOME": str(home), "PATH": os.environ["PATH"],
+           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
+    line = _command_line("enable-here").replace("$ARGUMENTS", "")
+    r = subprocess.run([BASH, "-c", line], cwd=str(proj),
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    native_cwd = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getcwd())"],
+        cwd=str(proj), capture_output=True, text=True, check=True).stdout.strip()
+    from rius_cc import config
+    assert config.resolve("s1", native_cwd, KEY, str(home)).enabled, (
+        "enable-here wrote %r, which does not cover the hook's cwd %r"
+        % (config.read_path_rules(str(home)), native_cwd))
 
 PRINTED_TREES = ("scripts", "docs/getting-started.md", "docs/install.md",
                  "docs/how-it-works.md", "docs/api-keys.md", "README.md", "CHANGELOG.md")
@@ -307,8 +333,8 @@ def test_ctl_launcher_says_so_when_no_python_can_be_found(tmp_path):
         stub = fake / name
         stub.write_text("#!/bin/sh\nexit 1\n")
         stub.chmod(0o755)
-    env = {"HOME": str(home), "PATH": str(fake)}
-    r = subprocess.run(["/bin/bash", CTL_SH, "status", "--cwd", "/x"],
+    env = minimal_env(HOME=str(home), PATH=str(fake))
+    r = subprocess.run([BASH, CTL_SH, "status", "--cwd", "/x"],
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0
     assert "python" in r.stdout.lower()
@@ -326,8 +352,8 @@ def test_ctl_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_path):
     bare.mkdir()
     shutil.copy(CTL_SH, str(bare / "rius_ctl.sh"))
     # deliberately no rius_ctl.py, no _find_python.sh copied alongside
-    env = {"HOME": str(home), "PATH": os.environ["PATH"]}
-    r = subprocess.run(["/bin/bash", str(bare / "rius_ctl.sh"), "status",
+    env = minimal_env(HOME=str(home), PATH=os.environ["PATH"])
+    r = subprocess.run([BASH, str(bare / "rius_ctl.sh"), "status",
                        "--cwd", "/x"],
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0
@@ -365,8 +391,10 @@ def _rules(tmp_path):
     return json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
 
 
-def _config_mode(tmp_path):
-    return os.stat(str(tmp_path / ".claude" / "rius" / "config.json")).st_mode & 0o777
+def _config_is_private(tmp_path):
+    """0600 on POSIX; Windows has no permission bits for this to set."""
+    path = str(tmp_path / ".claude" / "rius" / "config.json")
+    return IS_WINDOWS or os.stat(path).st_mode & 0o777 == 0o600
 
 
 KEY = {"RIUS_API_KEY": "glassflow_k"}
@@ -491,7 +519,7 @@ def test_a_sibling_with_a_shared_prefix_is_not_an_exception(tmp_path):
 def test_path_rules_are_written_privately(tmp_path, action):
     home = _fresh_home(tmp_path)
     _run([action, "--cwd", "/opt/proj"], home, KEY)
-    assert _config_mode(tmp_path) == 0o600
+    assert _config_is_private(tmp_path)
 
 
 def test_status_names_the_matching_rule(tmp_path):
@@ -568,6 +596,7 @@ def _linked_dir(tmp_path):
     return str(real), str(link)
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_agrees_with_the_hooks_across_a_symlink(tmp_path):
     """enable-here gets the shell's $PWD (/tmp/proj on macOS); the hooks get
     Claude Code's resolved cwd (/private/tmp/proj). Status run from either
@@ -580,6 +609,7 @@ def test_status_agrees_with_the_hooks_across_a_symlink(tmp_path):
         assert "Rius tracing: on" in r.stdout, cwd
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_shows_the_folder_the_hooks_see(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -587,6 +617,7 @@ def test_status_shows_the_folder_the_hooks_see(tmp_path):
     assert "cwd: %s (hooks see %s)" % (link, real) in r.stdout
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_disable_here_through_a_symlink_replaces_the_enable(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -595,6 +626,7 @@ def test_disable_here_through_a_symlink_replaces_the_enable(tmp_path):
     assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": [real]}
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_is_idempotent_across_spellings(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -603,6 +635,7 @@ def test_enable_here_is_idempotent_across_spellings(tmp_path):
     assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_stores_the_folder_the_hooks_see(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -611,6 +644,7 @@ def test_enable_here_stores_the_folder_the_hooks_see(tmp_path):
     assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_decides_for_the_folder_the_hooks_see(tmp_path):
     """$PWD ~/proj/vendor, where vendor -> ~/secret: the hooks are handed
     ~/secret, which no rule enables, so status must not say on."""
@@ -626,6 +660,7 @@ def test_status_decides_for_the_folder_the_hooks_see(tmp_path):
     assert "Rius tracing: off" in r.stdout
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_names_a_rule_written_through_a_symlink(tmp_path):
     """0.4.3 stored $PWD as written, so its /tmp rules never matched."""
     home = _fresh_home(tmp_path)
@@ -639,6 +674,7 @@ def test_status_names_a_rule_written_through_a_symlink(tmp_path):
             ) in r.stdout
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)
@@ -651,6 +687,7 @@ def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
             ) in r.stdout
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enabling_a_parent_again_keeps_an_old_carve_out_off(tmp_path):
     """0.4.3 rules: enable link, disable link/sub; neither matched. Re-running
     enable-here on the parent must not start tracing sub."""
@@ -677,6 +714,7 @@ def test_a_folder_too_broad_for_a_rule_is_refused_out_loud(tmp_path, action):
     assert not (tmp_path / ".claude" / "rius" / "config.json").exists()
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_in_a_folder_typed_in_the_wrong_case(tmp_path):
     probe = tmp_path / "caseprobe"
     probe.mkdir()
@@ -688,6 +726,7 @@ def test_enable_here_in_a_folder_typed_in_the_wrong_case(tmp_path):
     assert _rules(tmp_path)["enabled_paths"] == [str(tmp_path / "abc")]
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_replaces_a_rule_written_through_a_symlink(tmp_path):
     home = _fresh_home(tmp_path)
     real, link = _linked_dir(tmp_path)

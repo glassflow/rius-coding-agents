@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from tests.platforms import minimal_env
+
 pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
     ExportTraceServiceRequest,
@@ -61,11 +63,8 @@ def test_hook_to_receiver_full_path(server, tmp_path, fixtures_dir):
         "cwd": "/tmp/proj",
         "hook_event_name": "PostToolUse",
     }
-    env = {
-        "HOME": str(home), "PATH": "/usr/bin:/bin",
-        "RIUS_API_KEY": "glassflow_testkey",
-        "RIUS_ENDPOINT": server,
-    }
+    env = minimal_env(HOME=str(home), PATH="/usr/bin:/bin",
+                      RIUS_API_KEY="glassflow_testkey", RIUS_ENDPOINT=server)
     r = subprocess.run([sys.executable, HOOK, "PostToolUse"],
                        input=json.dumps(payload), capture_output=True,
                        text=True, env=env, timeout=30)

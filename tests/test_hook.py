@@ -12,6 +12,8 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
 import hook as hook_mod  # noqa: E402
+from tests.platforms import (BASH, IS_WINDOWS, PYTHON_FOR_SH, SH,  # noqa: E402
+                             TOOLS_WITHOUT_PYTHON, minimal_env, posix_only)
 from rius_cc import config, state  # noqa: E402
 
 HOOK = str(pathlib.Path(__file__).parent.parent / "scripts" / "hook.py")
@@ -364,6 +366,7 @@ HOOK_SH = str(pathlib.Path(__file__).parent.parent / "scripts" / "hook.sh")
 HOOKS_JSON = pathlib.Path(__file__).parent.parent / "hooks" / "hooks.json"
 
 
+@posix_only("start_new_session is the POSIX detach")
 def test_detached_spawn_kwargs_reach_popen_on_posix(tmp_path, monkeypatch):
     """TRAP 3: the child must outlive this hook process. On POSIX that is
     setsid, and it is the only reason the exporter survives at all."""
@@ -456,7 +459,7 @@ def test_launcher_runs_the_hook_end_to_end(tmp_path):
     env, home = _enabled_env(tmp_path)
     sid = "launcher-1"
     r = subprocess.run(
-        ["bash", HOOK_SH, "SessionEnd"],
+        [BASH, HOOK_SH, "SessionEnd"],
         input=_json.dumps({"session_id": sid, "cwd": str(tmp_path),
                            "transcript_path": "/nonexistent.jsonl"}),
         capture_output=True, text=True, env=env, timeout=30)
@@ -477,7 +480,7 @@ def _fakebin(tmp_path, **stubs):
     d = tmp_path / "fakebin"
     d.mkdir(exist_ok=True)
     for name, kind in stubs.items():
-        body = ('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable
+        body = ('#!/bin/sh\nexec "%s" "$@"\n' % PYTHON_FOR_SH
                 if kind == "real" else '#!/bin/sh\nexit 1\n')
         stub = d / name
         stub.write_text(body)
@@ -487,7 +490,7 @@ def _fakebin(tmp_path, **stubs):
 
 def _run_launcher(env, sid, tmp_path, event="SessionEnd"):
     return subprocess.run(
-        ["/bin/bash", HOOK_SH, event],
+        [BASH, HOOK_SH, event],
         input=_json.dumps({"session_id": sid, "cwd": str(tmp_path),
                            "transcript_path": "/nonexistent.jsonl"}),
         capture_output=True, text=True, env=env, timeout=30)
@@ -574,7 +577,7 @@ def test_launcher_probe_does_not_eat_the_hook_payload(tmp_path):
     stub.write_text("#!/bin/sh\ncat >/dev/null\nexit 1\n")
     stub.chmod(0o755)
     real = drain / "python"
-    real.write_text('#!/bin/sh\nexec "%s" "$@"\n' % sys.executable)
+    real.write_text('#!/bin/sh\nexec "%s" "$@"\n' % PYTHON_FOR_SH)
     real.chmod(0o755)
     env["PATH"] = str(drain)
     sid = "drain-1"
@@ -589,7 +592,7 @@ def test_launcher_with_no_usable_python_exits_zero_and_says_so(tmp_path):
     env, home = _enabled_env(tmp_path)
     env.pop("OS", None)
     env["PATH"] = (_fakebin(tmp_path, python3="fail", python="fail")
-                   + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+                   + os.pathsep + TOOLS_WITHOUT_PYTHON)
     r = _run_launcher(env, "nopython-1", tmp_path)
     assert r.returncode == 0
     assert r.stdout.strip() == ""
@@ -612,9 +615,9 @@ def test_launcher_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_pat
     import shutil
     shutil.copy(HOOK_SH, str(bare / "hook.sh"))
     # deliberately no hook.py, no _find_python.sh copied alongside
-    r = subprocess.run(["/bin/sh", str(bare / "hook.sh"), "Stop"], input="{}",
+    r = subprocess.run([SH, str(bare / "hook.sh"), "Stop"], input="{}",
                        capture_output=True, text=True, timeout=30,
-                       env={"PATH": os.environ["PATH"], "HOME": str(home)})
+                       env=minimal_env(PATH=os.environ["PATH"], HOME=str(home)))
     assert r.returncode == 0
     assert r.stdout.strip() == ""
     log = home / ".claude" / "rius" / "log" / "bootstrap.log"
@@ -633,7 +636,7 @@ def test_launcher_does_not_guess_its_directory(tmp_path):
     fallback."""
     env, home = _enabled_env(tmp_path)
     r = subprocess.run(
-        ["/bin/bash", "hook.sh", "SessionEnd"],
+        [BASH, "hook.sh", "SessionEnd"],
         cwd=str(pathlib.Path(HOOK_SH).parent),
         input=_json.dumps({"session_id": "bare-argv0", "cwd": str(tmp_path),
                            "transcript_path": "/nonexistent.jsonl"}),
@@ -646,7 +649,7 @@ def test_launcher_does_not_guess_its_directory(tmp_path):
 
 def test_launcher_exits_zero_and_silent_on_garbage(tmp_path):
     env, _home = _enabled_env(tmp_path)
-    r = subprocess.run(["bash", HOOK_SH, "Stop"], input="not json",
+    r = subprocess.run([BASH, HOOK_SH, "Stop"], input="not json",
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0
     assert r.stdout.strip() == ""
@@ -658,17 +661,21 @@ def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
     whole plugin exists to avoid."""
     home = tmp_path / "home"
     home.mkdir()
-    fakebin = tmp_path / "bin"
-    fakebin.mkdir()
     # A PATH with the shell's own utilities but no python of any name.
-    for tool in ("mkdir", "date", "cat"):
-        for candidate in ("/bin/" + tool, "/usr/bin/" + tool):
-            if os.path.exists(candidate):
-                os.symlink(candidate, str(fakebin / tool))
-                break
-    r = subprocess.run(["/bin/sh", HOOK_SH, "Stop"], input="{}",
+    if IS_WINDOWS:
+        tools = TOOLS_WITHOUT_PYTHON
+    else:
+        fakebin = tmp_path / "bin"
+        fakebin.mkdir()
+        for tool in ("mkdir", "date", "cat"):
+            for candidate in ("/bin/" + tool, "/usr/bin/" + tool):
+                if os.path.exists(candidate):
+                    os.symlink(candidate, str(fakebin / tool))
+                    break
+        tools = str(fakebin)
+    r = subprocess.run([SH, HOOK_SH, "Stop"], input="{}",
                        capture_output=True, text=True, timeout=30,
-                       env={"PATH": str(fakebin), "HOME": str(home)})
+                       env=minimal_env(PATH=tools, HOME=str(home)))
     assert r.returncode == 0
     assert r.stdout.strip() == ""
     log = home / ".claude" / "rius" / "log" / "bootstrap.log"
@@ -755,6 +762,7 @@ def test_a_disabled_session_without_a_key_spawns_nothing(tmp_path, monkeypatch):
 
 
 
+@posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_through_a_symlink_traces_the_cwd_claude_code_sends(
         tmp_path, monkeypatch):
     """macOS: $PWD is /tmp/proj, the hook payload's cwd /private/tmp/proj.

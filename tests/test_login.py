@@ -9,6 +9,8 @@ import threading
 import urllib.error
 
 import pytest
+
+from tests.platforms import IS_WINDOWS
 from time import sleep as time_sleep
 
 import rius_ctl
@@ -71,8 +73,11 @@ def _wait(home, clock, post):
     return login.wait(home, post=post, sleep=clock.sleep, now=clock.now)
 
 
-def _mode(path):
-    return stat.S_IMODE(os.stat(path).st_mode)
+def _is_private(path):
+    """0600 on POSIX. Windows has no permission bits -- os.chmod only toggles
+    read-only -- so a file there is as private as the profile directory's
+    ACL makes it, which is not something this code sets."""
+    return IS_WINDOWS or stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
 def _store(home, **overrides):
@@ -103,7 +108,7 @@ def test_start_parks_the_link_privately(tmp_path):
     stored = json.load(open(login.pending_path(home)))
     assert set(stored) == {"env", "link_id", "device_code", "user_code",
                            "connect_url", "interval", "expires_at"}
-    assert _mode(login.pending_path(home)) == 0o600
+    assert _is_private(login.pending_path(home))
 
 
 def test_start_reports_an_unconfigured_environment(tmp_path):
@@ -143,7 +148,7 @@ def test_pending_then_success_stores_private_credentials(tmp_path):
         "workspace_name": "eng-shared", "org_name": "Acme",
         "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"}
     assert login.read_credentials(home) == creds
-    assert _mode(login.credentials_path(home)) == 0o600
+    assert _is_private(login.credentials_path(home))
     assert not os.path.exists(login.pending_path(home))
     assert post.calls[0][:2] == (LINK_BASE + "/v1/agent-links/token",
                                  {"device_code": DEVICE_CODE})
@@ -276,7 +281,7 @@ def test_private_writes_leave_no_temp_files_and_ignore_a_stale_one(tmp_path):
     login._write_private(path, {"api_key": "a"})
     login._write_private(path, {"api_key": "b"})
     assert json.load(open(path)) == {"api_key": "b"}
-    assert _mode(path) == 0o600
+    assert _is_private(path)
     assert sorted(os.listdir(os.path.dirname(path))) == [
         "credentials.json", "credentials.json.tmp"]
 
@@ -312,7 +317,7 @@ def test_the_wait_lock_is_private_and_released_afterwards(tmp_path):
     home, clock = str(tmp_path), Clock()
     _start(home, clock)
     _wait(home, clock, scripted((200, TOKEN_RESPONSE)))
-    assert _mode(login.wait_lock_path(home)) == 0o600
+    assert _is_private(login.wait_lock_path(home))
     os.close(_hold_wait_lock(home))
 
 

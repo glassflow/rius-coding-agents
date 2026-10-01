@@ -1,0 +1,8 @@
+# Bash cannot run a script with CRLF line endings ($'\r': command not
+# found), and Git for Windows checks out with core.autocrlf=true by default.
+# A plugin installed by cloning this repo on Windows would otherwise get a
+# hook.sh that fails on every event.
+*.sh text eol=lf
+# Transcript fixtures stand in for what Claude Code writes, byte for byte:
+# the exporter tracks byte offsets into them.
+*.jsonl text eol=lf
