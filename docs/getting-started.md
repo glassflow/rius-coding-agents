@@ -23,13 +23,26 @@ the output of commands it runs.
 
 ## Quick start: `/rius:login`
 
-Steps 1, 2, 3 and 5 below collapse into one command:
+Steps 1, 2, 3 and 5 below collapse into one command. Install from a
+terminal:
 
 ```
-/plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius@rius-coding-agents
-/rius:login          # sign in in the browser and pick a workspace
-/rius:enable-here    # in the folder you want traced
+claude plugin marketplace add glassflow/rius-coding-agents && claude plugin install rius@rius-coding-agents
+```
+
+(Inside Claude Code, run `/plugin marketplace add glassflow/rius-coding-agents`
+and `/plugin install rius@rius-coding-agents` as two separate commands --
+pasting both together fails.) Then, in Claude Code, one at a time:
+
+```
+/rius:login
+```
+
+Sign in in the browser and pick a workspace. Then, in the folder you want
+traced:
+
+```
+/rius:enable-here
 ```
 
 `/rius:login` prints a short code and opens the Rius portal
@@ -102,12 +115,10 @@ or put `RIUS_MCP_URL` in the `env` block of `~/.claude/settings.json`.
 
 Versions before 0.3.0 installed the plugin as `rius-claude-code`. Uninstall
 it first, or both copies stay installed: every hook fires twice (duplicate
-spans) and every command appears under both names.
+spans) and every command appears under both names. From a terminal:
 
 ```
-/plugin uninstall rius-claude-code@rius-coding-agents
-/plugin marketplace update rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin uninstall rius-claude-code@rius-coding-agents && claude plugin marketplace update rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
 
 Path rules and the stored key live under `~/.claude/rius/` and carry over.
@@ -194,19 +205,30 @@ separate key per environment rather than trying to reuse one.
 
 ## 4. Install the plugin
 
-For everyday use, install from git:
+For everyday use, install from git. From a terminal:
 
 ```
-/plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin marketplace add glassflow/rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
+
+Or inside Claude Code, as two separate commands. Run one at a time: pasting
+both together fails, because Claude Code reads the paste as one command.
+
+1. ```
+   /plugin marketplace add glassflow/rius-coding-agents
+   ```
+2. ```
+   /plugin install rius@rius-coding-agents
+   ```
+3. ```
+   /reload-plugins
+   ```
 
 For development against a local checkout, point the marketplace at the
 directory instead:
 
 ```
-/plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin marketplace add /path/to/rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
 
 The marketplace is named `rius-coding-agents` and the plugin
@@ -217,10 +239,13 @@ The marketplace is named `rius-coding-agents` and the plugin
 > a marketplace added from a directory or a git source rather than reading
 > it live, so after the plugin is updated -- upstream or in your own
 > checkout -- you are still running whatever was cached when you installed
-> until you run:
+> until you run these, one at a time:
 >
 > ```
 > /plugin marketplace update rius-coding-agents
+> ```
+>
+> ```
 > /reload-plugins
 > ```
 >
