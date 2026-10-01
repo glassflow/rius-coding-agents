@@ -201,7 +201,7 @@ def resolved_rule(rule: str) -> str:
     cut = head.rfind("/")
     if cut <= 0:
         return rule
-    return resolved(rule[:cut]) + rule[cut:]
+    return resolved(rule[:cut]).rstrip("/") + rule[cut:]
 
 
 def is_usable_rule(rule) -> bool:

@@ -345,3 +345,9 @@ def test_resolved_rule_resolves_the_fixed_part_of_a_glob(tmp_path):
     assert config.resolved_rule(link + "/s*") == real + "/s*"
     assert config.resolved_rule(link + "/sub") == real + "/sub"
     assert config.resolved_rule("/*") == "/*"
+
+
+def test_resolved_rule_through_a_link_to_the_root_stays_well_formed(tmp_path):
+    root_link = tmp_path / "rl"
+    root_link.symlink_to("/", target_is_directory=True)
+    assert config.resolved_rule(str(root_link) + "/secret*") == "/secret*"
