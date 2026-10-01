@@ -7,7 +7,7 @@
       "name": "rius",
       "description": "Stream Claude Code sessions to Rius as OTLP GenAI traces",
       "source": "./",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "category": "monitoring",
       "tags": ["observability", "opentelemetry", "tracing", "llm", "mcp", "rius"]
     }

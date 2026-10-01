@@ -345,12 +345,12 @@ def test_bare_invocation_means_status(tmp_path):
     assert "cwd: /x/y" in r.stdout
 
 
-def test_manifests_name_the_plugin_rius_at_0_4_4():
+def test_manifests_name_the_plugin_rius_at_0_4_5():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
     listed = {p["name"]: p["version"] for p in market["plugins"]}
-    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.4")
-    assert listed == {"rius": "0.4.4"}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.5")
+    assert listed == {"rius": "0.4.5"}
 
 
 def test_pyproject_version_matches_the_manifests():

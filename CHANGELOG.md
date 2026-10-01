@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## Unreleased
+## 0.4.5 (2026-10-01)
 
 - A session that is killed or crashes, and so never sends SessionEnd, no
   longer stays pending forever and missing from the Agents and Users tabs.
@@ -15,7 +15,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   project's own `RIUS_API_KEY` for another workspace, is never closed this
   way, because its closing spans would land in the wrong workspace. To
   tell keys apart, the state file keeps a short hash of the key and
-  endpoint, never the key.
+  endpoint, never the key. (#21)
 
 ## 0.4.4 (2026-10-01)
 
