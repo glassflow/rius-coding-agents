@@ -20,6 +20,7 @@ import time
 from . import platform_compat
 
 RETRY_INTERVAL_S = 0.05
+OPEN_MARKER_SUFFIX = ".open"
 
 
 def new_state() -> dict:
@@ -65,6 +66,53 @@ def state_path(session_id: str, home: str) -> str:
 
 def lock_path(session_id: str, home: str) -> str:
     return os.path.join(state_dir(home), session_id + ".lock")
+
+
+def open_marker_path(session_id: str, home: str) -> str:
+    return os.path.join(state_dir(home), session_id + OPEN_MARKER_SUFFIX)
+
+
+def sync_open_marker(session_id: str, home: str, st: dict) -> None:
+    """Mark the session as having an open trace, or clear the mark.
+
+    Called once an export has succeeded, so a marker means the backend holds
+    a pending root. The next SessionStart looks for these to close the trace
+    of a session that was killed before its SessionEnd (exporter.sweep_stale).
+    """
+    path = open_marker_path(session_id, home)
+    try:
+        if trace_is_open(st) and not st.get("handed_off_to"):
+            if not os.path.exists(path):
+                with open(path, "w"):
+                    pass
+        else:
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def open_marked_sessions(home: str) -> list:
+    try:
+        names = os.listdir(state_dir(home))
+    except OSError:
+        return []
+    return sorted(name[:-len(OPEN_MARKER_SUFFIX)] for name in names
+                  if name.endswith(OPEN_MARKER_SUFFIX))
+
+
+def pinger_alive(session_id: str, home: str) -> bool:
+    """Is the session's heartbeat pinger (heartbeat.py) still running?
+
+    It exits when the Claude Code process it watches dies, so a live one
+    means the session may well be alive too.
+    """
+    try:
+        with open(os.path.join(state_dir(home),
+                               session_id + ".heartbeat.pid")) as fh:
+            pid = int(fh.read().strip())
+    except (OSError, ValueError):
+        return False
+    return platform_compat.pid_alive(pid)
 
 
 def trace_is_open(st: dict) -> bool:

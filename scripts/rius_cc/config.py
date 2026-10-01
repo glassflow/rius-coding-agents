@@ -8,6 +8,7 @@ default instead.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -300,6 +301,20 @@ def redact(api_key: Optional[str]) -> str:
     if idx == -1:
         return "<redacted>"
     return api_key[: idx + 1] + "…"
+
+
+def key_fingerprint(api_key: Optional[str], endpoint: str) -> str:
+    """A stable, non-secret name for the key and the endpoint it goes to.
+
+    A hash rather than the part before the `.`: in a `gf_<random>.<sig>` key
+    that part is most of the key. Truncated, so it identifies without being
+    worth anything on its own.
+    """
+    if not api_key:
+        return ""
+    digest = hashlib.sha256(
+        (endpoint.rstrip("/") + "\n" + api_key).encode("utf-8"))
+    return digest.hexdigest()[:16]
 
 
 def _credential(env: Mapping[str, str], home: str):
