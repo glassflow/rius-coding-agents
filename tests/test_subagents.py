@@ -7,6 +7,7 @@ lives in <session-dir>/subagents/agent-<id>.jsonl, linked to the spawning
 that stops at the tool span reports less than half the true cost.
 """
 import json
+import os
 import shutil
 
 from rius_cc import spans, state, subagents, transcript
@@ -225,10 +226,12 @@ def test_subagent_streams_incrementally_by_per_agent_offset(fixtures_dir, tmp_pa
     full = sub.read_text().splitlines(True)
 
     # the subagent has written only its first two entries so far
-    sub.write_text("".join(full[:2]))
+    # Bytes, not text: offsets are byte offsets, and text mode would turn
+    # every \n into \r\n on Windows.
+    sub.write_bytes("".join(full[:2]).encode())
     # ...and the main transcript has not yet seen the closing tool_result
     main_lines = (dst / (SID + ".jsonl")).read_text().splitlines(True)
-    (dst / (SID + ".jsonl")).write_text("".join(main_lines[:2]))
+    (dst / (SID + ".jsonl")).write_bytes("".join(main_lines[:2]).encode())
 
     first, st, ctx = _run(main, SID)
     assert st["sub_offsets"]["agent-aaa111"] == len("".join(full[:2]))
@@ -237,8 +240,8 @@ def test_subagent_streams_incrementally_by_per_agent_offset(fixtures_dir, tmp_pa
     json.dumps(st)  # state must stay JSON-serializable
 
     # the rest arrives
-    sub.write_text("".join(full))
-    (dst / (SID + ".jsonl")).write_text("".join(main_lines))
+    sub.write_bytes("".join(full).encode())
+    (dst / (SID + ".jsonl")).write_bytes("".join(main_lines).encode())
     second, st, _ = _run(main, SID, st=st, ctx=ctx)
 
     ids = [s.span_id for s in second]
@@ -280,7 +283,7 @@ def test_a_missing_subagents_directory_is_not_an_error(fixtures_dir, tmp_path):
 
 def test_dir_for_derives_the_session_directory():
     assert subagents.dir_for("/p/projects/-x/abc.jsonl", "abc") == \
-        "/p/projects/-x/abc/subagents"
+        os.path.join("/p/projects/-x", "abc", "subagents")
     assert subagents.dir_for("", "abc") == ""
 
 
