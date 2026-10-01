@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## Unreleased
+## 0.4.3 (2026-10-01)
 
 - A conversation Claude Code moves to a new session id (sending a session
   to the background does this) stays one trace, like a resumed session.
@@ -16,12 +16,16 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   `session.id`, as a new instance. Its turns carry `cc.continued_from`.
   Subagents still running at the move keep landing in the trace, the
   conversation's root closes at the continued session's end, and a
-  mid-session disable carries over to the continued session.
+  mid-session disable carries over to the continued session. (#12)
 - The trace is titled with the Claude Code session's name instead of
   `claude-code session`: the `/rename` or `--name` title, else the title
   Claude Code generates from the first prompt. A rename mid-session renames
   the trace at the next hook event. With `RIUS_CAPTURE_CONTENT=false` no
-  name is sent. The agent stays `claude-code`.
+  name is sent. The agent stays `claude-code`. (#16)
+- No behavior change: a code comment says the tool-error message cap bounds
+  size, not content (#13); the bug form says where to find the plugin
+  version (#15); and a test pins the late continuation check that keeps a
+  stopped conversation from sending content (#17).
 
 ## 0.4.2 (2026-09-30)
 
