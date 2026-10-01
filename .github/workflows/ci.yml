@@ -32,6 +32,23 @@ jobs:
         run: python -m pip install --upgrade pip 'pytest>=7.0' 'opentelemetry-proto==1.43.0'
       - run: python -m pytest -q
 
+  windows:
+    # The fakes in the suite exercise the LOGIC of every Windows branch on
+    # Linux. This job is the only thing that executes it on Windows: ctypes
+    # reaching kernel32, msvcrt byte-range locks, detached process creation,
+    # and hook.sh resolving an interpreter under Git Bash.
+    name: tests (windows, py3.12)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test-only dependencies
+        run: python -m pip install --upgrade pip 'pytest>=7.0' 'opentelemetry-proto==1.43.0'
+      - run: python -m pytest -q -rs
+
   runtime-floor:
     # The shipped plugin runs under whatever `python3` a user already has, via
     # a shebang. 3.9 is the floor we support, and opentelemetry-proto needs
