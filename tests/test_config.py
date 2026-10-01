@@ -246,11 +246,12 @@ def test_posix_rules_are_unchanged_by_the_windows_support(tmp_path):
         "POSIX paths are case-sensitive and must stay that way"
 
 
-# macOS: /tmp is a symlink to /private/tmp. /rius:enable-here stores the
+
+# macOS: /tmp is a symlink to /private/tmp. /rius:enable-here sees the
 # shell's $PWD (/tmp/proj) while Claude Code hands the hooks the resolved
-# cwd (/private/tmp/proj), so a rule compared by spelling never matched:
-# status said "on" and every hook quietly traced nothing. These use a real
-# symlink, so they hold on any POSIX filesystem.
+# cwd (/private/tmp/proj). Rules are resolved once, when written; matching
+# stays a comparison of spellings, so a rule never follows a symlink that
+# is created or repointed after the user enabled the folder.
 
 
 def _linked_dir(tmp_path):
@@ -266,48 +267,59 @@ def _write_rules(home, **rules):
         json.dump(rules, fh)
 
 
-def test_a_rule_spelled_through_a_symlink_matches_the_resolved_cwd(tmp_path):
+def test_resolved_is_the_folder_the_hooks_are_handed(tmp_path):
+    real, link = _linked_dir(tmp_path)
+    assert config.resolved(link) == real
+    assert config.resolved(link + "/sub") == real + "/sub"
+    assert config.resolved(real) == real
+
+
+def test_resolved_leaves_relative_and_windows_paths_alone(tmp_path, monkeypatch):
+    assert config.resolved("opt/proj") == "opt/proj"
+    monkeypatch.setattr(config, "IS_WINDOWS", True)
+    assert config.resolved("/proj") == "/proj"
+
+
+def test_a_rule_does_not_follow_a_symlink_repointed_after_it_was_written(tmp_path):
+    """An enable that followed its symlink at match time would trace
+    wherever the link points now: `docs` turned into `../..` by a checkout,
+    or a deleted /tmp/proj recreated by someone else as a link to ~/secret."""
+    home = _home(tmp_path)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    planted = tmp_path / "proj"
+    _write_rules(home, enabled_paths=[str(planted)])
+    planted.symlink_to(secret, target_is_directory=True)
+    assert config.resolve("s1", str(secret), BASE_ENV, home).enabled is False
+
+
+def test_a_glob_whose_fixed_part_is_the_root_matches_nothing(tmp_path):
+    """fnmatch's * also matches "/", so "/*" is as broad as "/"."""
+    home = _home(tmp_path)
+    for bad in ["/*", "/?", "/[a-z]*", "//*"]:
+        _write_rules(home, enabled_paths=[bad])
+        c = config.resolve("s1", "/etc", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled /etc" % (bad,)
+    _write_rules(home, enabled_paths=["/srv/*/checkout"])
+    assert config.resolve("s1", "/srv/a/checkout", BASE_ENV, home).enabled is True
+
+
+def test_a_windows_glob_on_a_bare_drive_matches_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "IS_WINDOWS", True)
+    home = _home(tmp_path)
+    _write_rules(home, enabled_paths=["C:\\*"])
+    assert config.resolve("s1", "C:\\Users", BASE_ENV, home).enabled is False
+
+
+def test_symlinked_rules_names_rules_the_hooks_never_match(tmp_path):
     home = _home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    _write_rules(home, enabled_paths=[link])
-    assert config.resolve("s1", real, BASE_ENV, home).enabled is True
-    assert config.resolve("s1", real + "/sub", BASE_ENV, home).enabled is True
+    _write_rules(home, enabled_paths=[link, real + "/sub"])
+    assert config.symlinked_rules(link + "/sub", home) == [link]
+    assert config.symlinked_rules(real, home) == []
 
 
-def test_a_resolved_rule_matches_a_cwd_spelled_through_a_symlink(tmp_path):
-    home = _home(tmp_path)
+def test_same_folder_merges_symlinked_spellings_only(tmp_path):
     real, link = _linked_dir(tmp_path)
-    _write_rules(home, enabled_paths=[real])
-    assert config.resolve("s1", link, BASE_ENV, home).enabled is True
-    assert config.resolve("s1", link + "/sub", BASE_ENV, home).enabled is True
-
-
-def test_a_disable_spelled_through_a_symlink_still_beats_an_enable(tmp_path):
-    home = _home(tmp_path)
-    real, link = _linked_dir(tmp_path)
-    _write_rules(home, enabled_paths=[real], disabled_paths=[link + "/sub"])
-    assert config.resolve("s1", real + "/sub", BASE_ENV, home).enabled is False
-    assert config.resolve("s1", real, BASE_ENV, home).enabled is True
-
-
-def test_a_rule_whose_target_is_the_root_does_not_match_everything(tmp_path):
-    """Resolving must not widen a rule past what _is_usable_rule allows: a
-    rule naming a symlink to "/" resolves to "/", which matches every path."""
-    home = _home(tmp_path)
-    root_link = tmp_path / "root"
-    root_link.symlink_to("/", target_is_directory=True)
-    _write_rules(home, enabled_paths=[str(root_link)])
-    assert config.resolve("s1", "/opt/unrelated", BASE_ENV, home).enabled is False
-
-
-def test_disabled_below_sees_a_carve_out_spelled_the_other_way(tmp_path):
-    home = _home(tmp_path)
-    real, link = _linked_dir(tmp_path)
-    _write_rules(home, disabled_paths=[real + "/sub"])
-    assert config.disabled_below(link, home) == [real + "/sub"]
-
-
-def test_same_path_merges_symlinked_spellings_only(tmp_path):
-    real, link = _linked_dir(tmp_path)
-    assert config.same_path(real, link)
-    assert not config.same_path(real, real + "/sub")
+    assert config.same_folder(real, link)
+    assert not config.same_folder(real, real + "/sub")

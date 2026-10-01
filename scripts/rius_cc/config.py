@@ -23,6 +23,7 @@ DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_GLOB_RE = re.compile(r"[*?\[]")
 
 STORED_KEY_SOURCE = "/rius:login"
 
@@ -141,6 +142,7 @@ def _is_usable_rule(rule) -> bool:
     """
     if not isinstance(rule, str) or not rule:
         return False
+    rule = _before_glob(rule)               # "/*" is as broad as "/"
     if rule.startswith("/") and not rule.startswith("//"):
         return bool(rule.rstrip("/"))       # "/" -> the whole filesystem
     if _DRIVE_RE.match(rule):
@@ -150,6 +152,41 @@ def _is_usable_rule(rule) -> bool:
         parts = [p for p in rule.replace("/", "\\").split("\\") if p]
         return len(parts) >= 2
     return False                            # "", " ", "*", "**", "opt/proj"
+
+
+def _before_glob(rule: str) -> str:
+    match = _GLOB_RE.search(rule)
+    return rule[:match.start()] if match else rule
+
+
+def resolved(path: str) -> str:
+    """The folder `path` names, as Claude Code hands it to the hooks.
+
+    The slash commands only see the shell's $PWD, which keeps symlinks:
+    on macOS /tmp/proj is /private/tmp/proj to Claude Code. A rule is
+    resolved once, when it is written, and never while matching: a rule
+    that followed its symlink at match time would trace wherever that link
+    is repointed to later, and would cost every hook a filesystem call.
+    Windows is left as written.
+    """
+    if IS_WINDOWS or not path.startswith("/"):
+        return path
+    return os.path.realpath(path)
+
+
+def same_folder(a: str, b: str) -> bool:
+    return a == b or resolved(a) == resolved(b)
+
+
+def symlinked_rules(cwd: str, home: str) -> list:
+    """Rules written before 0.4.4 through a symlink that cover `cwd` as the
+    shell spells it. Hooks see the resolved folder, so they never match."""
+    rules = read_path_rules(home)
+    return [rule
+            for key in ("disabled_paths", "enabled_paths")
+            for rule in rule_list(rules, key)
+            if _is_usable_rule(rule) and not _GLOB_RE.search(rule)
+            and resolved(rule) != rule and _rule_matches(cwd, rule)]
 
 
 def _normalise_for_match(path: str) -> str:
@@ -166,54 +203,27 @@ def _normalise_for_match(path: str) -> str:
     return path.replace("\\", "/").lower()
 
 
-def _spellings(path: str) -> set:
-    """`path` as written and as the filesystem resolves it.
-
-    Claude Code hands the hooks its resolved cwd, while the slash commands
-    see the shell's $PWD: on macOS /tmp/proj and /private/tmp/proj. A rule
-    written in one spelling has to decide the folder named in the other, or
-    status says "on" while every hook quietly traces nothing. Only absolute
-    paths are resolved: realpath would anchor anything else at this
-    process's own cwd.
-    """
-    forms = {_normalise_for_match(path)}
-    if os.path.isabs(path):
-        forms.add(_normalise_for_match(os.path.realpath(path)))
-    return forms
-
-
-def same_path(a: str, b: str) -> bool:
-    return bool(_spellings(a) & _spellings(b))
-
-
-def resolved(path: str) -> str:
-    """The spelling of `path` the hooks are handed."""
-    return os.path.realpath(path) if os.path.isabs(path) else path
-
-
-def _spelling_matches(cwd: str, rule: str) -> bool:
+def _rule_matches(cwd: str, rule: str) -> bool:
+    if not _is_usable_rule(rule):
+        return False
+    cwd = _normalise_for_match(cwd)
+    rule = _normalise_for_match(rule)
     if cwd == rule:
         return True
     if cwd.startswith(rule.rstrip("/") + "/"):
         return True
-    return fnmatch.fnmatch(cwd, rule)
-
-
-def _rule_matches(cwd: str, rule: str) -> bool:
-    # Each resolved rule is vetted again: a symlink to "/" resolves to the
-    # one rule that matches every path.
-    return any(_spelling_matches(c, r)
-               for r in _spellings(rule) if _is_usable_rule(r)
-               for c in _spellings(cwd))
+    if fnmatch.fnmatch(cwd, rule):
+        return True
+    return False
 
 
 def disabled_below(cwd: str, home: str) -> list:
     """Disable rules strictly inside `cwd`, which enabling `cwd` does not
     reach: matching_rule only ever looks upward from a folder."""
-    prefixes = [c.rstrip("/") + "/" for c in _spellings(cwd)]
+    prefix = _normalise_for_match(cwd).rstrip("/") + "/"
     return [rule for rule in rule_list(read_path_rules(home), "disabled_paths")
             if _is_usable_rule(rule)
-            and any(r.startswith(p) for r in _spellings(rule) for p in prefixes)]
+            and _normalise_for_match(rule).startswith(prefix)]
 
 
 def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
