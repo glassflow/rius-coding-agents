@@ -284,7 +284,11 @@ def test_the_trace_stays_with_the_key_that_opened_it(home, sent, tmp_path):
     """Signing in to another workspace mid-session must not hand the trace
     to that workspace's key."""
     path = _kill_mid_tool(tmp_path, home)
+    with open(path, "a") as fh:
+        fh.write((FIXTURES / "tool_call.jsonl").read_text().splitlines()[2]
+                 + "\n")
     _run("PostToolUse", DEAD, path, home, OTHER_ENV)
+    assert _for(sent, DEAD)[-1][2] == OTHER_ENV["RIUS_API_KEY"]
     before = len(_for(sent, DEAD))
 
     _start_another(tmp_path, home, env=OTHER_ENV)
