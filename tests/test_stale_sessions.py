@@ -263,3 +263,44 @@ def test_the_key_itself_never_reaches_the_state_file(home, sent, tmp_path):
     assert state.load(DEAD, home)["key_fingerprint"]
     assert KEY not in text
     assert KEY.split(".")[0] not in text
+
+
+def test_a_session_whose_claude_code_is_alive_is_left_open(home, sent,
+                                                          tmp_path):
+    """Idle, not dead: past its 12h cap the pinger is gone either way."""
+    _kill_mid_tool(tmp_path, home)
+    st = state.load(DEAD, home)
+    st["cc_pid"] = os.getpid()
+    state.save(DEAD, home, st)
+    before = len(sent)
+
+    _start_another(tmp_path, home)
+
+    assert len(_for(sent, DEAD)) == len(_for(sent[:before], DEAD))
+    assert state.trace_is_open(state.load(DEAD, home))
+
+
+def test_the_trace_stays_with_the_key_that_opened_it(home, sent, tmp_path):
+    """Signing in to another workspace mid-session must not hand the trace
+    to that workspace's key."""
+    path = _kill_mid_tool(tmp_path, home)
+    _run("PostToolUse", DEAD, path, home, OTHER_ENV)
+    before = len(_for(sent, DEAD))
+
+    _start_another(tmp_path, home, env=OTHER_ENV)
+    assert len(_for(sent, DEAD)) == before
+
+    _start_another(tmp_path, home, env=ENV)
+    _resource, _closing, key = _for(sent, DEAD)[-1]
+    assert key == KEY
+    assert _left_pending(_for(sent, DEAD)) == []
+
+
+def test_a_trace_no_export_was_accepted_for_has_no_owner(home, monkeypatch,
+                                                         sent, tmp_path):
+    monkeypatch.setattr(exporter.otlp, "export",
+                        lambda ep, key, body, timeout=5.0: 403)
+    _kill_mid_tool(tmp_path, home)
+
+    assert not state.load(DEAD, home).get("key_fingerprint")
+    assert not _marker(home, DEAD)

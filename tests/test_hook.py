@@ -774,3 +774,19 @@ def test_enable_here_through_a_symlink_traces_the_cwd_claude_code_sends(
         {"session_id": "sym-1", "cwd": str(real),
          "transcript_path": "/nonexistent.jsonl"}, env, home)
     assert len(calls) == 1, "the exporter was not spawned for the resolved cwd"
+
+
+def test_session_start_records_the_claude_code_pid(tmp_path, monkeypatch):
+    """The stale-trace sweep must not close a session whose Claude Code is
+    still running, however long it has sat idle; this is how it can tell."""
+    env, home = _enabled_env(tmp_path)
+    sid = "cc-pid-1"
+    monkeypatch.setattr(hook_mod, "_claude_code_pid", lambda: 4242)
+
+    calls = _run_in_process(
+        monkeypatch, "SessionStart",
+        {"session_id": sid, "cwd": str(tmp_path),
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+
+    assert state.load(sid, home)["cc_pid"] == 4242
+    assert calls[1]["argv"][-2] == "4242"

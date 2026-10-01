@@ -29,9 +29,10 @@ MAX_CONSECUTIVE_EXPORT_FAILURES = 5
 FINAL_EVENTS = ("Stop", "SessionEnd")
 FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
 
-# A session whose trace is still open this long after its state was last
-# written, with no live pinger, is taken to be dead. The pinger's own cap
-# (heartbeat.MAX_LIFETIME_S): a live session is never closed under it.
+# A session whose trace is still open this long after it was last seen, and
+# whose Claude Code process and pinger are both gone, is taken to be dead.
+# The pinger's own cap (heartbeat.MAX_LIFETIME_S): it covers a session whose
+# process could not be identified.
 STALE_AFTER_S = 12 * 60 * 60
 
 
@@ -175,6 +176,12 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
             return _handle_export_failure(
                 session_id, home, cfg, st, new_offset, status)
 
+        if st.get("root_started") and not st.get("key_fingerprint"):
+            # The key the trace was opened with, as a hash: only a session
+            # using that same key may close it (sweep_stale). Set once the
+            # receiver has accepted spans under it, and never moved after.
+            st["key_fingerprint"] = config.key_fingerprint(
+                cfg.api_key, cfg.endpoint)
         st["spans_exported"] = st.get("spans_exported", 0) + len(out)
         st["consecutive_export_failures"] = 0
         st.pop("last_export_error", None)
@@ -304,7 +311,9 @@ def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
             return
         last_seen_ns = _last_seen_ns(st)
         if (now_ns - last_seen_ns < STALE_AFTER_S * 10**9
+                or platform_compat.pid_alive(st.get("cc_pid") or 0)
                 or state.pinger_alive(session_id, home)):
+            # Idle, not dead: a session can sit at a prompt for days.
             return
         _log(home, cfg, "session %s: never ended; closing its trace"
              % session_id)
@@ -455,9 +464,7 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                           titles=titles)
         if st.get("root_started"):
             # What the sweep needs to close this trace if the session
-            # dies without a SessionEnd. The key is kept as a hash only.
-            st["key_fingerprint"] = config.key_fingerprint(
-                cfg.api_key, cfg.endpoint)
+            # dies without a SessionEnd.
             st.setdefault("root_cwd", first_cwd)
             st["transcript_path"] = transcript_path
 
