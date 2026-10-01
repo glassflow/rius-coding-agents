@@ -244,3 +244,110 @@ def test_posix_rules_are_unchanged_by_the_windows_support(tmp_path):
     assert config.resolve("s1", "/opt/example/x", BASE_ENV, home).enabled is True
     assert config.resolve("s1", "/OPT/EXAMPLE/x", BASE_ENV, home).enabled is False, \
         "POSIX paths are case-sensitive and must stay that way"
+
+
+
+# macOS: /tmp is a symlink to /private/tmp. /rius:enable-here sees the
+# shell's $PWD (/tmp/proj) while Claude Code hands the hooks the resolved
+# cwd (/private/tmp/proj). Rules are resolved once, when written; matching
+# stays a comparison of spellings, so a rule never follows a symlink that
+# is created or repointed after the user enabled the folder.
+
+
+def _linked_dir(tmp_path):
+    real = tmp_path / "real"
+    (real / "sub").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    return str(real), str(link)
+
+
+def _write_rules(home, **rules):
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump(rules, fh)
+
+
+def test_resolved_is_the_folder_the_hooks_are_handed(tmp_path):
+    real, link = _linked_dir(tmp_path)
+    assert config.resolved(link) == real
+    assert config.resolved(link + "/sub") == real + "/sub"
+    assert config.resolved(real) == real
+
+
+def test_resolved_leaves_relative_and_windows_paths_alone(tmp_path, monkeypatch):
+    assert config.resolved("opt/proj") == "opt/proj"
+    monkeypatch.setattr(config, "IS_WINDOWS", True)
+    assert config.resolved("/proj") == "/proj"
+
+
+def test_a_rule_does_not_follow_a_symlink_repointed_after_it_was_written(tmp_path):
+    """An enable that followed its symlink at match time would trace
+    wherever the link points now: `docs` turned into `../..` by a checkout,
+    or a deleted /tmp/proj recreated by someone else as a link to ~/secret."""
+    home = _home(tmp_path)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    planted = tmp_path / "proj"
+    _write_rules(home, enabled_paths=[str(planted)])
+    planted.symlink_to(secret, target_is_directory=True)
+    assert config.resolve("s1", str(secret), BASE_ENV, home).enabled is False
+
+
+def test_a_glob_whose_fixed_part_is_the_root_matches_nothing(tmp_path):
+    """fnmatch's * also matches "/", so "/*" is as broad as "/"."""
+    home = _home(tmp_path)
+    for bad in ["/*", "/?", "/[a-z]*", "//*"]:
+        _write_rules(home, enabled_paths=[bad])
+        c = config.resolve("s1", "/etc", BASE_ENV, home)
+        assert c.enabled is False, "rule %r enabled /etc" % (bad,)
+    _write_rules(home, enabled_paths=["/srv/*/checkout"])
+    assert config.resolve("s1", "/srv/a/checkout", BASE_ENV, home).enabled is True
+
+
+def test_a_windows_glob_on_a_bare_drive_matches_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "IS_WINDOWS", True)
+    home = _home(tmp_path)
+    _write_rules(home, enabled_paths=["C:\\*"])
+    assert config.resolve("s1", "C:\\Users", BASE_ENV, home).enabled is False
+
+
+def test_symlinked_rules_names_rules_the_hooks_never_match(tmp_path):
+    home = _home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _write_rules(home, enabled_paths=[link, real + "/sub"])
+    assert config.symlinked_rules(link + "/sub", home) == [(link, True)]
+    assert config.symlinked_rules(real, home) == []
+
+
+def test_same_folder_merges_symlinked_spellings_only(tmp_path):
+    real, link = _linked_dir(tmp_path)
+    assert config.same_folder(real, link)
+    assert not config.same_folder(real, real + "/sub")
+
+
+def _case_insensitive(tmp_path):
+    probe = tmp_path / "caseprobe"
+    probe.mkdir()
+    return (tmp_path / "CASEPROBE").is_dir()
+
+
+def test_resolved_spells_the_folder_in_its_own_letter_case(tmp_path):
+    """macOS: `cd ABC` into folder `abc` leaves $PWD and realpath at ABC,
+    while Claude Code's cwd is abc."""
+    if not _case_insensitive(tmp_path):
+        pytest.skip("needs a case-insensitive filesystem")
+    (tmp_path / "abc").mkdir()
+    assert config.resolved(str(tmp_path / "ABC")) == str(tmp_path / "abc")
+
+
+def test_resolved_rule_resolves_the_fixed_part_of_a_glob(tmp_path):
+    real, link = _linked_dir(tmp_path)
+    assert config.resolved_rule(link + "/s*") == real + "/s*"
+    assert config.resolved_rule(link + "/sub") == real + "/sub"
+    assert config.resolved_rule("/*") == "/*"
+
+
+def test_resolved_rule_through_a_link_to_the_root_stays_well_formed(tmp_path):
+    root_link = tmp_path / "rl"
+    root_link.symlink_to("/", target_is_directory=True)
+    assert config.resolved_rule(str(root_link) + "/secret*") == "/secret*"

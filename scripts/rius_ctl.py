@@ -95,16 +95,42 @@ STILL_OFF = ("Still OFF: `%s` is disabled. Run `/rius:enable-here` in that "
 
 
 def _move_path(home, cwd, to_key, from_key):
+    """Any other spelling of `cwd` goes, from both lists: a rule written
+    through a symlink before 0.4.4 never matched what the hooks see."""
     rules = config.read_path_rules(home)
-    rules[from_key] = [p for p in config.rule_list(rules, from_key) if p != cwd]
-    target = config.rule_list(rules, to_key)
+    rules[from_key] = [p for p in config.rule_list(rules, from_key)
+                       if not config.same_folder(p, cwd)]
+    target = [p for p in config.rule_list(rules, to_key)
+              if p == cwd or not config.same_folder(p, cwd)]
     if cwd not in target:
         target.append(cwd)
     rules[to_key] = target
+    rules["disabled_paths"] = _resolved_disables(rules["disabled_paths"])
     config.write_path_rules(home, rules)
 
 
+def _resolved_disables(disables):
+    """A disable an earlier version wrote through a symlink matches nothing
+    the hooks see. Resolving it can only turn tracing off, so every write
+    repairs them all: otherwise enabling its parent again would trace the
+    folder the user had carved out."""
+    repaired = []
+    for rule in disables:
+        rule = config.resolved_rule(rule)
+        if rule not in repaired:
+            repaired.append(rule)
+    return repaired
+
+
+TOO_BROAD = ("Not changed: `%s` is too broad for a rule (the filesystem or a "
+             "drive root, or a *, ? or [ right below it).")
+
+
 def _enable_here(cwd, home):
+    cwd = config.resolved(cwd)
+    if not config.is_usable_rule(cwd):
+        print(TOO_BROAD % cwd)
+        return
     _move_path(home, cwd, "enabled_paths", "disabled_paths")
     match = config.matching_rule(cwd, home)
     if match and not match[1]:
@@ -152,6 +178,10 @@ def _and_list(items):
 
 
 def _disable_here(cwd, home):
+    cwd = config.resolved(cwd)
+    if not config.is_usable_rule(cwd):
+        print(TOO_BROAD % cwd)
+        return
     _move_path(home, cwd, "disabled_paths", "enabled_paths")
     print("Rius tracing disabled for %s." % cwd)
 
@@ -169,6 +199,9 @@ STOPPED_NOTE = ("Stopped: this session stopped tracing when its folder was "
 
 
 def _print_status(session_id, cwd, home, inferred=False):
+    # Decide for the folder the hooks are handed, not the shell's spelling.
+    typed_cwd = cwd
+    cwd = config.resolved(cwd) if cwd else cwd
     cfg = config.resolve(session_id or "", cwd or "", os.environ, home)
     # The exporter's sticky stop outranks the rules for this one session, so
     # without this the rules would say "on" for a session that sends nothing.
@@ -177,7 +210,7 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Reason: %s" % cfg.reason)
     if stopped:
         print(STOPPED_NOTE)
-    print("cwd: %s" % (cwd or "<unknown, default>"))
+    print(_cwd_line(typed_cwd))
     if not session_id:
         print("session: <unknown> (no --session given and no session state "
               "on disk yet)")
@@ -196,6 +229,10 @@ def _print_status(session_id, cwd, home, inferred=False):
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
     _print_rule(cwd, home)
+    for rule, enables in (config.symlinked_rules(typed_cwd, home)
+                          if typed_cwd else []):
+        verb = "enable" if enables else "disable"
+        print(STALE_RULE % (rule, verb, config.resolved(rule), verb, rule))
     if cfg.key_source == config.STORED_KEY_SOURCE:
         _print_account(home, login.read_credentials(home) or {})
     spans = _spans_exported(session_id, home)
@@ -209,6 +246,28 @@ def _print_status(session_id, cwd, home, inferred=False):
     if last:
         print("Last export error: %s (at %s)"
               % (last.get("reason"), last.get("at")))
+    if (cfg.enabled and not stopped and session_id
+            and not os.path.exists(state.state_path(session_id, home))):
+        print(NO_HOOK_RAN)
+
+
+STALE_RULE = ("Rule `%s` %ss nothing: Claude Code calls that folder %s. "
+              "Run /rius:%s-here in %s to fix it.")
+# Every hook in an enabled folder leaves this session's state file, a
+# failed export included. A folder that is on with no state file is a
+# session whose hooks never loaded, or have not fired since the enable.
+NO_HOOK_RAN = ("No Rius hook has traced this session yet. If that is still "
+               "so after your next prompt, restart Claude Code: a plugin "
+               "installed after a session started is not hooked into it.")
+
+
+def _cwd_line(cwd):
+    if not cwd:
+        return "cwd: <unknown, default>"
+    hooks_see = config.resolved(cwd)
+    if hooks_see == cwd:
+        return "cwd: %s" % cwd
+    return "cwd: %s (hooks see %s)" % (cwd, hooks_see)
 
 
 def _print_rule(cwd, home):

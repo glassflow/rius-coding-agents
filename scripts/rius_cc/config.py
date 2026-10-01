@@ -23,6 +23,7 @@ DEFAULT_SERVICE_NAME = "claude-code"
 DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_GLOB_RE = re.compile(r"[*?\[]")
 
 STORED_KEY_SOURCE = "/rius:login"
 
@@ -141,6 +142,7 @@ def _is_usable_rule(rule) -> bool:
     """
     if not isinstance(rule, str) or not rule:
         return False
+    rule = _before_glob(rule)               # "/*" is as broad as "/"
     if rule.startswith("/") and not rule.startswith("//"):
         return bool(rule.rstrip("/"))       # "/" -> the whole filesystem
     if _DRIVE_RE.match(rule):
@@ -150,6 +152,77 @@ def _is_usable_rule(rule) -> bool:
         parts = [p for p in rule.replace("/", "\\").split("\\") if p]
         return len(parts) >= 2
     return False                            # "", " ", "*", "**", "opt/proj"
+
+
+def _before_glob(rule: str) -> str:
+    match = _GLOB_RE.search(rule)
+    return rule[:match.start()] if match else rule
+
+
+def resolved(path: str) -> str:
+    """The folder `path` names, spelled as Claude Code hands it to the hooks.
+
+    The slash commands only see the shell's $PWD, which keeps symlinks and
+    the letter case that was typed: on macOS `cd /tmp/ABC` is
+    /private/tmp/abc to Claude Code. A rule is resolved once, when it is
+    written, and never while matching: a rule that followed its symlink at
+    match time would trace wherever that link is repointed to later, and
+    would cost every hook a filesystem call. Windows is left as written.
+    """
+    if IS_WINDOWS or not path.startswith("/"):
+        return path
+    return _getcwd_spelling(os.path.realpath(path))
+
+
+def _getcwd_spelling(folder: str) -> str:
+    """getcwd() spells a folder the way Claude Code's process.cwd() does,
+    letter case included; realpath keeps the case it was given."""
+    try:
+        here = os.getcwd()
+    except OSError:
+        return folder
+    try:
+        os.chdir(folder)
+        return os.getcwd()
+    except OSError:
+        return folder
+    finally:
+        try:
+            os.chdir(here)
+        except OSError:
+            pass
+
+
+def resolved_rule(rule: str) -> str:
+    """`rule` with the folder its glob sits in resolved."""
+    head = _before_glob(rule)
+    if head == rule:
+        return resolved(rule)
+    cut = head.rfind("/")
+    if cut <= 0:
+        return rule
+    return resolved(rule[:cut]).rstrip("/") + rule[cut:]
+
+
+def is_usable_rule(rule) -> bool:
+    return _is_usable_rule(rule)
+
+
+def same_folder(a: str, b: str) -> bool:
+    return a == b or resolved(a) == resolved(b)
+
+
+def symlinked_rules(cwd: str, home: str) -> list:
+    """(rule, enables) for rules an earlier version wrote in the shell's
+    spelling that cover `cwd` as the shell spells it. Hooks see the
+    resolved folder, so they never match."""
+    rules = read_path_rules(home)
+    return [(rule, enables)
+            for key, enables in (("disabled_paths", False),
+                                 ("enabled_paths", True))
+            for rule in rule_list(rules, key)
+            if _is_usable_rule(rule) and not _GLOB_RE.search(rule)
+            and resolved(rule) != rule and _rule_matches(cwd, rule)]
 
 
 def _normalise_for_match(path: str) -> str:

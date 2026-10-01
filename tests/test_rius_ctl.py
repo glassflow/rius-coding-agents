@@ -345,12 +345,12 @@ def test_bare_invocation_means_status(tmp_path):
     assert "cwd: /x/y" in r.stdout
 
 
-def test_manifests_name_the_plugin_rius_at_0_4_3():
+def test_manifests_name_the_plugin_rius_at_0_4_4():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
     listed = {p["name"]: p["version"] for p in market["plugins"]}
-    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.3")
-    assert listed == {"rius": "0.4.3"}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.4")
+    assert listed == {"rius": "0.4.4"}
 
 
 def test_pyproject_version_matches_the_manifests():
@@ -558,3 +558,170 @@ def test_status_of_a_session_that_was_never_stopped_is_unchanged(tmp_path):
     r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
     assert "Rius tracing: on" in r.stdout
     assert "Stopped:" not in r.stdout
+
+
+def _linked_dir(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    return str(real), str(link)
+
+
+def test_status_agrees_with_the_hooks_across_a_symlink(tmp_path):
+    """enable-here gets the shell's $PWD (/tmp/proj on macOS); the hooks get
+    Claude Code's resolved cwd (/private/tmp/proj). Status run from either
+    spelling must give the hooks' answer."""
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    for cwd in (link, real):
+        r = _run(["status", "--session", "s1", "--cwd", cwd], home, KEY)
+        assert "Rius tracing: on" in r.stdout, cwd
+
+
+def test_status_shows_the_folder_the_hooks_see(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    assert "cwd: %s (hooks see %s)" % (link, real) in r.stdout
+
+
+def test_disable_here_through_a_symlink_replaces_the_enable(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    _run(["disable-here", "--cwd", real], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": [real]}
+
+
+def test_enable_here_is_idempotent_across_spellings(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    _run(["enable-here", "--cwd", real], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+
+
+def test_enable_here_stores_the_folder_the_hooks_see(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    r = _run(["enable-here", "--cwd", link], home, KEY)
+    assert "enabled for %s " % real in r.stdout
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+
+
+def test_status_decides_for_the_folder_the_hooks_see(tmp_path):
+    """$PWD ~/proj/vendor, where vendor -> ~/secret: the hooks are handed
+    ~/secret, which no rule enables, so status must not say on."""
+    home = _fresh_home(tmp_path)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (proj / "vendor").symlink_to(secret, target_is_directory=True)
+    _run(["enable-here", "--cwd", str(proj)], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", str(proj / "vendor")],
+             home, KEY)
+    assert "Rius tracing: off" in r.stdout
+
+
+def test_status_names_a_rule_written_through_a_symlink(tmp_path):
+    """0.4.3 stored $PWD as written, so its /tmp rules never matched."""
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
+    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    assert "Rius tracing: off" in r.stdout
+    assert ("Rule `%s` enables nothing: Claude Code calls that folder %s. "
+            "Run /rius:enable-here in %s to fix it." % (link, real, link)
+            ) in r.stdout
+
+
+def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    (tmp_path / "real" / "sub").mkdir()
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [], "disabled_paths": [link]}, fh)
+    r = _run(["status", "--session", "s1", "--cwd", link + "/sub"], home, KEY)
+    assert ("Rule `%s` disables nothing: Claude Code calls that folder %s. "
+            "Run /rius:disable-here in %s to fix it." % (link, real, link)
+            ) in r.stdout
+
+
+def test_enabling_a_parent_again_keeps_an_old_carve_out_off(tmp_path):
+    """0.4.3 rules: enable link, disable link/sub; neither matched. Re-running
+    enable-here on the parent must not start tracing sub."""
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    (tmp_path / "real" / "sub").mkdir()
+    (tmp_path / "real" / "sab").mkdir()
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [link],
+                   "disabled_paths": [link + "/sub", link + "/sa*"]}, fh)
+    r = _run(["enable-here", "--cwd", link], home, KEY)
+    assert "except %s/sub and %s/sa* (disabled)" % (real, real) in r.stdout
+    for sub in ("sub", "sab"):
+        status = _run(["status", "--session", "s1", "--cwd", real + "/" + sub],
+                      home, KEY)
+        assert "Rius tracing: off" in status.stdout, sub
+
+
+@pytest.mark.parametrize("action", ["enable-here", "disable-here"])
+def test_a_folder_too_broad_for_a_rule_is_refused_out_loud(tmp_path, action):
+    home = _fresh_home(tmp_path)
+    r = _run([action, "--cwd", "/"], home, KEY)
+    assert r.stdout.startswith("Not changed: `/` is too broad for a rule")
+    assert not (tmp_path / ".claude" / "rius" / "config.json").exists()
+
+
+def test_enable_here_in_a_folder_typed_in_the_wrong_case(tmp_path):
+    probe = tmp_path / "caseprobe"
+    probe.mkdir()
+    if not (tmp_path / "CASEPROBE").is_dir():
+        pytest.skip("needs a case-insensitive filesystem")
+    home = _fresh_home(tmp_path)
+    (tmp_path / "abc").mkdir()
+    _run(["enable-here", "--cwd", str(tmp_path / "ABC")], home, KEY)
+    assert _rules(tmp_path)["enabled_paths"] == [str(tmp_path / "abc")]
+
+
+def test_enable_here_replaces_a_rule_written_through_a_symlink(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    assert "Rius tracing: on" in r.stdout
+    assert "through a symlink" not in r.stdout
+
+
+NO_HOOK_HINT = "No Rius hook has traced this session yet."
+
+
+def test_status_says_when_no_hook_has_run_in_this_session(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert NO_HOOK_HINT in r.stdout
+
+
+def test_status_drops_the_hint_once_a_hook_has_traced(tmp_path):
+    from rius_cc import state as _state
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    _state.save("s1", home, _state.new_state())
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert NO_HOOK_HINT not in r.stdout
+
+
+def test_status_in_a_folder_that_is_off_gives_no_hook_hint(tmp_path):
+    """Off is explained by the Reason line; hooks there write nothing."""
+    home = _fresh_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in r.stdout
+    assert NO_HOOK_HINT not in r.stdout
