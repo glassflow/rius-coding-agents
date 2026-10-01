@@ -372,8 +372,10 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             instance_id = stored
 
             read_stats = {}
+            titles = {}
             entries, new_offset = transcript.read_from(
-                transcript_path, st.get("offset", 0), stats=read_stats)
+                transcript_path, st.get("offset", 0), stats=read_stats,
+                titles=titles)
             _note_skipped_lines(home, cfg, session_id, st, read_stats)
             if entries and not st.get("continuation_checked"):
                 _link(st, session_id, transcript_path, home, cfg, final=True)
@@ -393,7 +395,8 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             ctx = _ctx(st, session_id, cfg, first_cwd, first_git_branch,
                        first_cc_version)
 
-            out = spans.build(entries, st, ctx, source_path=transcript_path)
+            out = spans.build(entries, st, ctx, source_path=transcript_path,
+                              titles=titles)
 
             # Subagents write their own transcripts; without this the 58% of
             # tokens that live in them never reach the trace. Guarded on its

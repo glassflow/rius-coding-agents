@@ -17,6 +17,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   Subagents still running at the move keep landing in the trace, the
   conversation's root closes at the continued session's end, and a
   mid-session disable carries over to the continued session.
+- The trace is titled with the Claude Code session's name instead of
+  `claude-code session`: the `/rename` or `--name` title, else the title
+  Claude Code generates from the first prompt. A rename mid-session renames
+  the trace at the next hook event. With `RIUS_CAPTURE_CONTENT=false` no
+  name is sent. The agent stays `claude-code`.
 
 ## 0.4.2 (2026-09-30)
 

@@ -574,3 +574,45 @@ def test_moving_an_untraced_conversation_writes_nothing(
     state_dir = os.path.join(home, ".claude", "rius", "state")
     left = os.listdir(state_dir) if os.path.isdir(state_dir) else []
     assert left == [], "an untraced conversation wrote %s" % left
+
+
+# --- the session's name carries over ----------------------------------------
+
+def _closing_root(sent):
+    return [s for s in sent if s.span_id == ROOT and not s.pending][-1]
+
+
+def test_a_continued_session_keeps_the_name_given_before_the_move(
+        tmp_path, home, sent):
+    c = Conv(tmp_path, home)
+    _write(c.old, [{"type": "custom-title", "sessionId": OLD,
+                    "customTitle": "named-before-the-move"}])
+    c.before()
+    c.switch()
+    c.run("SessionStart")
+    _write(c.new, _after_switch())
+    c.run("Stop")
+    c.run("SessionEnd")
+    assert _closing_root(sent).name == "named-before-the-move"
+
+
+def test_a_rename_after_the_move_renames_the_conversation(tmp_path, home, sent):
+    c = Conv(tmp_path, home)
+    _write(c.old, [{"type": "custom-title", "sessionId": OLD,
+                    "customTitle": "named-before-the-move"}])
+    c.before()
+    c.switch()
+    c.run("SessionStart")
+    _write(c.new, [{"type": "custom-title", "sessionId": NEW,
+                    "customTitle": "renamed-after-the-move"}] + _after_switch())
+    c.run("Stop")
+    renamed = [s for s in sent if s.span_id == ROOT][-1]
+    assert renamed.pending and renamed.name == "renamed-after-the-move"
+    assert renamed.trace_id == TRACE
+    c.run("SessionEnd")
+    assert _closing_root(sent).name == "renamed-after-the-move"
+    # Every copy of the root, from either id, is one backend row.
+    roots = [s for s in sent if s.span_id == ROOT]
+    assert len(roots) >= 3
+    assert {(s.trace_id, s.start_ns) for s in roots} == {
+        (TRACE, _ns("2026-09-30T10:00:00.000Z"))}
