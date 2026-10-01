@@ -54,11 +54,35 @@ output leave the machine, or set `RIUS_CAPTURE_CONTENT=false` first.
 
 ## Quick start
 
+Install from a terminal:
+
+```
+claude plugin marketplace add glassflow/rius-coding-agents && claude plugin install rius@rius-coding-agents
+```
+
+Or inside Claude Code, one command at a time (pasting both lines together
+fails, because Claude Code reads the paste as a single command):
+
 ```
 /plugin marketplace add glassflow/rius-coding-agents
+```
+
+```
 /plugin install rius@rius-coding-agents
+```
+
+Then, in Claude Code (run `/reload-plugins` first if it was already open),
+run each of these on its own:
+
+```
 /rius:login
+```
+
+```
 /rius:enable-here
+```
+
+```
 /rius:status
 ```
 
@@ -70,10 +94,14 @@ If `/rius:status` doesn't say `on`, the
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
 server, and troubleshooting.
 
-To update later, refresh the marketplace, because Claude Code caches it:
+To update later, refresh the marketplace, because Claude Code caches it.
+Run these one at a time:
 
 ```
 /plugin marketplace update rius-coding-agents
+```
+
+```
 /reload-plugins
 ```
 

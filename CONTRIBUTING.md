@@ -27,8 +27,7 @@ which is what CI's 3.9 job does.
 To run your checkout inside Claude Code, add it as a local marketplace:
 
 ```
-/plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin marketplace add /path/to/rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
 
 Claude Code caches the marketplace, so after every change run

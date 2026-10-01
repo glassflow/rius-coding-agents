@@ -5,10 +5,24 @@ updates, the old plugin name, working from a local checkout, and platforms.
 
 ## From GitHub
 
+From a terminal:
+
 ```
-/plugin marketplace add glassflow/rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin marketplace add glassflow/rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
+
+Or inside Claude Code, as two separate commands. Run one at a time: pasting
+both together fails, because Claude Code reads the paste as one command.
+
+1. ```
+   /plugin marketplace add glassflow/rius-coding-agents
+   ```
+2. ```
+   /plugin install rius@rius-coding-agents
+   ```
+3. ```
+   /reload-plugins
+   ```
 
 The repo is public, so no GitHub credentials are needed.
 
@@ -17,10 +31,14 @@ The repo is public, so no GitHub credentials are needed.
 > **Claude Code caches the marketplace. Refresh it after every plugin
 > change.** A marketplace added from a directory or a git source is read
 > once and cached, not read live, so an updated plugin -- upstream or in
-> your own checkout -- does not reach your session until you run:
+> your own checkout -- does not reach your session until you run these,
+> one at a time:
 >
 > ```
 > /plugin marketplace update rius-coding-agents
+> ```
+>
+> ```
 > /reload-plugins
 > ```
 >
@@ -34,21 +52,22 @@ The repo is public, so no GitHub credentials are needed.
 
 Versions before 0.3.0 installed the plugin as `rius-claude-code`. Remove it
 before installing `rius`, or both stay installed: every hook fires twice
-(duplicate spans) and every command appears under both names.
+(duplicate spans) and every command appears under both names. From a
+terminal:
 
 ```
-/plugin uninstall rius-claude-code@rius-coding-agents
-/plugin marketplace update rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin uninstall rius-claude-code@rius-coding-agents && claude plugin marketplace update rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
+
+Inside Claude Code, run the same three as separate `/plugin` commands, one
+at a time.
 
 Your path rules and stored key live under `~/.claude/rius/` and carry over.
 
 ## Local development
 
 ```
-/plugin marketplace add /path/to/rius-coding-agents
-/plugin install rius@rius-coding-agents
+claude plugin marketplace add /path/to/rius-coding-agents && claude plugin install rius@rius-coding-agents
 ```
 
 The marketplace name is `rius-coding-agents` and the plugin name is
