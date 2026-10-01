@@ -26,7 +26,8 @@ import uuid
 MINT_LOCK_TIMEOUT_S = 1.0
 
 
-def _mint_instance_id(state, session_id: str, home: str, source: str = "") -> str:
+def _mint_instance_id(state, session_id: str, home: str, source: str = "",
+                      cc_pid: int = 0) -> str:
     """Return this session's instance id, minting and persisting it if new.
 
     This MUST happen before either child is spawned. The heartbeat pinger
@@ -42,15 +43,20 @@ def _mint_instance_id(state, session_id: str, home: str, source: str = "") -> st
     "clear" are the SAME process continuing (with a compacted context, or a
     cleared transcript) and must keep the existing id. "startup" or an
     absent source keeps today's behaviour: mint only if none exists yet.
+
+    `cc_pid`, the Claude Code process, is recorded alongside: while it is
+    alive, no other session's sweep closes this one's trace.
     """
     with state.session_lock(session_id, home,
                             block_timeout=MINT_LOCK_TIMEOUT_S):
         st = state.load(session_id, home)
         instance_id = st.get("instance_id")
-        if instance_id and source != "resume":
+        if not instance_id or source == "resume":
+            instance_id = str(uuid.uuid4())
+            st["instance_id"] = instance_id
+        elif st.get("cc_pid") == cc_pid:
             return instance_id
-        instance_id = str(uuid.uuid4())
-        st["instance_id"] = instance_id
+        st["cc_pid"] = cc_pid
         state.save(session_id, home, st)
         return instance_id
 
@@ -129,9 +135,12 @@ def main() -> None:
         # Mint BEFORE anything is spawned, so both children are handed the
         # same id and neither has to race the other for it.
         instance_id = ""
+        cc_pid = 0
         if event == "SessionStart" and not stopped:
             source = payload.get("source", "")
-            instance_id = _mint_instance_id(state, session_id, home, source)
+            cc_pid = _claude_code_pid()
+            instance_id = _mint_instance_id(state, session_id, home, source,
+                                            cc_pid)
             _clear_stop_file(state, session_id, home)
 
         fd, path = tempfile.mkstemp(prefix="rius-hook-", suffix=".json")
@@ -160,7 +169,7 @@ def main() -> None:
                 heartbeat = os.path.join(script_dir, "heartbeat.py")
                 subprocess.Popen(
                     [sys.executable, heartbeat, session_id, cwd, home,
-                     str(_claude_code_pid()), instance_id],
+                     str(cc_pid), instance_id],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr,

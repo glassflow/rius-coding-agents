@@ -29,6 +29,12 @@ MAX_CONSECUTIVE_EXPORT_FAILURES = 5
 FINAL_EVENTS = ("Stop", "SessionEnd")
 FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
 
+# A session whose trace is still open this long after it was last seen, and
+# whose Claude Code process and pinger are both gone, is taken to be dead.
+# The pinger's own cap (heartbeat.MAX_LIFETIME_S): it covers a session whose
+# process could not be identified.
+STALE_AFTER_S = 12 * 60 * 60
+
 
 def _export_error_reason(status: int) -> str:
     """Short, actionable, and free of anything secret."""
@@ -170,6 +176,12 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
             return _handle_export_failure(
                 session_id, home, cfg, st, new_offset, status)
 
+        if st.get("root_started") and not st.get("key_fingerprint"):
+            # The key the trace was opened with, as a hash: only a session
+            # using that same key may close it (sweep_stale). Set once the
+            # receiver has accepted spans under it, and never moved after.
+            st["key_fingerprint"] = config.key_fingerprint(
+                cfg.api_key, cfg.endpoint)
         st["spans_exported"] = st.get("spans_exported", 0) + len(out)
         st["consecutive_export_failures"] = 0
         st.pop("last_export_error", None)
@@ -241,6 +253,96 @@ def _save_adopted(saves, home):
                 state.save(old_id, home, old)
 
 
+def _on_shipped(session_id, home, st, saves):
+    """What follows an accepted export: the adopted subagents' states, and
+    the open-trace marker the next SessionStart's sweep looks for."""
+    def done():
+        _save_adopted(saves, home)
+        state.sync_open_marker(session_id, home, st)
+    return done
+
+
+def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
+                 end_ns) -> int:
+    """Close every open span of the session, with no content, reading
+    nothing from its transcript."""
+    ctx = _ctx(st, session_id, cfg, cwd, capture_content=False)
+    out = []
+    try:
+        out += subagents.finalize(
+            st, ctx, subagents.dir_for(transcript_path, session_id), end_ns)
+    except Exception as exc:
+        _log(home, cfg, "session %s: subagent finalize failed: %r"
+             % (session_id, exc), force=True)
+    adopted, saves = _adopted_subagents(st, ctx, cfg, home, "SessionEnd",
+                                        end_ns, final=True)
+    out += adopted
+    out += spans.finalize_session(st, ctx, end_ns)
+    resource_attrs = {
+        "service.name": cfg.service_name,
+        "service.instance.id": st.get("instance_id") or "",
+        "cc.version": "",
+        "cc.cwd": cwd,
+        "cc.git_branch": "",
+    }
+    return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
+                 home, cfg, on_success=_on_shipped(session_id, home, st, saves))
+
+
+def _last_seen_ns(st) -> int:
+    """When the session was last seen doing anything, in any transcript."""
+    scopes = [st] + list((st.get("sub_scopes") or {}).values())
+    return max([st.get("root_start_ns") or 0]
+               + [scope.get("last_ns") or 0 for scope in scopes])
+
+
+def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
+    with state.session_lock(session_id, home) as got:
+        if not got:
+            return
+        st = state.load(session_id, home)
+        if not state.trace_is_open(st) or st.get("handed_off_to"):
+            state.sync_open_marker(session_id, home, st)
+            return
+        # Sent with any other key, the closing spans would land in that
+        # key's workspace, or none: a project's own RIUS_API_KEY can point
+        # this session and that one at different tenants.
+        if st.get("key_fingerprint") != fingerprint:
+            return
+        last_seen_ns = _last_seen_ns(st)
+        if (now_ns - last_seen_ns < STALE_AFTER_S * 10**9
+                or platform_compat.pid_alive(st.get("cc_pid") or 0)
+                or state.pinger_alive(session_id, home)):
+            # Idle, not dead: a session can sit at a prompt for days.
+            return
+        _log(home, cfg, "session %s: never ended; closing its trace"
+             % session_id)
+        # Ended when it was last seen, not now: a trace that draws as days
+        # long would be its own bug.
+        _close_trace(st, cfg, session_id, st.get("root_cwd") or "",
+                     st.get("transcript_path") or "", home, last_seen_ns)
+
+
+def sweep_stale(cfg, current_id, home, now_ns=None) -> None:
+    """Close the traces of sessions that died without a SessionEnd.
+
+    Run by the exporter on SessionStart, never by the hook: it is off the
+    critical path. Only traces last sent with this same key are touched.
+    """
+    fingerprint = config.key_fingerprint(cfg.api_key, cfg.endpoint)
+    if not fingerprint:
+        return
+    now_ns = _now_ns() if now_ns is None else now_ns
+    for session_id in state.open_marked_sessions(home):
+        if session_id == current_id:
+            continue
+        try:
+            _close_if_stale(cfg, session_id, home, fingerprint, now_ns)
+        except Exception as exc:
+            _log(home, cfg, "session %s: stale-trace sweep failed: %r"
+                 % (session_id, exc), force=True)
+
+
 def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
     """A session whose folder was disabled after its trace started.
 
@@ -262,29 +364,8 @@ def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
         _log(home, cfg, "session %s: stopped (%s); not exporting %s"
              % (session_id, cfg.reason, event))
         return 0
-
-    ctx = _ctx(st, session_id, cfg, cwd, capture_content=False)
-    now_ns = _now_ns()
-    out = []
-    try:
-        out += subagents.finalize(
-            st, ctx, subagents.dir_for(transcript_path, session_id), now_ns)
-    except Exception as exc:
-        _log(home, cfg, "session %s: subagent finalize failed: %r"
-             % (session_id, exc), force=True)
-    adopted, saves = _adopted_subagents(st, ctx, cfg, home, event, now_ns,
-                                        final=True)
-    out += adopted
-    out += spans.finalize_session(st, ctx, now_ns)
-    resource_attrs = {
-        "service.name": cfg.service_name,
-        "service.instance.id": st.get("instance_id") or "",
-        "cc.version": "",
-        "cc.cwd": cwd,
-        "cc.git_branch": "",
-    }
-    return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
-                 home, cfg, on_success=lambda: _save_adopted(saves, home))
+    return _close_trace(st, cfg, session_id, cwd, transcript_path, home,
+                        _now_ns())
 
 
 def _link(st, session_id, transcript_path, home, cfg, final):
@@ -316,6 +397,114 @@ def _drop_copied_history(st, entries):
     return entries
 
 
+def _run_session(event, cfg, session_id, cwd, transcript_path, home,
+                 instance_id) -> int:
+    block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                     if event in FINAL_EVENTS else 0.0)
+    with state.session_lock(session_id, home,
+                            block_timeout=block_timeout) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held, skipping %s"
+                 % (session_id, event))
+            return 0
+
+        st = state.load(session_id, home)
+        if st.get("handed_off_to"):
+            # Claude Code moved this conversation to another session id,
+            # which owns its trace and root from the switch on.
+            _log(home, cfg, "session %s: handed off to %s; %s ignored"
+                 % (session_id, st["handed_off_to"], event))
+            return 0
+        # Before the stopped check: a conversation moved into a disabled
+        # folder must still be found, or its root is never closed.
+        _link(st, session_id, transcript_path, home, cfg, final=False)
+        if not cfg.enabled or st.get("content_stopped"):
+            return _run_stopped(event, st, cfg, session_id, cwd,
+                                transcript_path, home)
+
+        # Mint and persist the instance id unconditionally, before any
+        # export decision. A heartbeat pinger starts at SessionStart and
+        # must be able to send this id on its very first ping, even for
+        # a session that starts and then sits idle with nothing to
+        # export -- so this cannot wait on there being spans to send.
+        # hook.py mints it on SessionStart and passes it on argv, so
+        # normally this only re-reads what is already persisted.
+        stored = st.get("instance_id")
+        if not stored:
+            stored = instance_id or str(uuid.uuid4())
+            st["instance_id"] = stored
+            state.save(session_id, home, st)
+        instance_id = stored
+
+        read_stats = {}
+        titles = {}
+        entries, new_offset = transcript.read_from(
+            transcript_path, st.get("offset", 0), stats=read_stats,
+            titles=titles)
+        _note_skipped_lines(home, cfg, session_id, st, read_stats)
+        if entries and not st.get("continuation_checked"):
+            _link(st, session_id, transcript_path, home, cfg, final=True)
+            if st.get("content_stopped"):
+                return _run_stopped(event, st, cfg, session_id, cwd,
+                                    transcript_path, home)
+        entries = _drop_copied_history(st, entries)
+
+        first_cwd = cwd
+        first_git_branch = ""
+        first_cc_version = ""
+        if entries:
+            first_cwd = entries[0].cwd or cwd
+            first_git_branch = entries[0].git_branch or ""
+            first_cc_version = entries[0].cc_version or ""
+
+        ctx = _ctx(st, session_id, cfg, first_cwd, first_git_branch,
+                   first_cc_version)
+
+        out = spans.build(entries, st, ctx, source_path=transcript_path,
+                          titles=titles)
+        if st.get("root_started"):
+            # What the sweep needs to close this trace if the session
+            # dies without a SessionEnd.
+            st.setdefault("root_cwd", first_cwd)
+            st["transcript_path"] = transcript_path
+
+        # Subagents write their own transcripts; without this the 58% of
+        # tokens that live in them never reach the trace. Guarded on its
+        # own: a surprise in those files must not cost the main
+        # transcript's spans, which are already built by this point.
+        sub_dir = subagents.dir_for(transcript_path, session_id)
+        try:
+            out += subagents.expand(st, ctx, sub_dir)
+        except Exception as exc:
+            _log(home, cfg, "session %s: subagent expansion failed: %r"
+                 % (session_id, exc), force=True)
+
+        now_ns = _now_ns()
+        adopted, saves = _adopted_subagents(st, ctx, cfg, home, event,
+                                            now_ns, final=False)
+        out += adopted
+        if event == "Stop":
+            out += spans.finalize_turn(st, ctx, now_ns)
+        elif event == "SessionEnd":
+            try:
+                out += subagents.finalize(st, ctx, sub_dir, now_ns)
+            except Exception as exc:
+                _log(home, cfg, "session %s: subagent finalize failed: %r"
+                     % (session_id, exc), force=True)
+            out += spans.finalize_session(st, ctx, now_ns)
+
+        resource_attrs = {
+            "service.name": cfg.service_name,
+            "service.instance.id": instance_id,
+            "cc.version": first_cc_version,
+            "cc.cwd": first_cwd,
+            "cc.git_branch": first_git_branch,
+        }
+        return _ship(out, resource_attrs, st, new_offset, session_id,
+                     home, cfg,
+                     on_success=_on_shipped(session_id, home, st, saves))
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         instance_id: str = "") -> int:
     cfg = None
@@ -334,104 +523,13 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
 
-        block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
-                         if event in FINAL_EVENTS else 0.0)
-        with state.session_lock(session_id, home,
-                                block_timeout=block_timeout) as acquired:
-            if not acquired:
-                _log(home, cfg, "session %s: lock held, skipping %s"
-                     % (session_id, event))
-                return 0
-
-            st = state.load(session_id, home)
-            if st.get("handed_off_to"):
-                # Claude Code moved this conversation to another session id,
-                # which owns its trace and root from the switch on.
-                _log(home, cfg, "session %s: handed off to %s; %s ignored"
-                     % (session_id, st["handed_off_to"], event))
-                return 0
-            # Before the stopped check: a conversation moved into a disabled
-            # folder must still be found, or its root is never closed.
-            _link(st, session_id, transcript_path, home, cfg, final=False)
-            if not cfg.enabled or st.get("content_stopped"):
-                return _run_stopped(event, st, cfg, session_id, cwd,
-                                    transcript_path, home)
-
-            # Mint and persist the instance id unconditionally, before any
-            # export decision. A heartbeat pinger starts at SessionStart and
-            # must be able to send this id on its very first ping, even for
-            # a session that starts and then sits idle with nothing to
-            # export -- so this cannot wait on there being spans to send.
-            # hook.py mints it on SessionStart and passes it on argv, so
-            # normally this only re-reads what is already persisted.
-            stored = st.get("instance_id")
-            if not stored:
-                stored = instance_id or str(uuid.uuid4())
-                st["instance_id"] = stored
-                state.save(session_id, home, st)
-            instance_id = stored
-
-            read_stats = {}
-            titles = {}
-            entries, new_offset = transcript.read_from(
-                transcript_path, st.get("offset", 0), stats=read_stats,
-                titles=titles)
-            _note_skipped_lines(home, cfg, session_id, st, read_stats)
-            if entries and not st.get("continuation_checked"):
-                _link(st, session_id, transcript_path, home, cfg, final=True)
-                if st.get("content_stopped"):
-                    return _run_stopped(event, st, cfg, session_id, cwd,
-                                        transcript_path, home)
-            entries = _drop_copied_history(st, entries)
-
-            first_cwd = cwd
-            first_git_branch = ""
-            first_cc_version = ""
-            if entries:
-                first_cwd = entries[0].cwd or cwd
-                first_git_branch = entries[0].git_branch or ""
-                first_cc_version = entries[0].cc_version or ""
-
-            ctx = _ctx(st, session_id, cfg, first_cwd, first_git_branch,
-                       first_cc_version)
-
-            out = spans.build(entries, st, ctx, source_path=transcript_path,
-                              titles=titles)
-
-            # Subagents write their own transcripts; without this the 58% of
-            # tokens that live in them never reach the trace. Guarded on its
-            # own: a surprise in those files must not cost the main
-            # transcript's spans, which are already built by this point.
-            sub_dir = subagents.dir_for(transcript_path, session_id)
-            try:
-                out += subagents.expand(st, ctx, sub_dir)
-            except Exception as exc:
-                _log(home, cfg, "session %s: subagent expansion failed: %r"
-                     % (session_id, exc), force=True)
-
-            now_ns = _now_ns()
-            adopted, saves = _adopted_subagents(st, ctx, cfg, home, event,
-                                                now_ns, final=False)
-            out += adopted
-            if event == "Stop":
-                out += spans.finalize_turn(st, ctx, now_ns)
-            elif event == "SessionEnd":
-                try:
-                    out += subagents.finalize(st, ctx, sub_dir, now_ns)
-                except Exception as exc:
-                    _log(home, cfg, "session %s: subagent finalize failed: %r"
-                         % (session_id, exc), force=True)
-                out += spans.finalize_session(st, ctx, now_ns)
-
-            resource_attrs = {
-                "service.name": cfg.service_name,
-                "service.instance.id": instance_id,
-                "cc.version": first_cc_version,
-                "cc.cwd": first_cwd,
-                "cc.git_branch": first_git_branch,
-            }
-            return _ship(out, resource_attrs, st, new_offset, session_id,
-                         home, cfg, on_success=lambda: _save_adopted(saves, home))
+        result = _run_session(event, cfg, session_id, cwd, transcript_path,
+                              home, instance_id)
+        if event == "SessionStart" and cfg.enabled and cfg.api_key:
+            # After this session's own export: by then it has taken over any
+            # conversation it continues, so that one's root is not swept.
+            sweep_stale(cfg, session_id, home)
+        return result
     except BaseException as exc:  # never raise out of run()
         try:
             # force=True deliberately: an unhandled crash is logged even with
