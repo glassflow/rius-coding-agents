@@ -77,9 +77,18 @@ Spans appear while the session is still running, not only after it ends: each
 hook event emits a "pending" snapshot at span start (session start, prompt
 submit, tool start) that the backend shows as in-progress, then replaces with
 the finished span once the corresponding end event arrives. A session that
-dies mid-run leaves those pending spans unresolved -- that's intentional, it's
-what "the agent died while running" is supposed to look like in the UI, not a
-bug to be papered over.
+dies mid-run leaves those pending spans unresolved, which is what "the agent
+died while running" looks like in the UI.
+
+They do not stay pending forever. The backend counts a trace on the Agents
+and Users tabs only once every span of it has finished, so a killed session
+would be missing there for good. The next session you start with the same
+API key and endpoint closes it, if it has been silent for 12 hours (the
+heartbeat's own cap) and its heartbeat pinger is gone. Its open spans end at
+the last moment the session was seen, not at the time of the sweep, and
+carry no content. A trace opened with any other key is left alone: its
+closing spans would go to that key's workspace. State files record only a
+short hash of the key and endpoint for this check.
 
 ## Generation timing is approximate
 

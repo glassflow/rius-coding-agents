@@ -119,7 +119,7 @@ details.
   including cache reads, and Rius prices them.
 - **Live sessions.** Spans appear as they start, and a 15-second heartbeat
   keeps a long turn from reading as dead. A session that crashes mid-run
-  stays visibly unfinished.
+  stays visibly unfinished, and your next session closes it once it has been silent for 12 hours.
 - **Failed tool calls marked as errors**, typed by tool and exit code (for
   example `Bash.exit_1`) so the console groups them by cause, with the line
   that explains why (unless content capture is off).
