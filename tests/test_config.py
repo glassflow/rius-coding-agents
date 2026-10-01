@@ -315,7 +315,7 @@ def test_symlinked_rules_names_rules_the_hooks_never_match(tmp_path):
     home = _home(tmp_path)
     real, link = _linked_dir(tmp_path)
     _write_rules(home, enabled_paths=[link, real + "/sub"])
-    assert config.symlinked_rules(link + "/sub", home) == [link]
+    assert config.symlinked_rules(link + "/sub", home) == [(link, True)]
     assert config.symlinked_rules(real, home) == []
 
 
@@ -323,3 +323,25 @@ def test_same_folder_merges_symlinked_spellings_only(tmp_path):
     real, link = _linked_dir(tmp_path)
     assert config.same_folder(real, link)
     assert not config.same_folder(real, real + "/sub")
+
+
+def _case_insensitive(tmp_path):
+    probe = tmp_path / "caseprobe"
+    probe.mkdir()
+    return (tmp_path / "CASEPROBE").is_dir()
+
+
+def test_resolved_spells_the_folder_in_its_own_letter_case(tmp_path):
+    """macOS: `cd ABC` into folder `abc` leaves $PWD and realpath at ABC,
+    while Claude Code's cwd is abc."""
+    if not _case_insensitive(tmp_path):
+        pytest.skip("needs a case-insensitive filesystem")
+    (tmp_path / "abc").mkdir()
+    assert config.resolved(str(tmp_path / "ABC")) == str(tmp_path / "abc")
+
+
+def test_resolved_rule_resolves_the_fixed_part_of_a_glob(tmp_path):
+    real, link = _linked_dir(tmp_path)
+    assert config.resolved_rule(link + "/s*") == real + "/s*"
+    assert config.resolved_rule(link + "/sub") == real + "/sub"
+    assert config.resolved_rule("/*") == "/*"

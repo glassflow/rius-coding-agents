@@ -160,18 +160,52 @@ def _before_glob(rule: str) -> str:
 
 
 def resolved(path: str) -> str:
-    """The folder `path` names, as Claude Code hands it to the hooks.
+    """The folder `path` names, spelled as Claude Code hands it to the hooks.
 
-    The slash commands only see the shell's $PWD, which keeps symlinks:
-    on macOS /tmp/proj is /private/tmp/proj to Claude Code. A rule is
-    resolved once, when it is written, and never while matching: a rule
-    that followed its symlink at match time would trace wherever that link
-    is repointed to later, and would cost every hook a filesystem call.
-    Windows is left as written.
+    The slash commands only see the shell's $PWD, which keeps symlinks and
+    the letter case that was typed: on macOS `cd /tmp/ABC` is
+    /private/tmp/abc to Claude Code. A rule is resolved once, when it is
+    written, and never while matching: a rule that followed its symlink at
+    match time would trace wherever that link is repointed to later, and
+    would cost every hook a filesystem call. Windows is left as written.
     """
     if IS_WINDOWS or not path.startswith("/"):
         return path
-    return os.path.realpath(path)
+    return _getcwd_spelling(os.path.realpath(path))
+
+
+def _getcwd_spelling(folder: str) -> str:
+    """getcwd() spells a folder the way Claude Code's process.cwd() does,
+    letter case included; realpath keeps the case it was given."""
+    try:
+        here = os.getcwd()
+    except OSError:
+        return folder
+    try:
+        os.chdir(folder)
+        return os.getcwd()
+    except OSError:
+        return folder
+    finally:
+        try:
+            os.chdir(here)
+        except OSError:
+            pass
+
+
+def resolved_rule(rule: str) -> str:
+    """`rule` with the folder its glob sits in resolved."""
+    head = _before_glob(rule)
+    if head == rule:
+        return resolved(rule)
+    cut = head.rfind("/")
+    if cut <= 0:
+        return rule
+    return resolved(rule[:cut]) + rule[cut:]
+
+
+def is_usable_rule(rule) -> bool:
+    return _is_usable_rule(rule)
 
 
 def same_folder(a: str, b: str) -> bool:
@@ -179,11 +213,13 @@ def same_folder(a: str, b: str) -> bool:
 
 
 def symlinked_rules(cwd: str, home: str) -> list:
-    """Rules written before 0.4.4 through a symlink that cover `cwd` as the
-    shell spells it. Hooks see the resolved folder, so they never match."""
+    """(rule, enables) for rules an earlier version wrote in the shell's
+    spelling that cover `cwd` as the shell spells it. Hooks see the
+    resolved folder, so they never match."""
     rules = read_path_rules(home)
-    return [rule
-            for key in ("disabled_paths", "enabled_paths")
+    return [(rule, enables)
+            for key, enables in (("disabled_paths", False),
+                                 ("enabled_paths", True))
             for rule in rule_list(rules, key)
             if _is_usable_rule(rule) and not _GLOB_RE.search(rule)
             and resolved(rule) != rule and _rule_matches(cwd, rule)]

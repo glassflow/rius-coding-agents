@@ -634,8 +634,58 @@ def test_status_names_a_rule_written_through_a_symlink(tmp_path):
         json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
     r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
     assert "Rius tracing: off" in r.stdout
-    assert ("Rule `%s` names this folder through a symlink, and hooks only "
-            "match %s." % (link, real)) in r.stdout
+    assert ("Rule `%s` enables nothing: Claude Code calls that folder %s. "
+            "Run /rius:enable-here in %s to fix it." % (link, real, link)
+            ) in r.stdout
+
+
+def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    (tmp_path / "real" / "sub").mkdir()
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [], "disabled_paths": [link]}, fh)
+    r = _run(["status", "--session", "s1", "--cwd", link + "/sub"], home, KEY)
+    assert ("Rule `%s` disables nothing: Claude Code calls that folder %s. "
+            "Run /rius:disable-here in %s to fix it." % (link, real, link)
+            ) in r.stdout
+
+
+def test_enabling_a_parent_again_keeps_an_old_carve_out_off(tmp_path):
+    """0.4.3 rules: enable link, disable link/sub; neither matched. Re-running
+    enable-here on the parent must not start tracing sub."""
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    (tmp_path / "real" / "sub").mkdir()
+    (tmp_path / "real" / "sab").mkdir()
+    with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
+        json.dump({"enabled_paths": [link],
+                   "disabled_paths": [link + "/sub", link + "/sa*"]}, fh)
+    r = _run(["enable-here", "--cwd", link], home, KEY)
+    assert "except %s/sub and %s/sa* (disabled)" % (real, real) in r.stdout
+    for sub in ("sub", "sab"):
+        status = _run(["status", "--session", "s1", "--cwd", real + "/" + sub],
+                      home, KEY)
+        assert "Rius tracing: off" in status.stdout, sub
+
+
+@pytest.mark.parametrize("action", ["enable-here", "disable-here"])
+def test_a_folder_too_broad_for_a_rule_is_refused_out_loud(tmp_path, action):
+    home = _fresh_home(tmp_path)
+    r = _run([action, "--cwd", "/"], home, KEY)
+    assert r.stdout.startswith("Not changed: `/` is too broad for a rule")
+    assert not (tmp_path / ".claude" / "rius" / "config.json").exists()
+
+
+def test_enable_here_in_a_folder_typed_in_the_wrong_case(tmp_path):
+    probe = tmp_path / "caseprobe"
+    probe.mkdir()
+    if not (tmp_path / "CASEPROBE").is_dir():
+        pytest.skip("needs a case-insensitive filesystem")
+    home = _fresh_home(tmp_path)
+    (tmp_path / "abc").mkdir()
+    _run(["enable-here", "--cwd", str(tmp_path / "ABC")], home, KEY)
+    assert _rules(tmp_path)["enabled_paths"] == [str(tmp_path / "abc")]
 
 
 def test_enable_here_replaces_a_rule_written_through_a_symlink(tmp_path):
