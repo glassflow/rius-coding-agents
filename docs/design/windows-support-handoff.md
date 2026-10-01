@@ -301,7 +301,54 @@ uses `os.listdir` + `getmtime`, both portable.
   to the state dict.
 * `.github/workflows/ci.yml` untouched.
 
+## Now verified on `windows-latest` (RIUS-945)
+
+The `windows` job in `.github/workflows/ci.yml` runs the full suite on a
+real Windows runner (Python 3.12, Git for Windows' bash). Against the list
+below:
+
+| Item | Status | Proven by |
+|---|---|---|
+| 1. `msvcrt.locking` semantics | **Verified**: refused within one process and between two | `test_state.py::test_lock_is_exclusive`, `test_native.py::test_the_session_lock_excludes_another_process` |
+| 2. `ctypes` FFI plumbing | **Verified** for `pid_alive` and the Toolhelp parent walk | `test_platform_compat.py::test_liveness_natively`, `::test_parent_pid_natively`, `test_native.py` |
+| 3. `bash "${CLAUDE_PLUGIN_ROOT}/..."` with a backslashed root | **Verified** under Git Bash, for the hooks and the slash commands | `test_hook.py::test_the_literal_hooks_json_command_runs_the_hook`, `test_rius_ctl.py::test_slash_command_line_runs_end_to_end` |
+| 4. `DETACHED_PROCESS` children outlive the hook | **Verified** | `test_native.py::test_a_detached_child_outlives_its_parent`, `test_e2e.py` |
+| 5. The Store-alias probe | Not verified: the runner has no Store stub. The probe's *logic* runs for real under Git Bash with a failing stub | `test_hook.py::test_launcher_prefers_py_over_the_store_alias_on_windows` |
+| 6. Claude Code honouring `"shell": "bash"` | Not verified: CI has no Claude Code | — |
+
+`replace_atomic`'s retry is also verified against a real reader holding the
+destination open (`test_native.py::test_replace_waits_out_a_reader_holding_the_destination`).
+That closes deferred minor **M2**.
+
+Found on the way:
+
+* **A hand-built subprocess env without `SYSTEMROOT` gives an exporter that
+  never POSTs.** Windows Python cannot open a socket without it
+  (WinError 10106). Claude Code passes hooks its full environment, so this
+  is a test-harness trap, not a product bug. `tests/platforms.py:minimal_env`
+  carries it through.
+* **From a native process, `bash` is WSL, not Git Bash.** `CreateProcess`
+  searches System32 before PATH, and `System32\bash.exe` is the WSL
+  launcher. Inside Git Bash, which is where Claude Code runs our hooks,
+  `bash` resolves to Git's own. The suite locates Git Bash through `git`.
+* **A CRLF `hook.sh` still runs under Git Bash.** Checked with
+  `core.autocrlf=true` (the Git for Windows installer default) and no
+  `.gitattributes`: the whole suite passes, launcher tests included. So no
+  line-ending pin is needed for the hooks.
+* **Permission bits do not exist on Windows.** `credentials.json`,
+  `config.json` and the login files are written 0600 on POSIX. On Windows
+  that `chmod` only toggles read-only, so they are only as private as the
+  profile directory's ACL. The suite skips the mode assertions there and
+  says why.
+
+The 22 tests that skip on Windows each give a reason. Most are the symlink
+and letter-case rule-resolution tests: `config.resolved()` deliberately
+leaves Windows paths as written.
+
 ## Could not verify without a real Windows machine
+
+*(Original list, kept as written. See the table above for what is now
+verified.)*
 
 Everything below is reasoned from documentation and source, and exercised
 only through fakes:
@@ -334,6 +381,9 @@ only through fakes:
    docs describe, and what it does when Git Bash is absent.
 
 ## Residual risk
+
+*(As written before RIUS-945. Items 1–4 are now covered by CI. What still
+stands is the last bullet: whether Claude Code invokes the hook at all.)*
 
 **With no `windows-latest` CI job, nothing executes any of this on Windows.**
 The new tests cover the *logic* of every Windows branch — dispatch, failure

@@ -469,6 +469,24 @@ def test_launcher_runs_the_hook_end_to_end(tmp_path):
                                        sid + ".heartbeat.stop"))
 
 
+
+def test_the_literal_hooks_json_command_runs_the_hook(tmp_path):
+    """Run each event's command exactly as hooks.json spells it, with
+    ${CLAUDE_PLUGIN_ROOT} expanded by the shell. On Windows that root is a
+    backslashed path inside double quotes, handed to Git Bash."""
+    env, home = _enabled_env(tmp_path)
+    env["CLAUDE_PLUGIN_ROOT"] = str(pathlib.Path(HOOK_SH).parent.parent)
+    entry = _json.loads(HOOKS_JSON.read_text())["hooks"]["SessionEnd"][0]["hooks"][0]
+    sid = "literal-1"
+    r = subprocess.run(
+        [BASH, "-c", entry["command"]],
+        input=_json.dumps({"session_id": sid, "cwd": str(tmp_path),
+                           "transcript_path": "/nonexistent.jsonl"}),
+        capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == ""
+    assert _stopped(home, sid), "the hooks.json command never reached hook.py"
+
 def _fakebin(tmp_path, **stubs):
     """A PATH directory of stub interpreters, one per keyword.
 
