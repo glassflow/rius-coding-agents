@@ -752,3 +752,26 @@ def test_a_disabled_session_without_a_key_spawns_nothing(tmp_path, monkeypatch):
     env, home = _disabled_env_with_open_trace(tmp_path, sid, key=False)
     assert _run_in_process(monkeypatch, "SessionEnd",
                            _payload_in_disabled(tmp_path, sid), env, home) == []
+
+
+def _linked_env(tmp_path):
+    """Rules written through a symlink, as /rius:enable-here does on macOS,
+    where $PWD is /tmp/proj and Claude Code's cwd is /private/tmp/proj."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    env, home = _enabled_env(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": [str(link)]}, fh)
+    return env, home, str(real)
+
+
+def test_a_rule_spelled_through_a_symlink_traces_the_resolved_cwd(tmp_path, monkeypatch):
+    env, home, real = _linked_env(tmp_path)
+    calls = _run_in_process(
+        monkeypatch, "UserPromptSubmit",
+        {"session_id": "sym-1", "cwd": real,
+         "transcript_path": "/nonexistent.jsonl"}, env, home)
+    assert len(calls) == 1, "the exporter was not spawned for the resolved cwd"
+

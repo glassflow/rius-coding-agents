@@ -558,3 +558,79 @@ def test_status_of_a_session_that_was_never_stopped_is_unchanged(tmp_path):
     r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
     assert "Rius tracing: on" in r.stdout
     assert "Stopped:" not in r.stdout
+
+
+def _linked_dir(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    return str(real), str(link)
+
+
+def test_status_agrees_with_the_hooks_across_a_symlink(tmp_path):
+    """enable-here gets the shell's $PWD (/tmp/proj on macOS); the hooks get
+    Claude Code's resolved cwd (/private/tmp/proj). Status run from either
+    spelling must give the hooks' answer."""
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    for cwd in (link, real):
+        r = _run(["status", "--session", "s1", "--cwd", cwd], home, KEY)
+        assert "Rius tracing: on" in r.stdout, cwd
+
+
+def test_status_shows_the_folder_the_hooks_see(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    assert "cwd: %s (hooks see %s)" % (link, real) in r.stdout
+
+
+def test_disable_here_through_a_symlink_replaces_the_enable(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    _run(["disable-here", "--cwd", real], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": [real]}
+
+
+def test_enable_here_is_idempotent_across_spellings(tmp_path):
+    home = _fresh_home(tmp_path)
+    real, link = _linked_dir(tmp_path)
+    _run(["enable-here", "--cwd", link], home, KEY)
+    _run(["enable-here", "--cwd", real], home, KEY)
+    assert _rules(tmp_path) == {"enabled_paths": [link], "disabled_paths": []}
+
+
+NO_HOOK_HINT = "No Rius hook has traced this session yet."
+
+
+def test_status_says_when_no_hook_has_run_in_this_session(tmp_path):
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert NO_HOOK_HINT in r.stdout
+
+
+def test_status_drops_the_hint_once_a_hook_has_traced(tmp_path):
+    from rius_cc import state as _state
+    home = _fresh_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    _state.save("s1", home, _state.new_state())
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert NO_HOOK_HINT not in r.stdout
+
+
+def test_status_of_an_inferred_session_gives_no_hook_hint(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["status", "--cwd", "/opt/proj"], home, KEY)
+    assert NO_HOOK_HINT not in r.stdout
+
+
+def test_status_in_a_folder_that_is_off_gives_no_hook_hint(tmp_path):
+    """Off is explained by the Reason line; hooks there write nothing."""
+    home = _fresh_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    assert "Rius tracing: off" in r.stdout
+    assert NO_HOOK_HINT not in r.stdout

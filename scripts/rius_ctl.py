@@ -96,9 +96,10 @@ STILL_OFF = ("Still OFF: `%s` is disabled. Run `/rius:enable-here` in that "
 
 def _move_path(home, cwd, to_key, from_key):
     rules = config.read_path_rules(home)
-    rules[from_key] = [p for p in config.rule_list(rules, from_key) if p != cwd]
+    rules[from_key] = [p for p in config.rule_list(rules, from_key)
+                       if not config.same_path(p, cwd)]
     target = config.rule_list(rules, to_key)
-    if cwd not in target:
+    if not any(config.same_path(p, cwd) for p in target):
         target.append(cwd)
     rules[to_key] = target
     config.write_path_rules(home, rules)
@@ -177,7 +178,7 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Reason: %s" % cfg.reason)
     if stopped:
         print(STOPPED_NOTE)
-    print("cwd: %s" % (cwd or "<unknown, default>"))
+    print(_cwd_line(cwd))
     if not session_id:
         print("session: <unknown> (no --session given and no session state "
               "on disk yet)")
@@ -209,6 +210,26 @@ def _print_status(session_id, cwd, home, inferred=False):
     if last:
         print("Last export error: %s (at %s)"
               % (last.get("reason"), last.get("at")))
+    if (cfg.enabled and not stopped and session_id and not inferred
+            and not os.path.exists(state.state_path(session_id, home))):
+        print(NO_HOOK_RAN)
+
+
+# Every hook in an enabled folder leaves this session's state file, a
+# failed export included. A folder that is on with no state file is a
+# session whose hooks never loaded, or have not fired since the enable.
+NO_HOOK_RAN = ("No Rius hook has traced this session yet. If that is still "
+               "so after your next prompt, restart Claude Code: a plugin "
+               "installed after a session started is not hooked into it.")
+
+
+def _cwd_line(cwd):
+    if not cwd:
+        return "cwd: <unknown, default>"
+    hooks_see = config.resolved(cwd)
+    if hooks_see == cwd:
+        return "cwd: %s" % cwd
+    return "cwd: %s (hooks see %s)" % (cwd, hooks_see)
 
 
 def _print_rule(cwd, home):

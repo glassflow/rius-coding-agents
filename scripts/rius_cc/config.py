@@ -166,27 +166,54 @@ def _normalise_for_match(path: str) -> str:
     return path.replace("\\", "/").lower()
 
 
-def _rule_matches(cwd: str, rule: str) -> bool:
-    if not _is_usable_rule(rule):
-        return False
-    cwd = _normalise_for_match(cwd)
-    rule = _normalise_for_match(rule)
+def _spellings(path: str) -> set:
+    """`path` as written and as the filesystem resolves it.
+
+    Claude Code hands the hooks its resolved cwd, while the slash commands
+    see the shell's $PWD: on macOS /tmp/proj and /private/tmp/proj. A rule
+    written in one spelling has to decide the folder named in the other, or
+    status says "on" while every hook quietly traces nothing. Only absolute
+    paths are resolved: realpath would anchor anything else at this
+    process's own cwd.
+    """
+    forms = {_normalise_for_match(path)}
+    if os.path.isabs(path):
+        forms.add(_normalise_for_match(os.path.realpath(path)))
+    return forms
+
+
+def same_path(a: str, b: str) -> bool:
+    return bool(_spellings(a) & _spellings(b))
+
+
+def resolved(path: str) -> str:
+    """The spelling of `path` the hooks are handed."""
+    return os.path.realpath(path) if os.path.isabs(path) else path
+
+
+def _spelling_matches(cwd: str, rule: str) -> bool:
     if cwd == rule:
         return True
     if cwd.startswith(rule.rstrip("/") + "/"):
         return True
-    if fnmatch.fnmatch(cwd, rule):
-        return True
-    return False
+    return fnmatch.fnmatch(cwd, rule)
+
+
+def _rule_matches(cwd: str, rule: str) -> bool:
+    # Each resolved rule is vetted again: a symlink to "/" resolves to the
+    # one rule that matches every path.
+    return any(_spelling_matches(c, r)
+               for r in _spellings(rule) if _is_usable_rule(r)
+               for c in _spellings(cwd))
 
 
 def disabled_below(cwd: str, home: str) -> list:
     """Disable rules strictly inside `cwd`, which enabling `cwd` does not
     reach: matching_rule only ever looks upward from a folder."""
-    prefix = _normalise_for_match(cwd).rstrip("/") + "/"
+    prefixes = [c.rstrip("/") + "/" for c in _spellings(cwd)]
     return [rule for rule in rule_list(read_path_rules(home), "disabled_paths")
             if _is_usable_rule(rule)
-            and _normalise_for_match(rule).startswith(prefix)]
+            and any(r.startswith(p) for r in _spellings(rule) for p in prefixes)]
 
 
 def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
