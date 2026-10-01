@@ -84,11 +84,11 @@ They do not stay pending forever. The backend counts a trace on the Agents
 and Users tabs only once every span of it has finished, so a killed session
 would be missing there for good. The next session you start with the same
 API key and endpoint closes it, if it has been silent for 12 hours (the
-heartbeat's own cap) and its heartbeat pinger is gone. Its open spans end at
-the last moment the session was seen, not at the time of the sweep, and
-carry no content. A trace opened with any other key is left alone: its
-closing spans would go to that key's workspace. State files record only a
-short hash of the key and endpoint for this check.
+heartbeat's own cap) and both its Claude Code process and its heartbeat
+pinger are gone. Its open spans end at the last moment the session was seen,
+not at the time of the sweep, and carry no content. A trace opened with any
+other key is left alone: its closing spans would go to that key's workspace.
+State files record only a short hash of the key and endpoint for this check.
 
 ## Generation timing is approximate
 
