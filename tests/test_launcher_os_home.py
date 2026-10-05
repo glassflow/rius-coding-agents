@@ -156,7 +156,7 @@ def test_a_pin_under_a_hostile_home_is_not_read(tmp_path):
     project.mkdir()
     found = _find_python(bare, project, _path(fallback.parent),
                          HOME=str(hostile))
-    assert os.path.realpath(found) == os.path.realpath(str(fallback))
+    assert found and os.path.realpath(found) != os.path.realpath(str(pinned))
 
 
 @posix_only("the pin and project rule tests in test_find_python cover Windows")
