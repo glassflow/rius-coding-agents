@@ -112,3 +112,18 @@ def test_a_missing_transcript_path_is_not_foreign(tmp_path):
     assert not foreign_agent.is_foreign({"session_id": "s",
                                          "transcript_path": None},
                                         {}, str(tmp_path))
+
+
+def test_a_codex_home_above_claude_codes_home_is_not_codex(tmp_path):
+    transcript = tmp_path / ".claude" / "projects" / "p" / "s.jsonl"
+    payload = {"session_id": "s", "transcript_path": str(transcript)}
+    assert not foreign_agent.is_foreign(payload, {"CODEX_HOME": str(tmp_path)},
+                                        str(tmp_path))
+
+
+def test_claude_config_dir_is_claude_codes_home(tmp_path):
+    config_dir = tmp_path / "cc"
+    payload = {"session_id": "s",
+               "transcript_path": str(config_dir / "projects" / "s.jsonl")}
+    env = {"CODEX_HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    assert not foreign_agent.is_foreign(payload, env, str(tmp_path))
