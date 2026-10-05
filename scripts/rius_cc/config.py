@@ -15,6 +15,7 @@ import re
 from typing import Mapping, Optional, Tuple
 
 from . import agent, login
+from . import platform_compat, state
 from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
@@ -59,7 +60,8 @@ def _sessions_dir(home: str) -> str:
 
 
 def session_override_path(session_id: str, home: str) -> str:
-    return os.path.join(_sessions_dir(home), session_id)
+    return os.path.join(_sessions_dir(home),
+                        state.require_valid_session_id(session_id))
 
 
 def path_rules_path(home: str) -> str:
@@ -74,12 +76,14 @@ def set_session_override(session_id: str, home: str, on: Optional[bool]) -> None
         except OSError:
             pass
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    platform_compat.rius_dir(home, "sessions")
     with open(path, "w") as fh:
         fh.write("on" if on else "off")
 
 
 def _read_session_override(session_id: str, home: str) -> Optional[bool]:
+    if not state.is_valid_session_id(session_id):
+        return None
     path = session_override_path(session_id, home)
     try:
         with open(path) as fh:

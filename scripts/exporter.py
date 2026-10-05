@@ -39,8 +39,11 @@ STALE_AFTER_S = 12 * 60 * 60
 def _export_error_reason(status: int) -> str:
     """Short, actionable, and free of anything secret."""
     if not status:
-        return ("could not reach the endpoint at all (DNS, TLS, network or a "
-                "wrong RIUS_ENDPOINT)")
+        return ("could not reach the endpoint at all (DNS, TLS, network, or a "
+                "wrong or non-https RIUS_ENDPOINT)")
+    if 300 <= status < 400:
+        return ("redirected (HTTP %d); redirects are not followed, so the key "
+                "is never sent on -- set RIUS_ENDPOINT to the final URL" % status)
     if status in (401, 403):
         return ("rejected the API key (HTTP %d) -- check RIUS_API_KEY or run "
                 "/rius:login; a key minted in the last ~30s is not live yet"
@@ -519,7 +522,9 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         cwd = payload.get("cwd")
         transcript_path = payload.get("transcript_path")
 
-        if not session_id or not cwd or not transcript_path:
+        if not cwd or not transcript_path:
+            return 0
+        if not state.is_valid_session_id(session_id):
             return 0
 
         cfg = config.resolve(session_id, cwd, env, home)
@@ -555,16 +560,20 @@ def main() -> None:
         agent.activate(profile)
         payload_path = argv[0]
         instance_id = argv[1] if len(argv) > 1 else ""
-        with open(payload_path) as fh:
-            wrapper = json.load(fh)
+        try:
+            with open(payload_path) as fh:
+                wrapper = json.load(fh)
+        finally:
+            # Prompt text and tool output: gone as soon as it is read, even
+            # when it does not parse.
+            try:
+                os.remove(payload_path)
+            except OSError:
+                pass
         event = wrapper.get("event")
         payload = wrapper.get("payload") or {}
         home = platform_compat.home_dir(os.environ)
         run(event, payload, os.environ, home, instance_id)
-        try:
-            os.remove(payload_path)
-        except OSError:
-            pass
     except BaseException:
         pass
     finally:

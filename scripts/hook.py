@@ -69,8 +69,7 @@ def _clear_stop_file(state, session_id: str, home: str) -> None:
     session as stopped.
     """
     try:
-        os.remove(os.path.join(state.state_dir(home),
-                               session_id + ".heartbeat.stop"))
+        os.remove(state.session_file(session_id, home, ".heartbeat.stop"))
     except OSError:
         pass
 
@@ -85,10 +84,9 @@ def _spawn_stderr(cfg, home: str):
     if not getattr(cfg, "debug", False):
         return subprocess.DEVNULL, None
     try:
-        from rius_cc import agent
-        log_dir = agent.active().log_dir(home)
-        os.makedirs(log_dir, exist_ok=True)
-        fh = open(os.path.join(log_dir, "spawn.log"), "a")
+        from rius_cc import platform_compat
+        log_dir = platform_compat.rius_dir(home, "log")
+        fh = platform_compat.open_private_append(os.path.join(log_dir, "spawn.log"))
         return fh, fh
     except OSError:
         return subprocess.DEVNULL, None
@@ -110,11 +108,13 @@ def main() -> None:
         from rius_cc import (config, continuation, foreign_agent,
                              platform_compat, state)
 
+        session_id = payload.get("session_id", "")
+        if not state.is_valid_session_id(session_id):
+            return
         home = platform_compat.home_dir(os.environ)
         if (profile.name == agent.CLAUDE_CODE.name
                 and foreign_agent.is_foreign(payload, os.environ, home)):
             return
-        session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
         if event == "SessionStart" and cfg.api_key:
@@ -152,25 +152,14 @@ def main() -> None:
                                             cc_pid)
             _clear_stop_file(state, session_id, home)
 
-        fd, path = tempfile.mkstemp(prefix="rius-hook-", suffix=".json")
-        with os.fdopen(fd, "w") as fh:
-            json.dump({"event": event, "payload": payload}, fh)
-
         stderr, log_fh = _spawn_stderr(cfg, home)
         # detach: the child must outlive this hook process. setsid on POSIX,
         # DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP on Windows.
         detach = platform_compat.detached_child_kwargs()
         try:
-            exporter = os.path.join(script_dir, "exporter.py")
-            subprocess.Popen(
-                [sys.executable, exporter, path, instance_id]
-                + agent.child_argv(profile),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr,
-                close_fds=True,
-                **detach
-            )
+            _spawn_exporter(script_dir, event, payload,
+                            [instance_id] + agent.child_argv(profile),
+                            stderr, detach)
 
             if event == "SessionStart" and not stopped:
                 # The heartbeat pinger watches this process's parent (the live
@@ -194,14 +183,39 @@ def main() -> None:
             # Tell any running pinger for this session to send its final
             # stopped ping and exit. Best-effort, non-blocking.
             try:
-                stop_path = os.path.join(state.state_dir(home),
-                                         session_id + ".heartbeat.stop")
+                stop_path = state.session_file(session_id, home,
+                                               ".heartbeat.stop")
                 with open(stop_path, "w") as fh:
                     fh.write("")
             except OSError:
                 pass
     except BaseException:
         pass
+
+
+def _spawn_exporter(script_dir, event, payload, args, stderr, detach):
+    """Hand the payload to a detached exporter, which deletes the file once
+    it has read it. The payload holds prompt text and tool output, so if
+    the exporter never starts the file goes now instead of lingering."""
+    fd, path = tempfile.mkstemp(prefix="rius-hook-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"event": event, "payload": payload}, fh)
+        subprocess.Popen(
+            [sys.executable, os.path.join(script_dir, "exporter.py"), path]
+            + args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
+            close_fds=True,
+            **detach
+        )
+    except BaseException:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
 
 
 def _claude_code_pid() -> int:

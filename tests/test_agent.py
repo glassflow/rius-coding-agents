@@ -198,8 +198,10 @@ def test_rius_ctl_speaks_the_agent_commands(monkeypatch, tmp_path, capsys):
 def test_rius_ctl_writes_rules_in_the_agent_home(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     home = str(tmp_path / "home")
+    project = tmp_path / "proj"
+    project.mkdir()
     rius_ctl.dispatch(["enable-here", "--agent", "codex", "--cwd",
-                       str(tmp_path)], home)
+                       str(project)], home)
     assert (tmp_path / "codex" / "rius" / "config.json").exists()
     assert not os.path.exists(os.path.join(home, ".claude"))
 

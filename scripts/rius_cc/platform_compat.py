@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -111,6 +112,45 @@ def home_dir(env=None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Private files
+# ---------------------------------------------------------------------------
+#
+# Logs, state and overrides hold paths, session ids and prompt-derived
+# titles, so everything the plugin keeps under ~/.claude/rius/ is owner-only.
+# On Windows the mode bits are ignored and the files inherit the profile ACL.
+
+PRIVATE_DIR_MODE = 0o700
+PRIVATE_FILE_MODE = 0o600
+
+
+def ensure_private_dir(path: str) -> str:
+    """mkdir -p `path`, then make `path` itself owner-only. Tightening an
+    existing directory too is what fixes installs made before this."""
+    os.makedirs(path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+    if not IS_WINDOWS:
+        try:
+            if stat.S_IMODE(os.stat(path).st_mode) != PRIVATE_DIR_MODE:
+                os.chmod(path, PRIVATE_DIR_MODE)
+        except OSError:
+            pass
+    return path
+
+
+def rius_dir(home: str, *parts: str) -> str:
+    """The active agent's rius dir[/parts...], each level created owner-only."""
+    path = ensure_private_dir(agent.active().rius_dir(home))
+    for part in parts:
+        path = ensure_private_dir(os.path.join(path, part))
+    return path
+
+
+def open_private_append(path: str):
+    """open(path, "a"), but a file it creates is 0600, not 0644."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0)
+    return os.fdopen(os.open(path, flags, PRIVATE_FILE_MODE), "a")
+
+
+# ---------------------------------------------------------------------------
 # Breadcrumbs from the seam itself
 # ---------------------------------------------------------------------------
 
@@ -136,10 +176,9 @@ def _warn_once(key: str, message: str) -> None:
         import datetime
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        d = agent.active().log_dir(home_dir())
-        os.makedirs(d, exist_ok=True)
+        d = rius_dir(home_dir(), "log")
         path = os.path.join(d, now.strftime("%Y-%m-%d") + ".log")
-        with open(path, "a") as fh:
+        with open_private_append(path) as fh:
             fh.write("%s platform_compat: %s\n"
                      % (now.strftime("%Y-%m-%dT%H:%M:%SZ"), message))
     except BaseException:
@@ -362,7 +401,7 @@ def parent_pid_of(pid: int) -> int:
 # File locking  (TRAP 2)
 # ---------------------------------------------------------------------------
 
-def open_lock_file(path: str, mode: int = 0o777) -> int:
+def open_lock_file(path: str, mode: int = PRIVATE_FILE_MODE) -> int:
     """A fresh descriptor for the lock file. NEVER cached per path.
 
     Both implementations rely on one-lock-per-descriptor: POSIX flock is
