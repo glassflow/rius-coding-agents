@@ -22,9 +22,12 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from . import scrub
 from .spans import truncate
 
 SPOOL_SUFFIX = ".jsonl"
+# A subagent's spool names its parent conversation in this sidecar.
+PARENT_SUFFIX = ".parent"
 
 # Ids, names, counts, flags and timings: what the trace's shape is made of.
 IDENTITY_FIELDS = (
@@ -85,10 +88,11 @@ def spool_path(spool_dir: str, conversation_id: str) -> str:
     return os.path.join(spool_dir, name + SPOOL_SUFFIX)
 
 
-def _content_value(value: Any, max_bytes: int) -> Any:
-    if isinstance(value, str):
-        return truncate(value, max_bytes)
-    return truncate(json.dumps(value), max_bytes)
+def _content_value(value: Any, max_bytes: int) -> str:
+    """Content as the spool keeps it: secrets removed before it touches
+    the disk, since the spool outlives the session by up to a week."""
+    text = value if isinstance(value, str) else json.dumps(value)
+    return truncate(scrub.scrub(text), max_bytes)
 
 
 def shell_exit_code(tool_output: Any) -> Optional[int]:
@@ -105,6 +109,17 @@ def shell_exit_code(tool_output: Any) -> Optional[int]:
     if isinstance(code, bool) or not isinstance(code, int):
         return None
     return code
+
+
+def task_subagent_type(payload: Dict[str, Any]) -> str:
+    """The subagent type a Task call asks for, when it is a plain name."""
+    tool_input = payload.get("tool_input")
+    if payload.get("tool_name") != "Task" or not isinstance(tool_input, dict):
+        return ""
+    value = tool_input.get("subagent_type")
+    if isinstance(value, str) and _SAFE_NAME.match(value):
+        return value
+    return ""
 
 
 def _cwd(payload: Dict[str, Any]) -> str:
@@ -125,6 +140,11 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
             record[key] = payload[key]
     if "cwd" not in record and _cwd(payload):
         record["cwd"] = _cwd(payload)
+    subagent_type = task_subagent_type(payload)
+    if subagent_type and "subagent_type" not in record:
+        # A type name such as "explore", not content: it names the span of
+        # a subagent that fires no subagentStart.
+        record["subagent_type"] = subagent_type
     code = shell_exit_code(payload.get("tool_output"))
     if code is not None:
         # A number, not output: kept with capture off so a failed command
@@ -208,8 +228,32 @@ def read_conversation(spool_dir: str, conversation_id: str) -> List[Dict[str, An
         events += own
         pending += [(str(e["subagent_id"]), depth + 1) for e in own
                     if e.get("event") == "subagentStart" and e.get("subagent_id")]
+        pending += [(child, depth + 1)
+                    for child in linked_children(spool_dir, cid)]
     events.sort(key=lambda e: e["ts"])
     return _without_echoes(events)
+
+
+def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
+    """Conversations whose `.parent` sidecar names this one: subagents
+    linked without a subagentStart (cursor_hook.link_headless_subagent)."""
+    try:
+        names = os.listdir(spool_dir)
+    except OSError:
+        return []
+    children = []
+    for name in names:
+        child = name[:-len(PARENT_SUFFIX)]
+        if not name.endswith(PARENT_SUFFIX) or not _SAFE_NAME.match(child):
+            continue
+        try:
+            with open(os.path.join(spool_dir, name), encoding="utf-8") as fh:
+                parent = fh.read().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if parent == conversation_id and child != conversation_id:
+            children.append(child)
+    return sorted(children)
 
 
 # The plugin's hooks and the same hooks installed into hooks.json by

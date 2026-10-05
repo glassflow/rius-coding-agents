@@ -1,0 +1,105 @@
+{
+ "_source": "REAL, captured from interactive cursor-agent 2026.10.01-e373342 on 2026-10-05 (two prompts, both ended by the free-plan usage limit, so no tool or thought events) and redacted: ids remapped, content, email and paths replaced. Rebuilt from the logged payloads, which list every field the CLI sent. Note beforeSubmitPrompt fires before sessionStart.",
+ "events": [
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0101-0000-4000-8000-000000000102",
+   "model": "default",
+   "prompt": "<redacted content>",
+   "attachments": [],
+   "hook_event_name": "beforeSubmitPrompt"
+  },
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0100-0000-4000-8000-000000000101",
+   "model": "default",
+   "is_background_agent": false,
+   "hook_event_name": "sessionStart"
+  },
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0101-0000-4000-8000-000000000102",
+   "model": "default",
+   "status": "error",
+   "loop_count": 0,
+   "hook_event_name": "stop"
+  },
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0102-0000-4000-8000-000000000103",
+   "model": "default",
+   "prompt": "<redacted content>",
+   "attachments": [],
+   "hook_event_name": "beforeSubmitPrompt",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0100-0000-4000-8000-000000000101"
+   }
+  },
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0102-0000-4000-8000-000000000103",
+   "model": "default",
+   "status": "error",
+   "loop_count": 0,
+   "hook_event_name": "stop",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0100-0000-4000-8000-000000000101"
+   }
+  },
+  {
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "conversation_id": "c0de0100-0000-4000-8000-000000000101",
+   "session_id": "c0de0100-0000-4000-8000-000000000101",
+   "generation_id": "c0de0100-0000-4000-8000-000000000101",
+   "model": "default",
+   "reason": "completed",
+   "duration_ms": 19969,
+   "is_background_agent": false,
+   "final_status": "completed",
+   "hook_event_name": "sessionEnd",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0100-0000-4000-8000-000000000101"
+   }
+  }
+ ]
+}

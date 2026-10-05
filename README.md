@@ -443,8 +443,8 @@ traces, connect the bundled `rius` MCP server in Cursor's MCP settings; it
 signs in with OAuth only.
 
 - **No token counts or cost.** Cursor's hooks do not report usage.
-- **Beta.** It is tested against Cursor's documented hook payloads, not yet
-  against a live Cursor session.
+- **Beta.** It is tested against payloads from real `cursor-agent`
+  sessions; the IDE agent and plugin import are not verified yet.
 - Its key, settings and state are its own, under `~/.cursor/rius/`.
 
 [docs/cursor.md](docs/cursor.md) has the details, including a fallback for

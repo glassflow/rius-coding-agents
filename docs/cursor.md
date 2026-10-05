@@ -3,10 +3,9 @@
 The same repo ships a Cursor plugin next to the Claude Code one. It traces
 Cursor agent sessions (the IDE agent and `cursor-agent`) to Rius.
 
-**Beta.** The plugin is built and tested against Cursor's documented hook
-payloads and the payload code in `cursor-agent` 2026.02.13. It has **not**
-yet been run against a live Cursor session, so field names may still change
-once real payloads are captured.
+**Beta.** The plugin is tested against hook payloads captured from real
+`cursor-agent` 2026.10.01 sessions, headless (`-p`) and interactive. The IDE
+agent and plugin import have not been run yet.
 
 ## What you get, and what you don't
 
@@ -20,9 +19,15 @@ cursor session                AGENT  sessionStart .. sessionEnd
       <subagent type>         AGENT  a subagent, under the Task call that started it
 ```
 
-- Failed tools carry `error.type`. A shell command that exits non-zero gives
-  `Shell.exit_<code>`. Any other failure gives `<tool>.<failure_type>`, for
-  example `MCP:query.timeout`. An interrupted tool is not an error.
+- Failed tools carry `error.type`, `<tool>.<failure_type>`: a shell command
+  that exits non-zero gives `Shell.error` (Cursor reports it as a failure
+  without the exit code), a timed-out MCP call `MCP:query.timeout`. An
+  interrupted tool is not an error.
+- `cursor-agent -p` fires no prompt, `stop` or subagent hooks. Each run is
+  one turn, from its first event to its `sessionEnd`, and a Task subagent
+  hangs under its Task call. That call gets no end hook either, so it closes
+  with the run and carries `cursor.tool.closed_at_session_end`. A resumed
+  chat (`--resume`) adds turns to the same trace.
 - Spans carry `service.name=cursor`, plus `cursor.version`, `cursor.cwd` and
   the composer mode.
 
@@ -48,7 +53,8 @@ turns content off everywhere.
 
 Each hook appends the event to a local spool at
 `~/.cursor/rius/spool/<conversation>.jsonl` (mode 0600). With capture off,
-no content is ever written to the spool. Your email and transcript paths are
+no content is ever written to the spool; with it on, secrets are removed
+before content is written. Your email and transcript paths are
 never written there. A spool is deleted once its conversation has been idle
 for 7 days and its trace is closed; the cleanup runs when a traced chat
 starts.
