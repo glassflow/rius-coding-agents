@@ -9,24 +9,23 @@ is not a Claude Code session at all.
 Only positive markers count, so a real Claude Code session is never
 dropped. ``CURSOR_AGENT`` is deliberately NOT one: Cursor sets it for every
 command its agent runs, so a ``claude`` started from Cursor's agent shell
-carries it too. ``CURSOR_VERSION`` is only set in Cursor's hook environment.
+carries it too. Nor is ``CURSOR_VERSION``: Cursor sets it for hooks today, but
+a terminal that exported it would hide Claude Code sessions started there, and
+every Cursor hook payload already carries ``cursor_version``.
 """
 from __future__ import annotations
 
 import os
 
 CURSOR_PAYLOAD_KEYS = ("cursor_version", "conversation_id")
-CURSOR_HOOK_ENV = "CURSOR_VERSION"
 
 
 def is_foreign(payload: dict, env, home: str) -> bool:
-    return _is_cursor(payload, env) or _is_codex(payload, env, home)
+    return _is_cursor(payload) or _is_codex(payload, env, home)
 
 
-def _is_cursor(payload: dict, env) -> bool:
-    if any(key in payload for key in CURSOR_PAYLOAD_KEYS):
-        return True
-    return bool(env.get(CURSOR_HOOK_ENV))
+def _is_cursor(payload: dict) -> bool:
+    return any(key in payload for key in CURSOR_PAYLOAD_KEYS)
 
 
 def _is_codex(payload: dict, env, home: str) -> bool:

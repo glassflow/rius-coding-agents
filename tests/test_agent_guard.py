@@ -60,13 +60,15 @@ def test_a_foreign_payload_exits_zero_and_silent(tmp_path, event, name):
     assert _state_files(home) == []
 
 
-def test_cursor_hook_environment_alone_is_enough(tmp_path, monkeypatch):
+def test_claude_code_started_from_a_cursor_terminal_is_still_traced(
+        tmp_path, monkeypatch):
     env, home = _enabled_env(tmp_path)
-    env = dict(_without_agent_env(env), CURSOR_VERSION="2026.02.13")
+    env = dict(_without_agent_env(env), CURSOR_VERSION="2026.02.13",
+               CURSOR_AGENT="1")
     calls = _run_in_process(monkeypatch, "SessionStart",
                             _payload("claude_code_session_start.json", tmp_path),
                             env, home)
-    assert calls == []
+    assert len(calls) == 2
 
 
 def test_claude_code_still_spawns_exporter_and_pinger(tmp_path, monkeypatch):
