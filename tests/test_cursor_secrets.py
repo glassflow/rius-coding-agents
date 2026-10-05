@@ -163,3 +163,20 @@ def test_a_huge_output_is_spooled_within_the_hook_timeout(tmp_path):
     with open(path, encoding="utf-8") as fh:
         line = json.loads(fh.read())
     assert len(line["tool_output"].encode("utf-8")) < 32768 + 64
+
+
+def test_spooled_json_fields_stay_json_and_plain_text_keeps_its_backslashes(tmp_path):
+    """The spool scrubs a JSON field as JSON (an escaped quote or line break
+    ends a value) and a prompt as plain text (`C:\\temp` is one value)."""
+    payload = {"hook_event_name": "postToolUse", "conversation_id": CID,
+               "tool_name": "Shell", "tool_use_id": "t",
+               "tool_input": {"command": 'grep "password:" app.log', "cwd": ""},
+               "tool_output": json.dumps({"output": "TOKEN=abc\nnext line"}),
+               "prompt": "use password=C:\\temp\\secret please"}
+    path = cursor_events.record(payload, str(tmp_path), True, 32768)
+    with open(path, encoding="utf-8") as fh:
+        line = json.loads(fh.read())
+    assert json.loads(line["tool_input"])["cwd"] == ""
+    assert json.loads(line["tool_output"])["output"] == (
+        "TOKEN=[redacted:token]\nnext line")
+    assert line["prompt"] == "use password=[redacted:password] please"
