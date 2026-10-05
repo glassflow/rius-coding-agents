@@ -33,6 +33,7 @@ _GLOB_RE = re.compile(r"[*?\[]")
 STORED_KEY_SOURCE = "/rius:login"
 
 _NO_KEY = "no API key: run `/rius:login`"
+NO_RULE_REASON = "off: no path rule matches "
 _UNTRUSTED_ENDPOINT = ("no API key: the stored key's server %s is not a Rius "
                        "server, so it is never sent there; run `/rius:login`")
 
@@ -40,6 +41,8 @@ IGNORED_API_KEY = ("RIUS_API_KEY is set but ignored; run /rius:login, or store "
                    "a console key with `rius_ctl.sh use-key`")
 IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
                     "server your /rius:login key came from")
+IGNORED_ENV = ("RIUS_ENV is set but ignored; run /rius:login --env staging "
+               "to sign in to staging")
 IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
                   "/rius:enable-here to trace a folder")
 IGNORED_CAPTURE = ("RIUS_CAPTURE_CONTENT=true is set but ignored; run "
@@ -395,6 +398,8 @@ def _ignored_env(env: Mapping[str, str]) -> list:
         notes.append(IGNORED_API_KEY)
     if env.get("RIUS_ENDPOINT"):
         notes.append(IGNORED_ENDPOINT)
+    if env.get(login.ENVIRONMENT_VAR):
+        notes.append(IGNORED_ENV)
     if _parse_bool_env(env.get(agent.active().env_var("ENABLED"))) is True:
         notes.append(IGNORED_ENABLE)
     return notes
@@ -413,7 +418,7 @@ def _enabled(session_id: str, cwd: str, env: Mapping[str, str], home: str):
     path_decision, path_reason = _path_rules_decision(cwd, home)
     if path_decision is not None:
         return path_decision, path_reason
-    return False, "off: no path rule matches %s, and the default is off" % cwd
+    return False, NO_RULE_REASON + "%s, and the default is off" % cwd
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:

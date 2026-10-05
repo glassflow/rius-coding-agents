@@ -67,3 +67,10 @@ def test_every_entry_point_uses_the_one_resolver(script):
     source = (ROOT / "scripts" / script).read_text()
     assert "platform_compat.home_dir(" in source
     assert "expanduser" not in source and 'environ["HOME"]' not in source
+
+
+def test_the_test_marker_counts_only_in_a_git_checkout(monkeypatch, tmp_path):
+    from rius_cc import platform_compat as pc
+    assert pc._tests_trust_env_home()
+    monkeypatch.setattr(pc, "_plugin_root", lambda: str(tmp_path))
+    assert not pc._tests_trust_env_home()

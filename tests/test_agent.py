@@ -267,3 +267,34 @@ def test_launcher_breadcrumb_lands_in_the_agent_home(tmp_path):
 def test_typed_text_after_the_separator_never_picks_the_agent():
     argv = ["login", "--cwd", "/p", "--", "--agent", "codex"]
     assert agent.split_flag(argv) == ("claude-code", argv)
+
+
+def test_the_foreign_agent_guard_only_runs_for_claude_code(monkeypatch,
+                                                           tmp_path):
+    """Codex's own transcripts are rollout-*.jsonl, which the guard treats as
+    Codex running Claude Code's hooks. Under `--agent codex` they are the
+    session itself, so the guard must not drop them."""
+    home, codex_home = tmp_path / "home", tmp_path / "codex"
+    project = tmp_path / "proj"
+    with agent.using(agent.CODEX):
+        signed_in.sign_in(str(home))
+        config.write_path_rules(str(home), {"enabled_paths": [str(project)]})
+    env = {"HOME": str(home), "CODEX_HOME": str(codex_home),
+           "PATH": os.environ.get("PATH", "")}
+    payload = {"session_id": "s1", "cwd": str(project),
+               "transcript_path": str(codex_home / "sessions" /
+                                      "rollout-2026-10-05-s1.jsonl")}
+    calls = _hook_in_process(monkeypatch, ["--agent", "codex", "SessionStart"],
+                             payload, env)
+    assert len(calls) == 2
+
+
+def test_claude_code_still_drops_a_codex_payload(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    project = tmp_path / "proj"
+    signed_in.sign_in(str(home))
+    config.write_path_rules(str(home), {"enabled_paths": [str(project)]})
+    env = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    payload = {"session_id": "s1", "cwd": str(project),
+               "transcript_path": "/x/rollout-2026-10-05-s1.jsonl"}
+    assert _hook_in_process(monkeypatch, ["SessionStart"], payload, env) == []

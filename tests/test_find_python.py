@@ -45,7 +45,8 @@ def _resolve(world, path_entries, cwd=None, **env):
     entries = [str(e) for e in path_entries] + [str(fallback.parent)]
     if TOOLS_WITHOUT_PYTHON:
         entries.append(TOOLS_WITHOUT_PYTHON)
-    script = '. "%s"; printf "%%s" "$rius_py"' % _bash_path(FIND_PYTHON_SH)
+    script = 'dir="%s"; . "$dir/_find_python.sh"; printf "%%s" "$rius_py"' % (
+        _bash_path(os.path.dirname(FIND_PYTHON_SH)))
     r = subprocess.run([BASH, "-c", script], cwd=str(cwd or project),
                        capture_output=True, text=True, timeout=30,
                        env=minimal_env(PATH=os.pathsep.join(entries),

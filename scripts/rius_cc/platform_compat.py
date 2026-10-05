@@ -103,11 +103,21 @@ def home_dir(env=None) -> str:
 
 
 def _tests_trust_env_home() -> bool:
+    """The suite's marker module, honoured only in a git checkout: an
+    installed plugin (the marketplace cache) has no .git, so a marker that
+    somehow got there still changes nothing."""
     import importlib.util
     try:
-        return importlib.util.find_spec("rius_cc._tests_trust_env_home") is not None
+        if importlib.util.find_spec("rius_cc._tests_trust_env_home") is None:
+            return False
     except (ImportError, ValueError):
         return False
+    return os.path.exists(os.path.join(_plugin_root(), ".git"))
+
+
+def _plugin_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
 
 
 def _posix_home() -> str:

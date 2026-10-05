@@ -34,10 +34,16 @@ esac
 # Fast exit, before any Python starts (RIUS-1224): with no stored key,
 # hook.py resolves no key and returns without doing anything, so on a
 # signed-out machine every tool call would pay two interpreter startups for
-# nothing. File tests only. Anything uncertain falls through to hook.py.
+# nothing. File tests only. Anything uncertain falls through to hook.py,
+# including a home folder that could not be resolved.
 # RIUS_API_KEY is not a reason to run: hook.py ignores it. Each agent's files
 # are in its own folder (rius_cc/agent.py), and an agent hook.py does not
 # know falls through, for hook.py to refuse.
+rius_os_home_resolved=
+if [ -n "$dir" ] && [ -r "$dir/_os_home.sh" ]; then
+    . "$dir/_os_home.sh"
+fi
+
 rius_hook_has_work() {
     rius_agent_dir=.claude
     rius_event=${1:-}
@@ -52,26 +58,36 @@ rius_hook_has_work() {
     # Cursor's sessionStart answer tells the /rius-* commands where the
     # plugin is, and /rius-login is how a signed-out user gets a key.
     [ "$rius_event" = "sessionStart" ] && return 0
-    [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
-    for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
-        [ -n "$rius_home" ] || continue
-        rius_dir="$rius_home/$rius_agent_dir/rius"
-        [ -e "$rius_dir/credentials.json" ] && return 0
-        # A trace still open on the backend (state.sync_open_marker).
-        for rius_open in "$rius_dir"/state/*.open; do
-            [ -e "$rius_open" ] && return 0
+    if [ "${rius_trusts_env:-0}" = "1" ]; then
+        [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
+        for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
+            [ -n "$rius_home" ] || continue
+            rius_home_has_work "$rius_home/$rius_agent_dir/rius" \
+                "$rius_event" && return 0
         done
-        # SessionStart may owe a notice: the once-ever install hint, or
-        # "run /rius:login" for folders or sessions turned on before signing
-        # in (path rules, or a /rius:on override in sessions/).
-        if [ "$rius_event" = "SessionStart" ]; then
-            [ -e "$rius_dir/install-notice-shown" ] || return 0
-            [ -e "$rius_dir/config.json" ] && return 0
-            for rius_override in "$rius_dir"/sessions/*; do
-                [ -e "$rius_override" ] && return 0
-            done
-        fi
+        return 1
+    fi
+    [ -n "${rius_os_home:-}" ] || return 0
+    rius_home_has_work "$rius_os_home/$rius_agent_dir/rius" "$rius_event"
+}
+
+rius_home_has_work() {
+    rius_dir=$1
+    [ -e "$rius_dir/credentials.json" ] && return 0
+    # A trace still open on the backend (state.sync_open_marker).
+    for rius_open in "$rius_dir"/state/*.open; do
+        [ -e "$rius_open" ] && return 0
     done
+    # SessionStart may owe a notice: the once-ever install hint, or
+    # "run /rius:login" for folders or sessions turned on before signing
+    # in (path rules, or a /rius:on override in sessions/).
+    if [ "$2" = "SessionStart" ]; then
+        [ -e "$rius_dir/install-notice-shown" ] || return 0
+        [ -e "$rius_dir/config.json" ] && return 0
+        for rius_override in "$rius_dir"/sessions/*; do
+            [ -e "$rius_override" ] && return 0
+        done
+    fi
     return 1
 }
 if ! rius_hook_has_work "$@"; then

@@ -4,7 +4,7 @@ Zero to a first trace: get a Rius workspace and an API key, install the
 plugin, sign in, enable one folder, and confirm spans are
 arriving. Every step below is something you do once.
 
-Read [What gets sent](../README.md#what-gets-sent----read-this-before-enabling-anything)
+Read [What gets sent](../README.md#what-rius-sends)
 in the README before you enable any folder. A folder sends structure only
 unless you enable it with `/rius:enable-content-here`, which also sends the contents
 of files Claude Code reads and the output of commands it runs.
@@ -87,9 +87,9 @@ Production is the default. Staging is only reached when you ask for it:
 /rius:login --env staging
 ```
 
-or with `RIUS_ENV=staging` in the environment Claude Code runs in (`--env`
-wins over `RIUS_ENV`). An unknown name is refused rather than sent to
-production. The key stored afterwards remembers its environment, so its
+`RIUS_ENV` in the environment is ignored, because a repo's settings could
+set it; `/rius:status` says so when it is set. An unknown name is refused
+rather than sent to production. The key stored afterwards remembers its environment, so its
 ingest endpoint, `/rius:logout` and the revoke on the next sign-in all go
 to staging too.
 
@@ -303,14 +303,14 @@ cannot invoke them for you.
 
 A working setup prints `Rius tracing: on`, a `Reason` line naming the path
 rule that decided it, the endpoint, the redacted key, and a span count that
-grows as the session goes on:
+grows as the session goes on (`--debug` or `RIUS_CLAUDE_DEBUG` also prints
+the platform details):
 
 ```
 Rius tracing: on
 Reason: on: path rule '/Users/you/some/repo' enables /Users/you/some/repo
 cwd: /Users/you/some/repo
 session: 0f1d...
-Platform: darwin (locking: fcntl.flock, liveness: os.kill(pid, 0))
 Endpoint: https://ingest.eu.console.rius-glassflow.com
 Tracing: signed in as workspace eng-shared (Acme)
 Querying traces: run /mcp and sign in to rius
@@ -394,7 +394,7 @@ decided, verbatim:
 
 | `Reason` line | What it means |
 |---|---|
-| `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. Run `/rius:enable-here`. |
+| `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. The next line says to run `/rius:enable-here`. When you're also signed out, status prints only `Next: run /rius:login, then /rius:enable-here in a project`. |
 | ``off: no API key: run `/rius:login` `` | The folder is enabled, but no `/rius:login` key is stored. |
 | ``<reason>; also no API key: run `/rius:login` `` | Tracing is off for `<reason>`, and it would stay off without a key even once that is fixed. |
 | ``off: no API key: the stored key's server <url> is not a Rius server, so it is never sent there; run `/rius:login` `` | `credentials.json` names a server that is not an `https` Rius host, so its key is not used. Sign in again. |
@@ -451,6 +451,9 @@ Logs live in `~/.claude/rius/log/`:
 
 ## Uninstall and local state
 
+Run `/rius:logout` first: it revokes the key and deletes it from this
+machine. Then:
+
 ```
 /plugin uninstall rius
 ```
@@ -463,5 +466,5 @@ for a clean slate:
 rm -rf ~/.claude/rius/
 ```
 
-Revoking the API key in the console is a separate step, and the only one
-that stops the credential working.
+A key you minted in the console and stored with `rius_ctl.sh use-key` is
+revoked in the console.
