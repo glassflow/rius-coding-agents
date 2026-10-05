@@ -80,7 +80,8 @@ def _most_recent_session(home):
     """Resolve a session id from the most recently modified state file."""
     d = os.path.join(home, ".claude", "rius", "state")
     try:
-        entries = [f for f in os.listdir(d) if f.endswith(".json")]
+        entries = [f for f in os.listdir(d) if f.endswith(".json")
+                   and state.is_valid_session_id(f[:-len(".json")])]
     except OSError:
         return None
     if not entries:

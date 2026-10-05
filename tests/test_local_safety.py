@@ -328,3 +328,16 @@ def test_exporter_deletes_a_payload_it_cannot_parse(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         exporter.main()
     assert not bad.exists()
+
+
+def test_status_skips_a_state_file_that_is_not_a_session(tmp_path):
+    home = tmp_path / "home"
+    state_dir = home / ".claude" / "rius" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "s1.json").write_text("{}")
+    os.utime(str(state_dir / "s1.json"), (1, 1))
+    (state_dir / "not a session.json").write_text("{}")
+    r = _run_ctl(["status", "--cwd", str(tmp_path)], str(home))
+    assert r.returncode == 0
+    assert "error" not in r.stdout
+    assert "session: s1 (inferred" in r.stdout
