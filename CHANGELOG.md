@@ -4,6 +4,20 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.5.0 (unreleased)
+
+- Codex (beta): the plugin now traces Codex CLI sessions. Install with
+  `codex plugin marketplace add glassflow/rius-coding-agents` and
+  `codex plugin add rius@rius-coding-agents`, trust the hooks in `/hooks`,
+  then use the `$rius:rius-*` skills. Each session is one trace of turns,
+  model calls with token counts, tool calls and subagents; a resumed
+  session continues it. Codex keeps its own key and settings in
+  `${CODEX_HOME:-~/.codex}/rius`. Codex has no SessionEnd, so a Codex trace
+  is closed by the next Codex session once the old one's process has exited
+  and it has been idle for an hour. The bundled MCP server signs in with
+  `codex mcp login rius`. See docs/codex.md.
+- Claude Code: no change in what is traced or sent.
+
 ## 0.4.6 (2026-10-05)
 
 - Cursor and Codex can run Claude Code plugin hooks: Cursor does so by

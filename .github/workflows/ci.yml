@@ -73,8 +73,10 @@ jobs:
           sys.path.insert(0, "scripts")
           for mod in ("rius_cc.proto", "rius_cc.transcript", "rius_cc.spans",
                       "rius_cc.config", "rius_cc.state", "rius_cc.otlp",
-                      "rius_cc.subagents", "rius_cc.agent", "exporter",
-                      "heartbeat", "hook", "rius_ctl"):
+                      "rius_cc.subagents", "rius_cc.agent",
+                      "rius_cc.codex_rollout", "rius_cc.codex_spans",
+                      "rius_cc.codex_session", "rius_cc.codex_trust",
+                      "exporter", "heartbeat", "hook", "rius_ctl"):
               importlib.import_module(mod)
           print("%d modules parse and import on %s" % (len(files), sys.version.split()[0]))
           PY
@@ -168,6 +170,44 @@ jobs:
               "hook.py has a shebang again: `py` will honour it and re-dispatch"
           print("manifests valid; %d hook events wired; %d commands on disk"
                 % (len(wired), len(named)))
+          PY
+      - name: Codex manifest names only Codex files
+        run: |
+          python - <<'PY'
+          import json, os, re
+          codex = json.load(open(".codex-plugin/plugin.json"))
+          claude = json.load(open(".claude-plugin/plugin.json"))
+          assert codex["name"] == claude["name"] == "rius", codex["name"]
+          assert codex["version"] == claude["version"], (codex["version"],
+                                                         claude["version"])
+          hooks_path, skills_path = codex["hooks"], codex["skills"]
+          # Codex falls back to nothing, but Claude Code's files must never
+          # be what a Codex install runs.
+          for rel in (hooks_path, skills_path):
+              assert rel.startswith("./codex/"), rel
+              assert os.path.exists(rel), "missing: %s" % rel
+          text = open(".codex-plugin/plugin.json").read() + open(hooks_path).read()
+          for claude_only in ("CLAUDE_PLUGIN_ROOT", "hooks/hooks.json",
+                              "commands/", ".mcp.json", "headersHelper"):
+              assert claude_only not in text, "Codex files name %s" % claude_only
+          hooks = json.load(open(hooks_path))["hooks"]
+          named = set()
+          for event, groups in hooks.items():
+              for group in groups:
+                  for entry in group["hooks"]:
+                      assert "--agent codex %s" % event in entry["command"], entry
+                      for rel in re.findall(r"\$\{PLUGIN_ROOT\}(/[\w./-]+)",
+                                            entry["command"]):
+                          named.add(rel.lstrip("/"))
+          assert named, "no codex hook command names a file"
+          for rel in sorted(named):
+              assert os.path.exists(rel), "codex hooks run a missing file: %s" % rel
+          skills = sorted(os.listdir(skills_path))
+          for name in skills:
+              skill = open(os.path.join(skills_path, name, "SKILL.md")).read()
+              assert "\nname: %s\n" % name in skill, name
+              assert "--agent codex" in skill, name
+          print("codex manifest valid; %d hooks, %d skills" % (len(hooks), len(skills)))
           PY
 
   secrets:

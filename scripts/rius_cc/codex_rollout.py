@@ -55,6 +55,7 @@ def _session(p: Dict[str, Any]) -> Dict[str, Any]:
         "originator": _text(p.get("originator")),
         "model_provider": _text(p.get("model_provider")),
         "git_branch": _text(git.get("branch")),
+        "agent_role": _text(p.get("agent_role")),
     }
 
 

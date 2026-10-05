@@ -111,13 +111,16 @@ def main() -> None:
                              platform_compat, state)
 
         home = platform_compat.home_dir(os.environ)
-        if (profile.name == agent.CLAUDE_CODE.name
-                and foreign_agent.is_foreign(payload, os.environ, home)):
-            return
+        if profile.name == agent.CLAUDE_CODE.name:
+            if foreign_agent.is_foreign(payload, os.environ, home):
+                return
+        elif not payload.get("transcript_path"):
+            return      # e.g. `codex exec --ephemeral`: no log to trace
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
-        if event == "SessionStart" and cfg.api_key:
+        if (event == "SessionStart" and cfg.api_key
+                and profile.name == agent.CLAUDE_CODE.name):
             # A conversation Claude Code moved to this new id is taken over
             # HERE, before anything is spawned: the old id's pinger is told
             # to stop before this id's starts (one pinger per root), and the
@@ -147,7 +150,8 @@ def main() -> None:
         cc_pid = 0
         if event == "SessionStart" and not stopped:
             source = payload.get("source", "")
-            cc_pid = _claude_code_pid()
+            cc_pid = (_direct_parent_pid() if profile.hook_parent_is_agent
+                      else _claude_code_pid())
             instance_id = _mint_instance_id(state, session_id, home, source,
                                             cc_pid)
             _clear_stop_file(state, session_id, home)
@@ -229,6 +233,13 @@ def _claude_code_pid() -> int:
     except BaseException:
         return 0
     return grandparent if grandparent > 0 else 0
+
+
+def _direct_parent_pid() -> int:
+    """The agent that ran this hook with no shell in between (Codex). An
+    orphaned hook reports init, which never dies: 0, so nothing is watched."""
+    parent = os.getppid()
+    return parent if parent > 1 else 0
 
 
 if __name__ == "__main__":

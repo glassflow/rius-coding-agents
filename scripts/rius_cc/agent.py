@@ -37,6 +37,9 @@ class AgentProfile:
     command_prefix: str
     login_wait_budget: int
     sends_agent_on_link: bool
+    # Claude Code runs a hook through a shell, so its pid is hook.py's
+    # grandparent; Codex runs the hook command itself.
+    hook_parent_is_agent: bool = False
     base_dir: Optional[str] = None
 
     def rius_dir(self, home: str) -> str:
@@ -61,7 +64,9 @@ class AgentProfile:
         if self is CLAUDE_CODE:
             return text
         return (text.replace(CLAUDE_CODE.command_prefix, self.command_prefix)
-                .replace(CLAUDE_CODE.display_name, self.display_name))
+                .replace(CLAUDE_CODE.display_name, self.display_name)
+                .replace("files Claude reads",
+                         "files %s reads" % self.display_name))
 
     def bind(self, env: Mapping[str, str]) -> "AgentProfile":
         """This profile with its home taken from `home_env` when that is set."""
@@ -84,8 +89,10 @@ CODEX = AgentProfile(
     name="codex", display_name="Codex",
     service_name="codex", root_name="codex session",
     provider="openai", home_parts=(".codex",), home_env="CODEX_HOME",
-    attr_prefix="codex.", env_prefix="RIUS_CODEX_", command_prefix="$rius-",
-    login_wait_budget=540, sends_agent_on_link=True)
+    attr_prefix="codex.", env_prefix="RIUS_CODEX_",
+    command_prefix="$rius:rius-",
+    login_wait_budget=540, sends_agent_on_link=True,
+    hook_parent_is_agent=True)
 
 # Cursor routes to several vendors, so its provider comes from each model name.
 CURSOR = AgentProfile(

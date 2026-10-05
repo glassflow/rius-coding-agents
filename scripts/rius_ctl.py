@@ -26,7 +26,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, config, login, platform_compat, state  # noqa: E402
+from rius_cc import (agent, codex_trust, config, login,  # noqa: E402
+                     platform_compat, state)
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -224,10 +225,8 @@ def _print_status(session_id, cwd, home, inferred=False):
         print("session: %s" % session_id)
     print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
-    print("MCP: %s" % config.mcp_url(os.environ))
-    print(_mcp_key_line(home))
-    if login.read_credentials(home):
-        print(_mcp_hint(home, " with this key"))
+    for line in _mcp_status_lines(home):
+        print(line)
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
@@ -290,6 +289,30 @@ def _print_account(home, creds):
     print("Key expires: %s" % _date(creds.get("expires_at")))
 
 
+def _mcp_status_lines(home):
+    if _is_codex():
+        return [CODEX_MCP_LINE, codex_trust.status_line(_PLUGIN_ROOT,
+                                                        _codex_home(home))]
+    lines = ["MCP: %s" % config.mcp_url(os.environ), _mcp_key_line(home)]
+    if login.read_credentials(home):
+        lines.append(_mcp_hint(home, " with this key"))
+    return lines
+
+
+# Codex has no headersHelper, so its bundled server cannot use the stored
+# key: it signs in on its own, through the server's OAuth.
+CODEX_MCP_LINE = ('MCP: the bundled "rius" server signs in on its own; run '
+                  "`codex mcp login rius` once to query your traces.")
+
+
+def _is_codex():
+    return agent.active().name == agent.CODEX.name
+
+
+def _codex_home(home):
+    return os.path.dirname(agent.active().rius_dir(home))
+
+
 def _mcp_key_line(home):
     if login.read_credentials(home):
         return "MCP key: /rius:login"
@@ -324,11 +347,13 @@ def _login(home, cwd, env_flag=None):
 
 
 _CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
+_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _pending_line(cwd):
-    return "RIUS_LOGIN_PENDING: bash %s login-wait --cwd %s" % (
-        _shell_quote(_CTL_SH), _shell_quote(cwd))
+    flag = "".join(" " + arg for arg in agent.child_argv(agent.active()))
+    return "RIUS_LOGIN_PENDING: bash %s login-wait%s --cwd %s" % (
+        _shell_quote(_CTL_SH), flag, _shell_quote(cwd))
 
 
 def _shell_quote(path):
@@ -357,14 +382,18 @@ def _login_wait(home, cwd):
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
-    print(_mcp_hint(home))
+    print(CODEX_MCP_LINE if _is_codex() else _mcp_hint(home))
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
         print(moved)
     if os.environ.get("RIUS_API_KEY"):
-        print("NOTE: RIUS_API_KEY is set in your environment and still wins "
-              "over this key for tracing. Unset it to trace with the new one. "
-              "The bundled MCP server uses the new key either way.")
+        print(ENV_KEY_WINS + ("" if _is_codex() else ENV_KEY_MCP))
+
+
+ENV_KEY_WINS = ("NOTE: RIUS_API_KEY is set in your environment and still wins "
+                "over this key for tracing. Unset it to trace with the new "
+                "one.")
+ENV_KEY_MCP = " The bundled MCP server uses the new key either way."
 
 
 def _in_org(creds):

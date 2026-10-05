@@ -83,7 +83,7 @@ def test_using_restores_the_previous_profile():
 def test_localize_rewords_commands_and_the_agent_name():
     text = "Run `/rius:login`, then restart Claude Code."
     assert agent.CLAUDE_CODE.localize(text) == text
-    assert agent.CODEX.localize(text) == "Run `$rius-login`, then restart Codex."
+    assert agent.CODEX.localize(text) == "Run `$rius:rius-login`, then restart Codex."
     assert agent.CURSOR.localize(text) == "Run `/rius-login`, then restart Cursor."
 
 
@@ -129,7 +129,9 @@ def test_codex_resource_attributes_use_its_prefix(codex, tmp_path,
     home = str(tmp_path / "home")
     config.write_path_rules(home, {"enabled_paths": ["/tmp"]})
     exporter.run("Stop", {"session_id": "s1", "cwd": "/tmp/proj",
-                          "transcript_path": str(fixtures_dir / "simple.jsonl")},
+                          "transcript_path": str(
+                              fixtures_dir / "codex"
+                              / "mock_tools_mcp_resume.jsonl")},
                  {"RIUS_API_KEY": "glassflow_k"}, home)
     assert sent and sent[0]["service.name"] == "codex"
     assert "codex.cwd" in sent[0] and "cc.cwd" not in sent[0]
@@ -191,7 +193,7 @@ def test_rius_ctl_speaks_the_agent_commands(monkeypatch, tmp_path, capsys):
     home = str(tmp_path / "home")
     rius_ctl.dispatch(["status", "--agent", "codex", "--cwd", "/tmp"], home)
     out = capsys.readouterr().out
-    assert "$rius-login" in out and "/rius:" not in out
+    assert "$rius:rius-login" in out and "/rius:" not in out
     assert agent.active() is agent.CLAUDE_CODE
 
 

@@ -7,6 +7,8 @@ encodes them unchanged. The tree:
       CHAIN  turn                     one per Codex turn id
         LLM  <model>                  one per token_count (one model call)
           TOOL  <tool>                function_call / custom_tool_call, by call_id
+            AGENT  <agent type>       a subagent, built from its own rollout
+              CHAIN  turn  ...        with a state of its own (new_subagent_state)
 
 Token counts are OpenAI's: `input_tokens` already includes the cached ones,
 which is what argus-core pricing expects, so it is sent as given with
@@ -33,9 +35,26 @@ DEFAULT_ROOT_NAME = "codex session"
 _EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
+SPAWN_TOOL = "multi_agent_v1__spawn_agent"
+
+
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
-            "session": {}, "model": "", "turn": None, "open_tools": {}}
+            "session": {}, "model": "", "turn": None, "open_tools": {},
+            "spawned": {}}
+
+
+def new_subagent_state(agent_id: str, agent_type: str,
+                       parent_span_id: str) -> dict:
+    """State for one subagent's rollout: its root hangs under the
+    spawn_agent call that started it, in the parent's trace."""
+    state = new_state()
+    state.update({"root_id": span_id_for("subagent:" + agent_id),
+                  "root_parent": parent_span_id,
+                  "root_name": agent_type or "subagent",
+                  "root_attrs": {"gen_ai.agent.name": agent_type,
+                                 "codex.subagent.id": agent_id}})
+    return state
 
 
 def _attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
@@ -45,8 +64,9 @@ def _attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     return attrs
 
 
-def _root_span_id(ctx: Ctx) -> str:
-    return span_id_for("session:" + ctx.conversation_id)
+def _root_span_id(state: dict, ctx: Ctx) -> str:
+    return (state.get("root_id")
+            or span_id_for("session:" + ctx.conversation_id))
 
 
 def _llm_span_id(turn: dict) -> str:
@@ -97,8 +117,9 @@ def _on_turn_start(rec, state, ctx, out):
     state["turn"] = {"turn_id": turn_id, "span_id": span_id_for("turn:" + turn_id),
                      "start_ns": rec.timestamp_ns, "text": "", "reply": "",
                      "llm_index": 0, "llm_start_ns": rec.timestamp_ns}
-    out.append(_pending(ctx, state["turn"]["span_id"], _root_span_id(ctx),
-                        "turn", "CHAIN", rec.timestamp_ns, {}))
+    out.append(_pending(ctx, state["turn"]["span_id"],
+                        _root_span_id(state, ctx), "turn", "CHAIN",
+                        rec.timestamp_ns, {}))
 
 
 def _on_user_message(rec, state, ctx, out):
@@ -204,6 +225,8 @@ def _on_tool_output(rec, state, ctx, out):
     if tool is None:
         return      # called before this session was traced
     output = rec.get("output")
+    if tool["tool_name"] == SPAWN_TOOL:
+        _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
     _content_attr(ctx, attrs, "input.value", tool["input_json"])
@@ -222,6 +245,16 @@ def _on_tool_output(rec, state, ctx, out):
                          tool["tool_name"], "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
                          "ERROR" if error_type else "OK", status_message, events))
+
+
+def _note_spawned(state: dict, tool: dict, output: str) -> None:
+    """spawn_agent answers with the new agent's id, which names its rollout."""
+    try:
+        agent_id = json.loads(output).get("agent_id")
+    except (ValueError, AttributeError):
+        return
+    if isinstance(agent_id, str) and agent_id:
+        state.setdefault("spawned", {})[agent_id] = tool["span_id"]
 
 
 def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
@@ -253,8 +286,8 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
             attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
         _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
     _content_attr(ctx, attrs, "input.value", turn["text"])
-    out.append(_finished(ctx, turn["span_id"], _root_span_id(ctx), "turn",
-                         "CHAIN", turn["start_ns"], end_ns, attrs))
+    out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
+                         "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
     state["turn"] = None
     return out
 
@@ -282,9 +315,26 @@ _NEEDS_TURN = {cr.USER_MESSAGE, cr.AGENT_MESSAGE, cr.USAGE, cr.TOOL_CALL,
                cr.TURN_END}
 
 
-def _root(ctx: Ctx, start_ns: int) -> Span:
-    return _pending(ctx, _root_span_id(ctx), None, DEFAULT_ROOT_NAME, "AGENT",
-                    start_ns, {})
+def _root_attrs(state: dict) -> Dict[str, Any]:
+    return {k: v for k, v in (state.get("root_attrs") or {}).items() if v}
+
+
+def _root(state: dict, ctx: Ctx, start_ns: int) -> Span:
+    return _pending(ctx, _root_span_id(state, ctx), state.get("root_parent"),
+                    state.get("root_name") or DEFAULT_ROOT_NAME, "AGENT",
+                    start_ns, _root_attrs(state))
+
+
+def _adopt_role(state: dict, records: List[Any]) -> None:
+    """A subagent's rollout names its role, which its hooks may not have
+    told us before its root span goes out."""
+    if not state.get("root_id"):
+        return
+    for rec in records:
+        if rec.kind == cr.SESSION and rec.get("agent_role"):
+            state["root_name"] = rec.get("agent_role")
+            state["root_attrs"]["gen_ai.agent.name"] = rec.get("agent_role")
+            return
 
 
 def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
@@ -293,9 +343,10 @@ def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
     if records:
         state["finalized"] = False
     if records and not state["root_started"]:
+        _adopt_role(state, records)
         state["root_started"] = True
         state["root_start_ns"] = records[0].timestamp_ns
-        out.append(_root(ctx, records[0].timestamp_ns))
+        out.append(_root(state, ctx, records[0].timestamp_ns))
     for rec in records:
         if rec.kind in _NEEDS_TURN and state["turn"] is None:
             continue
@@ -311,9 +362,13 @@ def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     state["finalized"] = True
     if not state["root_started"]:
         return out
-    out.append(_finished(ctx, _root_span_id(ctx), None, DEFAULT_ROOT_NAME,
+    attrs = _attrs(ctx, "AGENT")
+    attrs.update(_root_attrs(state))
+    out.append(_finished(ctx, _root_span_id(state, ctx),
+                         state.get("root_parent"),
+                         state.get("root_name") or DEFAULT_ROOT_NAME,
                          "AGENT", state["root_start_ns"] or now_ns, now_ns,
-                         _attrs(ctx, "AGENT")))
+                         attrs))
     return out
 
 
