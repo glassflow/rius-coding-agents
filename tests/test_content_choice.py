@@ -133,8 +133,7 @@ def test_the_env_lowering_a_legacy_rule_needs_no_notice(home):
 
 def _grants(command_file):
     head = command_file.read_text().split("---")[1]
-    line = next(l for l in head.splitlines() if l.startswith("allowed-tools:"))
-    return re.findall(r"Bash\(([^)]*)\)", line)
+    return re.findall(r"Bash\(([^)]*)\)", head)
 
 
 @pytest.mark.parametrize("name", ["enable-here", "enable-content-here"])
@@ -143,7 +142,7 @@ def test_the_model_cannot_invoke_either_enable_command(name):
     assert "disable-model-invocation: true" in head.splitlines()
 
 
-CONTENT_CALL = "bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh content-on-here --cwd /p"
+CONTENT_CALL = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" content-on-here --cwd /p'
 
 
 @pytest.mark.parametrize("command_file", sorted(
@@ -152,13 +151,15 @@ def test_no_other_command_s_grant_reaches_the_content_subcommand(command_file):
     """A grant is a prefix (`...:*`). During any other command's turn, a
     prompt-injected model must not be pre-approved to turn content on."""
     for grant in _grants(command_file):
-        assert grant.endswith(":*"), grant
-        assert not CONTENT_CALL.startswith(grant[:-2]), (command_file.name, grant)
+        if grant.endswith(":*"):
+            assert not CONTENT_CALL.startswith(grant[:-2]), (command_file.name, grant)
+        else:
+            assert "content-on-here" not in grant, (command_file.name, grant)
 
 
 def test_the_content_command_is_granted_only_its_own_subcommand():
     assert _grants(ROOT / "commands" / "enable-content-here.md") == [
-        "bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh content-on-here:*"]
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" content-on-here:*']
 
 
 @pytest.mark.parametrize("flag", ["--with-content", "--content", "-c"])

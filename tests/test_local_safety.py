@@ -229,7 +229,7 @@ def test_ctl_refuses_a_path_shaped_session_id(tmp_path):
     (home / ".claude" / "rius").mkdir(parents=True)
     r = _run_ctl(["on", "--session", "../../escaped"], str(home))
     assert r.returncode == 0
-    assert "not a session id" in r.stdout
+    assert "is not accepted" in r.stdout and "Nothing was changed" in r.stdout
     assert not (home / ".claude" / "escaped").exists()
     assert os.listdir(str(home / ".claude")) == ["rius"]
 

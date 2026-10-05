@@ -1,7 +1,7 @@
 ---
 description: Trace this folder and everything under it with Rius, structure only
 disable-model-invocation: true
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh enable-here:*)
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" enable-here:*)
 ---
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" enable-here --cwd "$PWD"`

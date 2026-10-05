@@ -5,6 +5,11 @@ Actions: on | off | clear | enable-here | content-on-here | disable-here |
          status | login | login-wait | logout | use-key
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
          --agent <claude-code|codex|cursor> (default claude-code)
+         `-- '<typed text>'`: what the user typed after a slash command
+
+Each action takes only the flags ACTION_FLAGS lists, with values
+FLAG_VALUES accepts; anything else is refused before the action runs.
+`--agent` is taken off first, and only before `--`.
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
 to run without an explicit `--session`: guessing the session (from the most
@@ -22,6 +27,7 @@ prints usage.
 import contextlib
 import io
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,19 +71,104 @@ def _no_session_message(action):
     return NO_SESSION_MESSAGE % action + hint
 
 
+class ArgumentError(Exception):
+    """An argument outside the whitelist. Nothing runs when one is raised."""
+
+
+def _is_session_id(value):
+    return re.fullmatch(r"[A-Za-z0-9_-]*", value) is not None
+
+
+def _is_folder(value):
+    return bool(value) and not value.startswith("-") and "\0" not in value
+
+
+# Every flag any action takes, with what its value must look like. A new
+# flag is one entry here plus its name in ACTION_FLAGS.
+FLAG_VALUES = {
+    "--session": ("a session id (letters, digits, - and _)", _is_session_id),
+    "--cwd": ("a folder path", _is_folder),
+    "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
+}
+ACTION_FLAGS = {
+    "on": ("--session", "--cwd"),
+    "off": ("--session", "--cwd"),
+    "clear": ("--session", "--cwd"),
+    "status": ("--session", "--cwd"),
+    "enable-here": ("--cwd",),
+    "content-on-here": ("--cwd",),
+    "disable-here": ("--cwd",),
+    "login": ("--cwd", "--env"),
+    "login-wait": ("--cwd",),
+    "logout": ("--cwd",),
+    "use-key": ("--cwd", "--env"),
+}
+# What a person may type after a slash command, e.g. `/rius:login --env
+# staging`. The command file passes that text as ONE quoted word after `--`,
+# so the shell never interprets it; it is split and checked here.
+TYPED_FLAGS = ("--env",)
+
+
 def _parse_args(argv):
+    """Return (action, {flag: value}); raise ArgumentError on anything else."""
     # No action (just the flags) means `status`.
-    has_action = bool(argv) and not argv[0].startswith("--")
+    has_action = bool(argv) and not argv[0].startswith("-")
     action = argv[0] if has_action else "status"
-    flags = {"--session": None, "--cwd": None, "--env": None}
-    i = 1 if has_action else 0
-    while i < len(argv):
-        if argv[i] in flags and i + 1 < len(argv):
-            flags[argv[i]] = argv[i + 1]
-            i += 2
-        else:
-            i += 1
-    return action, flags["--session"], flags["--cwd"], flags["--env"]
+    if action not in ACTION_FLAGS:
+        return action, {}
+    passed, typed = _split_typed(argv[1:] if has_action else argv)
+    allowed = ACTION_FLAGS[action]
+    flags = _read_flags(action, passed, allowed)
+    typed_flags = _read_flags(action, typed,
+                              [f for f in allowed if f in TYPED_FLAGS])
+    for flag in typed_flags:
+        if flag in flags:
+            raise ArgumentError("Rius: `%s` was given twice." % flag)
+    flags.update(typed_flags)
+    return action, flags
+
+
+def _split_typed(args):
+    if "--" not in args:
+        return args, []
+    cut = args.index("--")
+    return args[:cut], " ".join(args[cut + 1:]).split()
+
+
+def _read_flags(action, tokens, allowed):
+    flags = {}
+    for i in range(0, len(tokens), 2):
+        flag = tokens[i]
+        if flag not in allowed:
+            raise ArgumentError(_not_accepted(action, flag, allowed))
+        if flag in flags:
+            raise ArgumentError("Rius: `%s` was given twice." % flag)
+        flags[flag] = _flag_value(flag, tokens[i + 1:i + 2])
+    return flags
+
+
+def _flag_value(flag, rest):
+    wanted, accepts = FLAG_VALUES[flag]
+    if not rest:
+        raise ArgumentError("Rius: `%s` needs a value: %s." % (flag, wanted))
+    if not accepts(rest[0]):
+        raise ArgumentError("Rius: `%s %s` is not accepted. %s takes %s."
+                            % (flag, rest[0], flag, wanted))
+    return rest[0]
+
+
+# enable-here only ever sends structure: content is its own subcommand, so
+# a grant for this one can never reach it.
+CONTENT_IS_ITS_OWN_COMMAND = (" To send content from this folder, run "
+                              "/rius:enable-content-here.")
+
+
+def _not_accepted(action, flag, allowed):
+    takes = ("only " + ", ".join("`%s`" % f for f in allowed) if allowed
+             else "no arguments")
+    hint = CONTENT_IS_ITS_OWN_COMMAND if action == "enable-here" else ""
+    return ("Rius: `%s` does not accept `%s`; it takes %s.%s"
+            % (action, flag, takes, hint))
 
 
 def _most_recent_session(home):
@@ -159,21 +250,6 @@ def _holds_home(folder, home):
     folder = _normalised(folder)
     home = _normalised(config.resolved(home))
     return home == folder or home.startswith(folder.rstrip(os.sep) + os.sep)
-
-
-CONTENT_FLAG_REFUSED = ("Not changed: /rius:enable-here only sends structure. "
-                        "To send content from this folder, run "
-                        "/rius:enable-content-here.")
-
-
-def _enable_here_structure_only(argv, cwd, home):
-    """Content is a separate subcommand, so a grant for this one can never
-    reach it: any other flag is refused rather than interpreted."""
-    flags = [arg for arg in argv if arg.startswith("-")]
-    if any(flag not in ("--cwd", "--session") for flag in flags):
-        print(CONTENT_FLAG_REFUSED)
-        return
-    _enable_here(cwd, home, False)
 
 
 def _enable_here(cwd, home, with_content):
@@ -396,6 +472,11 @@ def _tracing_sign_in_line(cfg, creds):
     return "Tracing: not signed in; run /rius:login"
 
 
+# Only a marker: commands/login.md names the fixed command that waits, so
+# Claude never runs a command it read from this output.
+LOGIN_PENDING = "RIUS_LOGIN_PENDING: sign-in is not finished yet."
+
+
 def _login(home, cwd, env_flag=None):
     print(login.DISCLOSURE)
     print()
@@ -405,26 +486,10 @@ def _login(home, cwd, env_flag=None):
         print("Environment: %s (%s)"
               % (env_name, login.ENVIRONMENTS[env_name]["console_url"]))
     _open_browser(pending["connect_url"])
-    print(_pending_line(cwd))
+    print(LOGIN_PENDING)
     print("Open:  %s" % pending["connect_url"])
     print("Code:  %s" % pending["user_code"])
     print("Check that the browser shows the same code, then pick a workspace.")
-
-
-_CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
-
-
-def _pending_line(cwd):
-    return "RIUS_LOGIN_PENDING: bash %s login-wait --cwd %s" % (
-        _shell_quote(_CTL_SH), _shell_quote(cwd))
-
-
-def _shell_quote(path):
-    # Unquoted when safe, so the command matches the `allowed-tools` pattern
-    # in commands/login.md and runs without a permission prompt.
-    if all(c.isalnum() or c in "/._-~" for c in path):
-        return path
-    return "'" + path.replace("'", "'\\''") + "'"
 
 
 def _open_browser(url):
@@ -440,7 +505,7 @@ def _login_wait(home, cwd):
     creds = login.wait(home)
     if creds is None:
         print("Still waiting for approval in the browser.")
-        print(_pending_line(cwd))
+        print(LOGIN_PENDING)
         return
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
@@ -531,7 +596,13 @@ def _localized_stdout(profile):
 
 
 def _dispatch(argv, home):
-    action, session_id, cwd, env_flag = _parse_args(argv)
+    try:
+        action, flags = _parse_args(argv)
+    except ArgumentError as exc:
+        print("%s Nothing was changed." % exc)
+        return
+    session_id, cwd = flags.get("--session"), flags.get("--cwd")
+    env_flag = flags.get("--env")
 
     if action in ("login", "login-wait", "logout", "use-key"):
         _run_account_action(action, home, cwd, env_flag)
@@ -561,7 +632,7 @@ def _dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        _enable_here_structure_only(argv, cwd or os.getcwd(), home)
+        _enable_here(cwd or os.getcwd(), home, False)
     elif action == "content-on-here":
         _enable_here(cwd or os.getcwd(), home, True)
     elif action == "disable-here":

@@ -226,3 +226,8 @@ def test_launcher_breadcrumb_lands_in_the_agent_home(tmp_path):
     assert r.returncode == 0 and r.stdout == ""
     crumb = codex_home / "rius" / "log" / "bootstrap.log"
     assert 'rius hook "Stop"' in crumb.read_text()
+
+
+def test_typed_text_after_the_separator_never_picks_the_agent():
+    argv = ["login", "--cwd", "/p", "--", "--agent", "codex"]
+    assert agent.split_flag(argv) == ("claude-code", argv)

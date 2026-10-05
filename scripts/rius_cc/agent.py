@@ -129,9 +129,11 @@ def select(name: str, env: Mapping[str, str]) -> AgentProfile:
 
 
 def split_flag(argv: List[str]) -> Tuple[str, List[str]]:
-    """(agent name, argv without `--agent <name>`)."""
+    """(agent name, argv without `--agent <name>`). Anything after `--` is
+    text a person typed, never this flag."""
     rest = list(argv)
-    if FLAG not in rest:
+    end = rest.index("--") if "--" in rest else len(rest)
+    if FLAG not in rest[:end]:
         return CLAUDE_CODE.name, rest
     i = rest.index(FLAG)
     if i + 1 >= len(rest):

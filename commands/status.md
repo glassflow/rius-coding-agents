@@ -1,8 +1,9 @@
 ---
 description: Show whether Rius is tracing this folder, and why
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh status:*)
+disable-model-invocation: true
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" status:*)
 ---
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" status --session ${CLAUDE_SESSION_ID} $ARGUMENTS --cwd "$PWD"`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" status --session ${CLAUDE_SESSION_ID} --cwd "$PWD"`
 
 Report the output above to the user verbatim. Do not add interpretation.
