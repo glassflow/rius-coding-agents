@@ -15,7 +15,8 @@ from typing import Mapping
 # Run with -I, which leaves this script's own folder off sys.path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import (agent, config, continuation, log as rius_log, otlp,  # noqa: E402
+from rius_cc import (agent, config, continuation, log as rius_log,  # noqa: E402
+                     notice, otlp,
                      platform_compat, spans, state, subagents, transcript)
 
 
@@ -52,6 +53,9 @@ def _export_error_reason(status: int) -> str:
     if status == 404:
         return ("no OTLP receiver at that URL (HTTP 404) -- run /rius:login "
                 "again")
+    if status == notice.REFUSED_STATUS:
+        return ("the workspace is not accepting data (HTTP 402: trial ended, "
+                "billing locked or workspace paused) -- open the console")
     if status == 429:
         return "rate limited (HTTP 429)"
     if 400 <= status < 500:
@@ -119,6 +123,7 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     """
     reason = _export_error_reason(status)
     permanent = _is_permanent(status)
+    notice.record_refusal(home, cfg, status)
 
     if permanent:
         # Dropping the batch: keep the built state, whose offset now moves
@@ -195,6 +200,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
         st["spans_exported"] = st.get("spans_exported", 0) + len(out)
         st["consecutive_export_failures"] = 0
         st.pop("last_export_error", None)
+        notice.clear_refusal(home)
 
     st["offset"] = new_offset
     state.save(session_id, home, st)

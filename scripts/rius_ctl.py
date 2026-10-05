@@ -33,7 +33,7 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, config, login, platform_compat, state  # noqa: E402
+from rius_cc import agent, config, login, notice, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -348,6 +348,8 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Reason: %s" % cfg.reason)
     for note in cfg.ignored_env:
         print(note)
+    if notice.is_refused(home, cfg):
+        print(notice.REFUSED)
     if stopped:
         print(STOPPED_NOTE)
     print(_cwd_line(typed_cwd))

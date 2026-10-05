@@ -68,6 +68,18 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
     `RIUS_SERVICE_NAME` must be a short plain name.
   - `/rius:status` prints one line for each setting that is ignored, and
     the session's start logs it in `~/.claude/rius/log/`. (#37)
+- Each session now starts with one short line saying whether Rius is
+  tracing it, and to which workspace, with content on or off. A folder you
+  enabled before signing in says to run `/rius:login`. Right after
+  install, Rius says once how to get started, then stays quiet until you
+  opt in. It is a status line for you, with no instructions for Claude, and
+  a resumed or compacted session sees it again only if it changed. A
+  session that stopped tracing when its folder was disabled is not told it
+  is tracing.
+- When the backend refuses data because the trial ended or the workspace is
+  locked or paused (HTTP 402), the plugin used to drop it without a word.
+  Now the next session and `/rius:status` say so. The notice clears after
+  the next successful export.
 
 ## 0.4.5 (2026-10-01)
 
