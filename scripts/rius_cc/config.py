@@ -33,6 +33,7 @@ _GLOB_RE = re.compile(r"[*?\[]")
 STORED_KEY_SOURCE = "/rius:login"
 
 _NO_KEY = "no API key: run `/rius:login`"
+NO_RULE_REASON = "off: no path rule matches "
 _UNTRUSTED_ENDPOINT = ("no API key: the stored key's server %s is not a Rius "
                        "server, so it is never sent there; run `/rius:login`")
 
@@ -413,7 +414,7 @@ def _enabled(session_id: str, cwd: str, env: Mapping[str, str], home: str):
     path_decision, path_reason = _path_rules_decision(cwd, home)
     if path_decision is not None:
         return path_decision, path_reason
-    return False, "off: no path rule matches %s, and the default is off" % cwd
+    return False, NO_RULE_REASON + "%s, and the default is off" % cwd
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:

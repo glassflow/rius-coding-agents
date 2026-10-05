@@ -39,7 +39,8 @@ USAGE = (
     "Usage: rius_ctl.py "
     "<on|off|clear|enable-here|content-on-here|disable-here|status|login|"
     "login-wait|logout|use-key> "
-    "[--session <id>] [--cwd <path>] [--env <production|staging>]"
+    "[--session <id>] [--cwd <path>] [--env <production|staging>] "
+    "[--debug] (status only)"
 )
 
 # Actions that WRITE a per-session override. These must never guess which
@@ -91,11 +92,13 @@ FLAG_VALUES = {
     "--cwd": ("a folder path", _is_folder),
     "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
 }
+# Flags that take no value.
+SWITCHES = ("--debug",)
 ACTION_FLAGS = {
     "on": ("--session", "--cwd"),
     "off": ("--session", "--cwd"),
     "clear": ("--session", "--cwd"),
-    "status": ("--session", "--cwd"),
+    "status": ("--session", "--cwd", "--debug"),
     "enable-here": ("--cwd",),
     "content-on-here": ("--cwd",),
     "disable-here": ("--cwd",),
@@ -138,13 +141,19 @@ def _split_typed(args):
 
 def _read_flags(action, tokens, allowed):
     flags = {}
-    for i in range(0, len(tokens), 2):
+    i = 0
+    while i < len(tokens):
         flag = tokens[i]
         if flag not in allowed:
             raise ArgumentError(_not_accepted(action, flag, allowed))
         if flag in flags:
             raise ArgumentError("Rius: `%s` was given twice." % flag)
+        if flag in SWITCHES:
+            flags[flag] = True
+            i += 1
+            continue
         flags[flag] = _flag_value(flag, tokens[i + 1:i + 2])
+        i += 2
     return flags
 
 
@@ -336,7 +345,22 @@ STOPPED_NOTE = ("Stopped: this session stopped tracing when its folder was "
                 "again. New sessions in this folder are traced as usual.")
 
 
-def _print_status(session_id, cwd, home, inferred=False):
+SIGN_IN_NEXT = "Next: run /rius:login, then /rius:enable-here in a project"
+ENABLE_NEXT = ("Next: run /rius:enable-here (or /rius:enable-content-here to "
+               "include content)")
+
+
+def _reason_lines(cfg):
+    """The reason, or the one step that turns tracing on when it is simply
+    not set up yet."""
+    if not cfg.reason.startswith(config.NO_RULE_REASON):
+        return ["Reason: %s" % cfg.reason]
+    if not cfg.api_key:
+        return [SIGN_IN_NEXT]
+    return ["Reason: %s" % cfg.reason, ENABLE_NEXT]
+
+
+def _print_status(session_id, cwd, home, inferred=False, debug=False):
     # Decide for the folder the hooks are handed, not the shell's spelling.
     typed_cwd = cwd
     cwd = config.resolved(cwd) if cwd else cwd
@@ -345,7 +369,8 @@ def _print_status(session_id, cwd, home, inferred=False):
     # without this the rules would say "on" for a session that sends nothing.
     stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
     print("Rius tracing: %s" % ("on" if cfg.enabled and not stopped else "off"))
-    print("Reason: %s" % cfg.reason)
+    for line in _reason_lines(cfg):
+        print(line)
     for note in cfg.ignored_env:
         print(note)
     if notice.is_refused(home, cfg):
@@ -361,7 +386,8 @@ def _print_status(session_id, cwd, home, inferred=False):
               "this machine, not necessarily this one)" % session_id)
     else:
         print("session: %s" % session_id)
-    print("Platform: %s" % platform_compat.describe())
+    if debug or cfg.debug:
+        print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
     creds = login.read_credentials(home)
     print(_tracing_sign_in_line(cfg, creds))
@@ -663,7 +689,8 @@ def _dispatch(argv, home):
     elif action == "disable-here":
         _disable_here(cwd or os.getcwd(), home)
     elif action == "status":
-        _print_status(session_id, cwd, home, inferred=inferred)
+        _print_status(session_id, cwd, home, inferred=inferred,
+                      debug=bool(flags.get("--debug")))
     else:
         print(USAGE)
 

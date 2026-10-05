@@ -852,3 +852,41 @@ def test_status_in_a_folder_that_is_off_gives_no_hook_hint(tmp_path):
     r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: off" in r.stdout
     assert NO_HOOK_HINT not in r.stdout
+
+
+# --- status: the next step, and debug-only platform details -------------------
+
+def test_status_signed_out_gives_one_next_step(tmp_path):
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], _fresh_home(tmp_path))
+    assert "Next: run /rius:login, then /rius:enable-here in a project" in r.stdout
+    assert "Reason:" not in r.stdout and "also no API key" not in r.stdout
+
+
+def test_status_signed_in_but_not_enabled_says_to_enable(tmp_path):
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], _signed_in_home(tmp_path))
+    assert ("Next: run /rius:enable-here (or /rius:enable-content-here to "
+            "include content)") in r.stdout
+
+
+def test_status_enabled_has_no_next_step(tmp_path):
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
+    assert "Rius tracing: on" in r.stdout and "Next:" not in r.stdout
+
+
+def test_status_shows_the_platform_only_in_debug(tmp_path):
+    home = _fresh_home(tmp_path)
+    plain = _run(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "Platform:" not in plain.stdout
+    flag = _run(["status", "--session", "s1", "--cwd", "/x", "--debug"], home)
+    assert "Platform:" in flag.stdout and "locking:" in flag.stdout
+    env = _run(["status", "--session", "s1", "--cwd", "/x"], home,
+               {"RIUS_CLAUDE_DEBUG": "1"})
+    assert "Platform:" in env.stdout
+
+
+def test_debug_takes_no_value_and_only_on_status(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["enable-here", "--cwd", "/opt/proj", "--debug"], home)
+    assert "does not accept `--debug`" in r.stdout

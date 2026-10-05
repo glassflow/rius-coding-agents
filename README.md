@@ -270,6 +270,7 @@ by printing not just on/off but **which layer decided it** -- for example:
 ```
 Rius tracing: off
 Reason: off: no path rule matches /Users/you/some/repo, and the default is off
+Next: run /rius:enable-here (or /rius:enable-content-here to include content)
 ```
 
 versus
