@@ -102,9 +102,12 @@ def main() -> None:
             return
 
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rius_cc import config, continuation, platform_compat, state
+        from rius_cc import (config, continuation, foreign_agent,
+                             platform_compat, state)
 
         home = platform_compat.home_dir(os.environ)
+        if foreign_agent.is_foreign(payload, os.environ, home):
+            return
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)

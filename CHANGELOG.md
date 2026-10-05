@@ -4,6 +4,17 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.4.6 (2026-10-05)
+
+- Cursor and Codex can run Claude Code plugin hooks: Cursor does so by
+  default through its third-party compatibility setting, and Codex installs
+  this plugin from the same marketplace. Their sessions no longer show up
+  as empty "claude-code session" traces with a heartbeat. The hook now
+  ignores a payload that carries Cursor's `cursor_version` or
+  `conversation_id`, that runs with `CURSOR_VERSION` set, or whose
+  transcript is a Codex `rollout-*.jsonl` or lies under `CODEX_HOME`
+  (`~/.codex` by default).
+
 ## 0.4.5 (2026-10-01)
 
 - A session that is killed or crashes, and so never sends SessionEnd, no
