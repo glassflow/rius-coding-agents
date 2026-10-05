@@ -33,6 +33,7 @@ import json
 import os
 from typing import Any, List, Optional, Set, Tuple
 
+from . import agent
 from . import state as state_mod
 from . import transcript
 
@@ -208,7 +209,7 @@ def link(session_id: str, transcript_path: str, home: str,
 def _was_traced(session_id: str, home: str) -> bool:
     """Whether the old id has state: a conversation never traced has
     nothing to take over, and looking must not create its files."""
-    return os.path.exists(os.path.join(home, ".claude", "rius", "state",
+    return os.path.exists(os.path.join(agent.active().state_dir(home),
                                        session_id + ".json"))
 
 

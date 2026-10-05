@@ -11,11 +11,11 @@ from __future__ import annotations
 import datetime
 import os
 
-from . import config
+from . import agent, config
 
 
 def log_dir(home: str) -> str:
-    return os.path.join(home, ".claude", "rius", "log")
+    return agent.active().log_dir(home)
 
 
 def write(home: str, cfg, message: str, force: bool = False) -> None:

@@ -26,11 +26,12 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-from rius_cc import platform_compat
+from rius_cc import agent, platform_compat
 
-# `wait` runs under Claude Code's Bash tool, which kills a command after ten
-# minutes. Returning before that leaves the pending link on disk so a second
-# `wait` can pick it up, instead of being killed mid-poll.
+# `wait` runs under the agent's shell tool, which kills a command after a
+# while (ten minutes for Claude Code's Bash). Returning before that leaves the
+# pending link on disk so a second `wait` can pick it up, instead of being
+# killed mid-poll. Each agent's profile may only lower this ceiling.
 WAIT_BUDGET_SECONDS = 540
 MAX_BACKOFF_SECONDS = 60
 # The sign-in host rate-limits per IP, whatever interval the server names.
@@ -134,7 +135,7 @@ def _detail(body: dict) -> str:
 # --- Files ------------------------------------------------------------------
 
 def _rius_dir(home: str) -> str:
-    return os.path.join(home, ".claude", "rius")
+    return agent.active().rius_dir(home)
 
 
 def pending_path(home: str) -> str:
@@ -235,7 +236,7 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
     _require_known(env_name)
     url = _link_base(env_name) + "/v1/agent-links"
     try:
-        status, body = post(url, {"client_name": socket.gethostname()[:64]})
+        status, body = _create_link(url, post, agent.active())
     except _NETWORK_ERRORS as exc:
         raise LoginError("Could not reach Rius to start the sign-in (%s)." % exc)
     if not _is_success(status):
@@ -256,6 +257,19 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
     }
     _write_private(pending_path(home), pending)
     return pending
+
+
+def _create_link(url: str, post: Callable, profile):
+    """Claude Code sends only `client_name`. Other agents name themselves,
+    and fall back to `client_name` alone when the control plane predates
+    the `agent` field and rejects it as unknown (422)."""
+    named = {"client_name": socket.gethostname()[:64]}
+    if not profile.sends_agent_on_link:
+        return post(url, named)
+    status, body = post(url, dict(named, agent=profile.name))
+    if status == 422:
+        return post(url, named)
+    return status, body
 
 
 # --- Polling ----------------------------------------------------------------
@@ -285,7 +299,7 @@ def poll_for_key(pending: dict, post: Callable = post_json,
     `is_current` says a newer link replaced it."""
     url = _link_base(pending["env"]) + "/v1/agent-links/token"
     if budget is None:
-        budget = WAIT_BUDGET_SECONDS
+        budget = min(WAIT_BUDGET_SECONDS, agent.active().login_wait_budget)
     give_up_at = min(now() + budget, pending["expires_at"])
     failures = 0
     while now() < give_up_at:

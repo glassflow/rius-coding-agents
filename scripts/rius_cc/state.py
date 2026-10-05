@@ -17,7 +17,7 @@ import os
 import tempfile
 import time
 
-from . import platform_compat
+from . import agent, platform_compat
 
 RETRY_INTERVAL_S = 0.05
 OPEN_MARKER_SUFFIX = ".open"
@@ -55,7 +55,7 @@ def new_state() -> dict:
 
 
 def state_dir(home: str) -> str:
-    d = os.path.join(home, ".claude", "rius", "state")
+    d = agent.active().state_dir(home)
     os.makedirs(d, exist_ok=True)
     return d
 

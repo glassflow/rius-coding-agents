@@ -27,6 +27,8 @@ import subprocess
 import sys
 import time
 
+from . import agent
+
 IS_WINDOWS = sys.platform.startswith("win")
 
 # --- Win32 constants (winnt.h / winbase.h / tlhelp32.h) ---------------------
@@ -134,7 +136,7 @@ def _warn_once(key: str, message: str) -> None:
         import datetime
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        d = os.path.join(home_dir(), ".claude", "rius", "log")
+        d = agent.active().log_dir(home_dir())
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, now.strftime("%Y-%m-%d") + ".log")
         with open(path, "a") as fh:
