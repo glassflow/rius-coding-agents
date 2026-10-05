@@ -2,6 +2,7 @@
 default is structure only."""
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -46,26 +47,26 @@ def test_enable_here_alone_chooses_structure_only(home):
 
 
 def test_with_content_is_stored_for_that_folder(home):
-    _ctl(["enable-here", "--with-content", "--cwd", "/opt/proj"], home)
+    _ctl(["content-on-here", "--cwd", "/opt/proj"], home)
     assert _rules(home)[config.CONTENT_CHOICES_KEY] == {"/opt/proj": True}
     assert _capture(home) is True
 
 
 def test_enabling_again_without_the_flag_goes_back_to_structure(home):
-    _ctl(["enable-here", "--with-content", "--cwd", "/opt/proj"], home)
+    _ctl(["content-on-here", "--cwd", "/opt/proj"], home)
     _ctl(["enable-here", "--cwd", "/opt/proj"], home)
     assert _capture(home) is False
 
 
 def test_each_folder_keeps_its_own_choice(home):
-    _ctl(["enable-here", "--with-content", "--cwd", "/opt/a"], home)
+    _ctl(["content-on-here", "--cwd", "/opt/a"], home)
     _ctl(["enable-here", "--cwd", "/opt/b"], home)
     assert _capture(home, "/opt/a/x") is True
     assert _capture(home, "/opt/b/x") is False
 
 
 def test_disabling_a_folder_drops_its_choice(home):
-    _ctl(["enable-here", "--with-content", "--cwd", "/opt/proj"], home)
+    _ctl(["content-on-here", "--cwd", "/opt/proj"], home)
     _ctl(["disable-here", "--cwd", "/opt/proj"], home)
     assert config.CONTENT_CHOICES_KEY not in _rules(home)
 
@@ -95,7 +96,7 @@ def test_status_suggests_picking_for_a_rule_without_a_choice(home):
     out = _ctl(["status", "--session", "s1", "--cwd", "/opt/proj"], home).stdout
     assert ("Rule `/opt/proj` predates the content choice, so it still sends "
             "content. Pick one: /rius:enable-here (structure only, "
-            "recommended) or /rius:enable-here --with-content.") in out.splitlines()
+            "recommended) or /rius:enable-content-here.") in out.splitlines()
     assert "Content: prompts, replies, file contents and command output" in out
 
 
@@ -116,7 +117,7 @@ def test_the_env_cannot_raise_capture_above_the_folder_s_choice(home):
 
 
 def test_the_env_can_lower_a_folder_that_chose_content(home):
-    _ctl(["enable-here", "--with-content", "--cwd", "/opt/proj"], home)
+    _ctl(["content-on-here", "--cwd", "/opt/proj"], home)
     c = config.resolve("s1", "/opt/proj", {"RIUS_CAPTURE_CONTENT": "false"}, home)
     assert c.capture_content is False
     assert c.ignored_env == []
@@ -130,6 +131,38 @@ def test_the_env_lowering_a_legacy_rule_needs_no_notice(home):
 
 # --- only the user can choose content -----------------------------------------
 
-def test_the_model_cannot_invoke_enable_here():
-    head = (ROOT / "commands" / "enable-here.md").read_text().split("---")[1]
+def _grants(command_file):
+    head = command_file.read_text().split("---")[1]
+    line = next(l for l in head.splitlines() if l.startswith("allowed-tools:"))
+    return re.findall(r"Bash\(([^)]*)\)", line)
+
+
+@pytest.mark.parametrize("name", ["enable-here", "enable-content-here"])
+def test_the_model_cannot_invoke_either_enable_command(name):
+    head = (ROOT / "commands" / (name + ".md")).read_text().split("---")[1]
     assert "disable-model-invocation: true" in head.splitlines()
+
+
+CONTENT_CALL = "bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh content-on-here --cwd /p"
+
+
+@pytest.mark.parametrize("command_file", sorted(
+    p for p in (ROOT / "commands").glob("*.md") if p.stem != "enable-content-here"))
+def test_no_other_command_s_grant_reaches_the_content_subcommand(command_file):
+    """A grant is a prefix (`...:*`). During any other command's turn, a
+    prompt-injected model must not be pre-approved to turn content on."""
+    for grant in _grants(command_file):
+        assert grant.endswith(":*"), grant
+        assert not CONTENT_CALL.startswith(grant[:-2]), (command_file.name, grant)
+
+
+def test_the_content_command_is_granted_only_its_own_subcommand():
+    assert _grants(ROOT / "commands" / "enable-content-here.md") == [
+        "bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh content-on-here:*"]
+
+
+@pytest.mark.parametrize("flag", ["--with-content", "--content", "-c"])
+def test_enable_here_refuses_any_content_flag(home, flag):
+    r = _ctl(["enable-here", flag, "--cwd", "/opt/proj"], home)
+    assert "/rius:enable-content-here" in r.stdout
+    assert config.read_path_rules(home) == {}

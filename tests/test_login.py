@@ -554,9 +554,9 @@ def test_login_prints_the_disclosure_url_and_code_but_not_the_device_code(
     assert login.DISCLOSURE == (
         "Folders you enable send their session structure (models, tokens, "
         "timing) to the workspace you pick, and prompts, replies, file "
-        "contents and command output only where you enable with "
-        "--with-content. Everyone with access to that workspace, including "
-        "its admins, can read them.")
+        "contents and command output only from folders you enable with "
+        "/rius:enable-content-here. Everyone with access to that workspace, "
+        "including its admins, can read them.")
     assert "Open:  " + LINK_RESPONSE["connect_url"] in out
     assert "Code:  ABCD-EFGH" in out
     assert "RIUS_LOGIN_PENDING: bash " in out

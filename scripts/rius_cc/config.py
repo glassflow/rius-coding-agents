@@ -44,7 +44,7 @@ IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
 IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
                   "/rius:enable-here to trace a folder")
 IGNORED_CAPTURE = ("RIUS_CAPTURE_CONTENT=true is set but ignored; run "
-                   "/rius:enable-here --with-content to send content here")
+                   "/rius:enable-content-here to send content here")
 
 # Per enable rule in config.json: whether that folder sends content. A rule
 # written before the choice existed has no entry, and keeps sending it.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CLI backing the /rius:* slash commands (one command file per action).
 
-Actions: on | off | clear | enable-here | disable-here | status | login |
-         login-wait | logout | use-key
+Actions: on | off | clear | enable-here | content-on-here | disable-here |
+         status | login | login-wait | logout | use-key
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
@@ -27,7 +27,8 @@ from rius_cc import config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout|use-key> "
+    "<on|off|clear|enable-here|content-on-here|disable-here|status|login|"
+    "login-wait|logout|use-key> "
     "[--session <id>] [--cwd <path>] [--env <production|staging>]"
 )
 
@@ -141,6 +142,21 @@ TOO_BROAD = ("Not changed: `%s` is too broad for a rule (the filesystem or a "
              "drive root, or a *, ? or [ right below it).")
 
 
+CONTENT_FLAG_REFUSED = ("Not changed: /rius:enable-here only sends structure. "
+                        "To send content from this folder, run "
+                        "/rius:enable-content-here.")
+
+
+def _enable_here_structure_only(argv, cwd, home):
+    """Content is a separate subcommand, so a grant for this one can never
+    reach it: any other flag is refused rather than interpreted."""
+    flags = [arg for arg in argv if arg.startswith("-")]
+    if any(flag not in ("--cwd", "--session") for flag in flags):
+        print(CONTENT_FLAG_REFUSED)
+        return
+    _enable_here(cwd, home, False)
+
+
 def _enable_here(cwd, home, with_content):
     cwd = config.resolved(cwd)
     if not config.is_usable_rule(cwd):
@@ -163,7 +179,7 @@ SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing, "
 STOP_WITH_CONTENT = ("Run /rius:enable-here to send structure only, or "
                      "/rius:disable-here to stop.")
 STOP_WITHOUT_CONTENT = ("Structure only is recommended. To include content "
-                        "for this folder, run /rius:enable-here --with-content. "
+                        "for this folder, run /rius:enable-content-here. "
                         "Run /rius:disable-here to stop.")
 ENV_KEEPS_CONTENT_OFF = ("RIUS_CAPTURE_CONTENT=false in your environment keeps "
                          "content off here.")
@@ -283,7 +299,7 @@ CONTENT_ON = "Content: prompts, replies, file contents and command output"
 CONTENT_OFF = "Content: none (structure only)"
 UNCHOSEN_RULE = ("Rule `%s` predates the content choice, so it still sends "
                  "content. Pick one: /rius:enable-here (structure only, "
-                 "recommended) or /rius:enable-here --with-content.")
+                 "recommended) or /rius:enable-content-here.")
 
 
 def _content_line(cfg):
@@ -478,7 +494,9 @@ def dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        _enable_here(cwd or os.getcwd(), home, "--with-content" in argv)
+        _enable_here_structure_only(argv, cwd or os.getcwd(), home)
+    elif action == "content-on-here":
+        _enable_here(cwd or os.getcwd(), home, True)
     elif action == "disable-here":
         _disable_here(cwd or os.getcwd(), home)
     elif action == "status":

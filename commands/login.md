@@ -1,7 +1,7 @@
 ---
 description: Sign in to Rius in the browser and pick the workspace this machine sends traces to
 argument-hint: "[--env staging]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh login:*) Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh login-wait:*)
 ---
 
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login $ARGUMENTS --cwd "$PWD"`

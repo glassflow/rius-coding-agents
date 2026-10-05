@@ -42,7 +42,7 @@ nothing. When you enable a folder, you choose one of two modes for it:
   assistant text, no tool inputs or outputs, no subagent briefs or
   descriptions, no session name (the trace is titled `claude-code session`)
   and no line of a failed tool's output.
-- **With content** (`/rius:enable-here --with-content`). All of the above,
+- **With content** (`/rius:enable-content-here`). All of the above,
   plus every prompt, assistant message, tool input and tool **output**: the
   contents of files Claude Code reads and the output of commands it runs.
   Before export, the plugin replaces the secrets it recognises with a
@@ -54,7 +54,7 @@ nothing. When you enable a folder, you choose one of two modes for it:
   whole. Recognising is not a guarantee: a secret in a format it does not
   know is sent.
 
-Run `/rius:enable-here` again, with or without `--with-content`, to change a
+Run `/rius:enable-here` or `/rius:enable-content-here` again to change a
 folder's mode. A folder enabled before this choice existed keeps sending
 content until you do, and `/rius:status` says so. `RIUS_CAPTURE_CONTENT=false`
 turns content off for every folder.
@@ -164,7 +164,8 @@ regardless of any other setting.
 | Command | Effect |
 |---|---|
 | `/rius:login` | Sign in in the browser, pick the workspace this machine sends to, and store a key for it. Production by default; `/rius:login --env staging` for staging. |
-| `/rius:enable-here` | Add the current working directory to the persistent path rules, sending structure only. `--with-content` also sends prompts, file contents and command output, with secrets removed. This is the normal way to turn tracing on, and only you can run it. |
+| `/rius:enable-here` | Add the current working directory to the persistent path rules, sending structure only. This is the normal way to turn tracing on, and only you can run it. |
+| `/rius:enable-content-here` | The same, but the folder also sends prompts, file contents and command output, with secrets removed. Only you can run it. |
 | `/rius:disable-here` | Stop tracing the current working directory and everything under it. A disabled folder beats any enabled parent. |
 | `/rius:status` | Print the resolved on/off state, the rule that decided it, the signed-in account, the endpoint, the redacted API key, spans exported so far, and the last export error if there was one. |
 | `/rius:logout` | Revoke the stored key on the server, then delete it locally. |
@@ -233,7 +234,7 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 | `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. Letters, digits, `.`, `_` and `-` only, up to 64; anything else is ignored. |
 | `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
-| `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-here --with-content` in a folder to send its content. |
+| `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 

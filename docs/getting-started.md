@@ -6,7 +6,7 @@ arriving. Every step below is something you do once.
 
 Read [What gets sent](../README.md#what-gets-sent----read-this-before-enabling-anything)
 in the README before you enable any folder. A folder sends structure only
-unless you enable it with `--with-content`, which also sends the contents
+unless you enable it with `/rius:enable-content-here`, which also sends the contents
 of files Claude Code reads and the output of commands it runs.
 
 - [Quick start: `/rius:login`](#quick-start-riuslogin)
@@ -301,8 +301,8 @@ That appends the current working directory to `enabled_paths` in
 `~/.claude/rius/config.json`, and every subdirectory under it is covered
 too. It sends structure only. To also send prompts, file contents and
 command output from this folder, with recognised secrets removed, run it as
-`/rius:enable-here --with-content` instead. Only you can run it: Claude
-cannot invoke it for you.
+`/rius:enable-content-here` instead. Only you can run either: Claude
+cannot invoke them for you.
 
 ## 7. Watch the first trace
 
