@@ -507,8 +507,9 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
 
 
 def _ship_cursor(st, events, out, conversation_id, home, cfg) -> int:
-    return _ship(out, cursor_spans.resource_attributes(events), st,
-                 len(events), conversation_id, home, cfg,
+    resource = cursor_spans.resource_attributes(
+        events, service_name=cfg.service_name)
+    return _ship(out, resource, st, len(events), conversation_id, home, cfg,
                  on_success=lambda: state.sync_open_marker(conversation_id,
                                                            home, st))
 

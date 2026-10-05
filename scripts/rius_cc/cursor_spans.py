@@ -482,10 +482,10 @@ def build(events: List[Dict[str, Any]], ctx: Ctx,
     return out
 
 
-def resource_attributes(events: List[Dict[str, Any]],
-                        instance_id: str = "") -> Dict[str, Any]:
+def resource_attributes(events: List[Dict[str, Any]], instance_id: str = "",
+                        service_name: str = SERVICE_NAME) -> Dict[str, Any]:
     """The OTLP resource for a Cursor conversation's spans."""
-    attrs: Dict[str, Any] = {"service.name": SERVICE_NAME}
+    attrs: Dict[str, Any] = {"service.name": service_name}
     _set(attrs, "service.instance.id", instance_id)
     for key, source in (("cursor.version", "cursor_version"),
                         ("cursor.cwd", "cwd"), ("cursor.git_branch", "git_branch")):

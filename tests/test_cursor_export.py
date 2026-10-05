@@ -221,3 +221,15 @@ def test_session_start_prunes_old_spools(tmp_path, sent):
                           "hook_event_name": "sessionStart"}, sdir, True, 100)
     _run(tmp_path, "sessionStart", cid=other)
     assert _spool_files(sdir) == [other + cursor_events.SPOOL_SUFFIX]
+
+
+def test_rius_service_name_renames_the_service(tmp_path, sent):
+    _spool_until(tmp_path, "docs_session", 0)
+    _run(tmp_path, "sessionStart", env=dict(ENV, RIUS_SERVICE_NAME="cursor-ci"))
+    assert sent.batches[-1]["resource"]["service.name"] == "cursor-ci"
+
+
+def test_the_default_service_is_cursor(tmp_path, sent):
+    _spool_until(tmp_path, "docs_session", 0)
+    _run(tmp_path, "sessionStart")
+    assert sent.batches[-1]["resource"]["service.name"] == "cursor"
