@@ -15,6 +15,7 @@ from . import config, cursor_events, cursor_export, state
 # can name this conversation and find the plugin's scripts.
 SESSION_ENV = "RIUS_CURSOR_SESSION_ID"
 PLUGIN_ROOT_ENV = "RIUS_PLUGIN_ROOT"
+CONTEXT_NOTE_PREFIX = "Rius plugin:"
 
 
 class Job(NamedTuple):
@@ -46,7 +47,16 @@ def response(event: str, payload: Any, plugin_root: str) -> str:
     session_env = {PLUGIN_ROOT_ENV: plugin_root}
     if conversation_id:
         session_env[SESSION_ENV] = conversation_id
-    return json.dumps({"env": session_env})
+    return json.dumps({"env": session_env,
+                       "additional_context": _context_note(session_env)})
+
+
+def _context_note(session_env: Dict[str, str]) -> str:
+    """The same values for the agent itself: Cursor applies a sessionStart
+    `env` to later hooks, and may not pass it to the agent's Shell tool."""
+    return ("%s plugin root %s, session id %s (used only by the /rius-* "
+            "commands)." % (CONTEXT_NOTE_PREFIX, session_env[PLUGIN_ROOT_ENV],
+                            session_env.get(SESSION_ENV, "unknown")))
 
 
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:

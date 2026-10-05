@@ -72,6 +72,18 @@ def test_session_start_hands_the_commands_their_session(monkeypatch, capsys,
     assert os.path.exists(os.path.join(scripts, "rius_ctl.sh"))
 
 
+def test_session_start_tells_the_agent_too(monkeypatch, capsys, tmp_path):
+    # Cursor's CLI applies a sessionStart `env` to later hooks only, not to
+    # the agent's Shell tool, so the commands fall back to this note.
+    out, _ = _run(monkeypatch, capsys, "sessionStart", _session()[0],
+                  _env(tmp_path))
+    answer = json.loads(out)
+    note = answer["additional_context"]
+    assert note.startswith(cursor_hook.CONTEXT_NOTE_PREFIX)
+    assert answer["env"][cursor_hook.PLUGIN_ROOT_ENV] in note
+    assert CID in note
+
+
 def test_a_full_session_lands_in_the_spool(monkeypatch, capsys, tmp_path):
     for payload in _session():
         _run(monkeypatch, capsys, payload["hook_event_name"], payload,

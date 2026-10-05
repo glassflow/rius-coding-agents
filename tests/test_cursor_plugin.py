@@ -78,6 +78,12 @@ def test_session_commands_use_the_id_session_start_exports():
         assert '--session "${%s:-}"' % cursor_hook.SESSION_ENV in text
 
 
+def test_commands_fall_back_to_the_session_start_note():
+    for path in COMMANDS:
+        text = " ".join(path.read_text().split())
+        assert "starting `%s`" % cursor_hook.CONTEXT_NOTE_PREFIX in text, path
+
+
 def test_mcp_points_at_production_without_a_key():
     server = json.loads((ROOT / "cursor" / "mcp.json").read_text())["mcpServers"]["rius"]
     assert server == {"url": "https://mcp.eu.console.rius-glassflow.com/mcp"}

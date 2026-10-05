@@ -25,7 +25,9 @@ If a line starts with `RIUS_LOGIN_PENDING:`, sign-in is not finished:
 4. If it printed `Connected as`, offer to run `/rius-enable-here` for the
    current folder. Do not run it unless the user says yes.
 
-If the shell reports that `/scripts/rius_ctl.sh` does not exist, the plugin
-location is not known in this session. Tell the user to start a new chat, or
-to run the same command from a terminal with the path printed by
-`find ~/.cursor/plugins -name rius_ctl.sh`.
+Cursor may not pass `RIUS_PLUGIN_ROOT` and `RIUS_CURSOR_SESSION_ID` to the
+shell. If either is empty there, this chat's context has a line starting
+`Rius plugin:` that gives the plugin root and the session id: run the same
+command with those values written in place of the variables. If there is no
+such line, tell the user to start a new chat, or to run the command from a
+terminal with the path printed by `find ~/.cursor/plugins -name rius_ctl.sh`.

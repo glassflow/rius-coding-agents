@@ -97,8 +97,11 @@ The commands are prompts: the agent runs `scripts/rius_ctl.sh` through its
 Shell tool, so Cursor may ask you to approve the command. The plugin's
 `sessionStart` hook tells the session where the plugin lives
 (`RIUS_PLUGIN_ROOT`) and which conversation it is (`RIUS_CURSOR_SESSION_ID`).
-If a command cannot find the script, start a new chat or run the same
-command from a terminal.
+Cursor's CLI hands those variables to later hooks but not always to the
+Shell tool, so the hook also puts both values in the chat's context, on a
+line starting `Rius plugin:`, and the commands use that when the variables
+are empty. If a command still cannot find the script, start a new chat or
+run the same command from a terminal.
 
 Settings use the `RIUS_CURSOR_` prefix where Claude Code uses
 `RIUS_CLAUDE_`: `RIUS_CURSOR_ENABLED`, `RIUS_CURSOR_DEBUG`,
