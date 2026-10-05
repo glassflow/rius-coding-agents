@@ -87,3 +87,16 @@ def test_commands_fall_back_to_the_session_start_note():
 def test_mcp_points_at_production_without_a_key():
     server = json.loads((ROOT / "cursor" / "mcp.json").read_text())["mcpServers"]["rius"]
     assert server == {"url": "https://mcp.eu.console.rius-glassflow.com/mcp"}
+
+
+def test_nothing_codex_or_cursor_ships_reads_a_key_from_the_environment():
+    shipped = ([ROOT / ".codex-plugin" / "plugin.json",
+                ROOT / "codex" / "hooks.json", ROOT / "cursor" / "mcp.json",
+                ROOT / "cursor" / "hooks.json",
+                ROOT / ".cursor-plugin" / "plugin.json"]
+               + COMMANDS + sorted((ROOT / "codex" / "skills").glob("*/SKILL.md")))
+    for path in shipped:
+        text = path.read_text()
+        for env_key in ("RIUS_API_KEY", "RIUS_ENDPOINT", "${env:",
+                        "bearer_token", "headers"):
+            assert env_key not in text, (path, env_key)

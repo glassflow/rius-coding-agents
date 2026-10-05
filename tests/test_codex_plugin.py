@@ -67,8 +67,8 @@ def test_every_manifest_carries_the_same_version():
 
 
 def test_the_mcp_server_signs_in_with_oauth():
-    """With `bearer_token_env_var` set, Codex 0.144.1 uses bearer mode only:
-    without RIUS_API_KEY it drops the server and ignores an OAuth login."""
+    """No key of any kind: Codex signs in to the server with OAuth. With
+    `bearer_token_env_var` set, Codex 0.144.1 drops OAuth entirely."""
     server = _manifest()["mcpServers"]["rius"]
     claude = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["rius"]
     assert server["url"] == claude["url"]
@@ -180,7 +180,6 @@ def test_no_config_means_nothing_approved(tmp_path):
 @pytest.fixture
 def codex_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
-    monkeypatch.delenv("RIUS_API_KEY", raising=False)
     return str(tmp_path / "home")
 
 
@@ -210,7 +209,6 @@ def test_status_reads_hook_trust_from_codex_home_but_writes_nothing_there(
 
 
 def test_claude_code_status_is_unchanged(monkeypatch, tmp_path, capsys):
-    monkeypatch.delenv("RIUS_API_KEY", raising=False)
     rius_ctl.dispatch(["status", "--cwd", "/tmp"], str(tmp_path))
     out = capsys.readouterr().out
     assert rius_ctl.QUERYING_TRACES in out

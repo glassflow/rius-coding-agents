@@ -41,8 +41,10 @@ Other gaps:
 
 The rules are the same as for Claude Code. See
 [What gets sent](../README.md#what-gets-sent----read-this-before-enabling-anything).
-Tracing is off until you enable a folder, and `RIUS_CAPTURE_CONTENT=false`
-keeps prompts, answers, and tool input and output out of the spans.
+Tracing is off until you enable a folder. `/rius-enable-here` sends
+structure only; `/rius-enable-content-here` also sends prompts, answers, and
+tool input and output, with secrets removed. `RIUS_CAPTURE_CONTENT=false`
+turns content off everywhere.
 
 Each hook appends the event to a local spool at
 `~/.cursor/rius/spool/<conversation>.jsonl` (mode 0600). With capture off,
@@ -85,14 +87,22 @@ In the agent chat:
    Code key, and `/rius-logout` revokes only the Cursor key.
 2. `/rius-enable-here` turns on tracing for the current folder.
 
-`RIUS_API_KEY` in the environment wins over the stored key, as it does in
-Claude Code.
+`RIUS_API_KEY` and `RIUS_ENDPOINT` in the environment are ignored, as they
+are in Claude Code. To trace with a key you minted in the console, store it
+from a terminal:
+
+```
+pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --agent cursor   # add --env staging for staging
+```
+
+See [API keys](api-keys.md).
 
 | Command | What it does |
 |---|---|
 | `/rius-login`, `/rius-logout` | Sign in, or sign out and revoke the key |
 | `/rius-status` | Whether this folder is traced, and why |
-| `/rius-enable-here`, `/rius-disable-here` | Trace this folder and everything under it, or stop |
+| `/rius-enable-here`, `/rius-disable-here` | Trace this folder and everything under it (structure only), or stop |
+| `/rius-enable-content-here` | Trace this folder with content, secrets removed |
 | `/rius-on`, `/rius-off` | This chat only |
 
 The commands are prompts: the agent runs `scripts/rius_ctl.sh` through its
@@ -107,7 +117,9 @@ run the same command from a terminal.
 
 Settings use the `RIUS_CURSOR_` prefix where Claude Code uses
 `RIUS_CLAUDE_`: `RIUS_CURSOR_ENABLED`, `RIUS_CURSOR_DEBUG`,
-`RIUS_CURSOR_MAX_ATTR_BYTES`. Logs go to `~/.cursor/rius/log/`.
+`RIUS_CURSOR_MAX_ATTR_BYTES`. As in Claude Code they can only turn things
+off: `RIUS_CURSOR_ENABLED=true` is ignored. Logs go to `~/.cursor/rius/log/`,
+under your home folder as the operating system reports it, not `HOME`.
 
 ## Querying traces from Cursor (MCP)
 
@@ -115,13 +127,6 @@ Settings use the `RIUS_CURSOR_` prefix where Claude Code uses
 (`https://mcp.eu.console.rius-glassflow.com/mcp`) with no key, so Cursor signs
 in with OAuth: use Connect in the MCP settings, or
 `cursor-agent mcp login rius`. This sign-in is separate from `/rius-login`.
-
-To use an API key instead, add your own entry to `~/.cursor/mcp.json`:
-
-```json
-{"mcpServers": {"rius": {"url": "https://mcp.eu.console.rius-glassflow.com/mcp",
-  "headers": {"Authorization": "Bearer ${env:RIUS_API_KEY}"}}}}
-```
 
 ## If you also have the Claude Code plugin
 

@@ -32,7 +32,8 @@ Ask Codex to run the skills (type `$` to pick one, or ask in plain words):
 | Skill | What it does |
 |---|---|
 | `$rius:rius-login` | Browser sign-in; you pick the workspace |
-| `$rius:rius-enable-here` | Trace this folder and everything under it |
+| `$rius:rius-enable-here` | Trace this folder and everything under it, structure only |
+| `$rius:rius-enable-content-here` | The same, with prompts, replies and tool output (secrets removed) |
 | `$rius:rius-disable-here` | Stop tracing this folder |
 | `$rius:rius-on` / `$rius:rius-off` | This session only |
 | `$rius:rius-status` | What is on, why, the key, the hooks |
@@ -48,8 +49,8 @@ If the sandbox will not allow it, run the same command in a terminal:
 bash ~/.codex/plugins/cache/rius-coding-agents/rius/<version>/scripts/rius_ctl.sh login --agent codex
 ```
 
-It prints a URL and a code. Approve in the browser, then run the
-`login-wait` command it prints.
+It prints a URL and a code. Approve in the browser, then run the same
+command with `login-wait` in place of `login`.
 
 Rius keeps its Codex key, settings and state in `~/.codex/rius/` under
 your home folder as the operating system reports it, even when
@@ -60,8 +61,15 @@ are traced. Rius still reads `$CODEX_HOME/config.toml`, only to count the
 approved hooks in `$rius:rius-status`.
 
 Codex keeps its own key, separate from Claude Code's. Logging out of one does
-not sign out the other. `RIUS_API_KEY` in the environment still beats the
-stored key.
+not sign out the other. `RIUS_API_KEY` and `RIUS_ENDPOINT` in the
+environment are ignored, as they are for Claude Code. To trace with a key
+you minted in the console, store it from a terminal:
+
+```
+pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --agent codex   # add --env staging for staging
+```
+
+See [API keys](api-keys.md).
 
 ## What a trace contains
 
@@ -78,7 +86,9 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 
 Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,
 `codex.originator`. Content rules are the same as for Claude Code:
-`RIUS_CAPTURE_CONTENT=false` sends structure only.
+`$rius:rius-enable-here` sends structure only, `$rius:rius-enable-content-here`
+adds content with secrets removed, and `RIUS_CAPTURE_CONTENT=false` turns
+content off everywhere.
 
 ### How a session ends
 
@@ -98,24 +108,20 @@ codex mcp login rius
 
 Do this once; it is a second sign-in, separate from `$rius:rius-login`.
 
-If you use `RIUS_API_KEY` instead, override the server in `config.toml`.
-Codex then sends the key as a bearer token. Note that with this setting and
-no `RIUS_API_KEY` in the environment, Codex drops the server silently:
-
-```toml
-[mcp_servers.rius]
-url = "https://mcp.eu.console.rius-glassflow.com/mcp"
-bearer_token_env_var = "RIUS_API_KEY"
-```
+The bundled server takes no key: its entry is just the URL, so Codex
+uses OAuth.
 
 ## Settings
 
+A repository can set these for Codex, so, as for Claude Code, they can only
+turn things off.
+
 | Variable | Effect |
 |---|---|
-| `RIUS_CODEX_ENABLED` | `true`/`false` overrides the folder rules |
+| `RIUS_CODEX_ENABLED` | `false` turns tracing off; `true` is ignored |
 | `RIUS_CODEX_DEBUG` | logs to `~/.codex/rius/log/` |
-| `RIUS_CODEX_MAX_ATTR_BYTES` | cap on each content attribute (default 32768) |
-| `RIUS_API_KEY`, `RIUS_ENDPOINT` | same as for Claude Code |
+| `RIUS_CODEX_MAX_ATTR_BYTES` | cap on each content attribute (default 32768); can only be lowered |
+| `RIUS_API_KEY`, `RIUS_ENDPOINT` | ignored, as for Claude Code |
 | `RIUS_CAPTURE_CONTENT`, `RIUS_SERVICE_NAME` | shared with Claude Code |
 
 ## Known gaps (beta)

@@ -338,6 +338,8 @@ Then, in Codex:
    the sandbox escalation Codex asks for.
 3. `$rius:rius-status` shows what is on, why, and whether the hooks are
    trusted.
+4. To query your traces from Codex, run `codex mcp login rius` once. The
+   bundled MCP server signs in with OAuth only, as in Claude Code.
 
 Tracing is off by default and the content rules above apply unchanged.
 Codex keeps its own login, key and settings in `~/.codex/rius`, separate
@@ -351,7 +353,9 @@ The repo also ships a Cursor plugin (`.cursor-plugin/`). It traces Cursor
 agent sessions: one trace per conversation, with a span for each turn, model
 answer, tool call and subagent. Install it with "Import from Repo"
 (`glassflow/rius-coding-agents`) in Cursor's plugin settings, then run
-`/rius-login` and `/rius-enable-here` in the agent chat.
+`/rius-login` and `/rius-enable-here` in the agent chat. To query your
+traces, connect the bundled `rius` MCP server in Cursor's MCP settings; it
+signs in with OAuth only.
 
 - **No token counts or cost.** Cursor's hooks do not report usage.
 - **Beta.** It is tested against Cursor's documented hook payloads, not yet
