@@ -107,9 +107,13 @@ def main() -> None:
         if not isinstance(payload, dict) or not payload.get("session_id"):
             return
 
-        from rius_cc import config, continuation, platform_compat, state
+        from rius_cc import (config, continuation, foreign_agent,
+                             platform_compat, state)
 
         home = platform_compat.home_dir(os.environ)
+        if (profile.name == agent.CLAUDE_CODE.name
+                and foreign_agent.is_foreign(payload, os.environ, home)):
+            return
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
