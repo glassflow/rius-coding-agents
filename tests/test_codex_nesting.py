@@ -98,3 +98,13 @@ def test_a_nested_subagent_stop_keeps_the_sessions_rollout(
     root_turns = {s.attributes.get("codex.turn.id") for s in rows.values()
                   if s.name == "turn" and s.parent_span_id == root}
     assert root_turns == set(_own_turns(rollouts[NESTED_ROOT]))
+
+
+def test_a_new_session_rollout_is_read_from_its_start():
+    """An offset only means something in the file it was read from."""
+    from rius_cc import codex_session
+    st = codex_session.load({"transcript_path": "/s/a.jsonl", "offset": 500})
+    codex_session.note_payload(st, "Stop", {"transcript_path": "/s/a.jsonl"})
+    assert st["offset"] == 500
+    codex_session.note_payload(st, "Stop", {"transcript_path": "/s/b.jsonl"})
+    assert (st["transcript_path"], st["offset"]) == ("/s/b.jsonl", 0)
