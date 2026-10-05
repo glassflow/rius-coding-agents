@@ -23,7 +23,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from . import scrub
-from .spans import truncate
+from .spans import exportable
 
 SPOOL_SUFFIX = ".jsonl"
 # A subagent's spool names its parent conversation in this sidecar.
@@ -56,6 +56,9 @@ CONTENT_FIELDS = (
 # spool replaces the transcript), model_params.
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# A Task's subagent type ("explore", "generalPurpose"). The model writes
+# it, and it is kept with capture off, so nothing longer or key-shaped.
+_SUBAGENT_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
 
 
 def response_for(event: str) -> str:
@@ -90,9 +93,27 @@ def spool_path(spool_dir: str, conversation_id: str) -> str:
 
 def _content_value(value: Any, max_bytes: int) -> str:
     """Content as the spool keeps it: secrets removed before it touches
-    the disk, since the spool outlives the session by up to a week."""
+    the disk, since the spool outlives the session by up to a week. Only
+    what is kept is scrubbed, so a huge output cannot run the hook past
+    Cursor's timeout."""
     text = value if isinstance(value, str) else json.dumps(value)
-    return truncate(scrub.scrub(text), max_bytes)
+    return exportable(text, max_bytes)
+
+
+# What a call that reads a secret-shaped file returns, or writes into it.
+_SECRET_FILE_FIELDS = ("tool_output", "output", "result_json",
+                       "error_message", "edits")
+
+
+def reads_secret_file(payload: Dict[str, Any]) -> bool:
+    """True when the call names a secret-shaped file (`cat .env`, a Read
+    of id_rsa): its output is then never kept, scrubbed or not."""
+    tool_input = payload.get("tool_input")
+    named = [tool_input if isinstance(tool_input, str) else json.dumps(tool_input)]
+    for field in ("command", "file_path"):
+        if isinstance(payload.get(field), str):
+            named.append(json.dumps({field: payload[field]}))
+    return any(scrub.reads_secret_file(text) for text in named)
 
 
 def shell_exit_code(tool_output: Any) -> Optional[int]:
@@ -117,7 +138,8 @@ def task_subagent_type(payload: Dict[str, Any]) -> str:
     if payload.get("tool_name") != "Task" or not isinstance(tool_input, dict):
         return ""
     value = tool_input.get("subagent_type")
-    if isinstance(value, str) and _SAFE_NAME.match(value):
+    if (isinstance(value, str) and _SUBAGENT_TYPE.match(value)
+            and scrub.scrub(value) == value):
         return value
     return ""
 
@@ -151,9 +173,13 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
         # is still a failed span.
         record["exit_code"] = code
     if capture_content:
+        secret_file = reads_secret_file(payload)
         for key in CONTENT_FIELDS:
             if key in payload and payload[key] is not None:
-                record[key] = _content_value(payload[key], max_attr_bytes)
+                record[key] = (
+                    scrub.SECRET_FILE_MARKER
+                    if secret_file and key in _SECRET_FILE_FIELDS
+                    else _content_value(payload[key], max_attr_bytes))
     return record
 
 

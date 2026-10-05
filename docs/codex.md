@@ -138,7 +138,9 @@ turn things off.
   every tool through one `exec` call that runs a script. Each such call is
   one TOOL span named `exec`; the commands, patches and spawns inside it
   get no spans of their own. Its output carries no exit code, so a failed
-  command inside `exec` reads as success.
+  command inside `exec` reads as success. A subagent spawned inside `exec`
+  is placed under the last `exec` call begun before it was created, so with
+  two `exec` calls running at once it can land under the other one.
 - Interrupted turns are parsed from their documented shape but were not
   seen in a recorded run.
 - A failed tool call is only marked as an error when it is a non-zero exit

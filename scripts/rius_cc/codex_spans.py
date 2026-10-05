@@ -37,6 +37,8 @@ _EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
 SPAWN_TOOL = "multi_agent_v1__spawn_agent"
+# Code mode's one tool: runs a script that calls the others.
+EXEC_TOOL = "exec"
 # How many tool starts an agent remembers, to find the call that spawned a
 # subagent (spawning_tool).
 _TOOL_STARTS_KEPT = 256
@@ -200,7 +202,7 @@ def _on_tool_call(rec, state, ctx, out):
             "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
     state["open_tools"][call_id] = tool
     starts = state.setdefault("tool_starts", [])
-    starts.append([rec.timestamp_ns, tool["span_id"]])
+    starts.append([rec.timestamp_ns, tool["span_id"], tool["tool_name"]])
     del starts[:-_TOOL_STARTS_KEPT]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
                         tool["tool_name"], "TOOL", rec.timestamp_ns,
@@ -261,13 +263,14 @@ def error_line(text: str) -> str:
 
 def reads_secret_file(arguments: str) -> bool:
     """scrub.reads_secret_file for Codex's shell tools too: exec_command
-    takes `cmd`, the older shell tool an argv list as `command`."""
+    takes `cmd`, the older shell tool an argv list as `command`, and code
+    mode's `exec` a script."""
     if scrub.reads_secret_file(arguments):
         return True
     try:
         args = json.loads(arguments or "{}")
     except ValueError:
-        return False
+        return _script_reads_secret_file(arguments)
     if not isinstance(args, dict):
         return False
     command = args.get("cmd")
@@ -275,6 +278,23 @@ def reads_secret_file(arguments: str) -> bool:
         command = " ".join(str(word) for word in args["command"])
     return isinstance(command, str) and scrub.reads_secret_file(
         json.dumps({"command": command}))
+
+
+# A string literal in a script: "...", '...' or `...`.
+_SCRIPT_STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"|\'((?:[^\'\\\n]|\\.)*)\''
+                            r'|`((?:[^`\\]|\\.)*)`')
+
+
+def _script_reads_secret_file(script: str) -> bool:
+    """Code mode's `exec` runs a script, such as
+    `tools.exec_command({cmd: "cat .env"})`, not JSON arguments: any of its
+    string literals naming a secret-shaped file, as a path or a word of a
+    command, counts as reading it."""
+    for match in _SCRIPT_STRING.finditer(script or ""):
+        literal = next(group for group in match.groups() if group is not None)
+        if scrub.reads_secret_file(json.dumps({"command": literal})):
+            return True
+    return False
 
 
 def _on_tool_output(rec, state, ctx, out):
@@ -311,13 +331,17 @@ def _on_tool_output(rec, state, ctx, out):
 
 
 def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
-    """The span id of the call that spawned a subagent created at
-    `created_ns`: the agent's last call begun by then. In code mode
-    (`code_mode_host`, on by default) a spawn runs inside an `exec` call
-    whose output need not name the agent, so the time is all there is."""
-    begun = [span_id for start_ns, span_id in state.get("tool_starts") or []
-             if start_ns <= created_ns]
-    return begun[-1] if begun else None
+    """The span id of the `exec` call that spawned a subagent created at
+    `created_ns`: the agent's last call begun by then, when that is an
+    `exec`. In code mode (`code_mode_host`, on by default) a spawn runs
+    inside an `exec` call whose output need not name the agent, so the time
+    is all there is. Any other call is left to spawn_agent's output, which
+    names the agent exactly: two spawns in parallel would both be placed
+    under the second by time."""
+    begun = [start for start in state.get("tool_starts") or []
+             if start[0] <= created_ns]
+    last = begun[-1] if begun else ()
+    return last[1] if len(last) > 2 and last[2] == EXEC_TOOL else None
 
 
 def _note_spawned(state: dict, tool: dict, output: str) -> None:

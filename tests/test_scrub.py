@@ -1,5 +1,6 @@
 """The secret scrubber, one format at a time. Key-shaped literals are built
 at runtime so the repo's secret scan never sees one."""
+import json
 import time
 
 import pytest
@@ -53,6 +54,33 @@ def test_a_secret_pair_keeps_its_key_and_loses_its_value(text, name):
         assert value not in out.replace(scrub.marker(name), "")
 
 
+def test_an_escaped_line_break_ends_a_value():
+    """JSON-encoded text: `\\n` is a line break. A value running on past it
+    would swallow the next line's key, and the secret after that key."""
+    secret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    text = json.dumps({"text": "aws_access_key_id = %s\naws_secret_access_key"
+                               " = %s\n" % ("AKIA" + "Q" * 16, secret)})
+    out = scrub.scrub(text)
+    assert secret not in out
+    assert json.loads(out)["text"].endswith(
+        "aws_secret_access_key = %s\n" % scrub.marker("access-key"))
+
+
+@pytest.mark.parametrize("command", [
+    'grep -v "password:" .env',
+    'curl -H "token: abc" x; cat .env',
+    'cat .env | grep "secret: x"',
+    'grep -n "api_key=" .env',
+    'export PASSWORD="a b" && cat .env',
+])
+def test_scrubbed_json_is_still_json(command):
+    """A value cut at an escaped quote broke the JSON, and with it the check
+    that a call reads a secret-shaped file."""
+    out = scrub.scrub(json.dumps({"command": command, "cwd": ""}))
+    assert json.loads(out)["cwd"] == ""
+    assert scrub.reads_secret_file(out)
+
+
 def test_an_unterminated_private_key_is_removed_to_the_end():
     out = scrub.scrub("x\n-----BEGIN RSA PRIVATE KEY-----\nMIIabc\ncut here")
     assert out == "x\n" + scrub.marker("private-key")
@@ -78,6 +106,9 @@ ADVERSARIAL = {
     "jwt heads": "eyJ" * 10922,
     "bearers": "Bearer " * 4681,
     "quotes": 'password: "' * 2978,
+    "escaped quotes": 'password: \\"' * 2730,
+    "escapes": "token=\\" * 4681,
+    "escaped values": 'token=\\"a\\\\' * 2978,
 }
 
 

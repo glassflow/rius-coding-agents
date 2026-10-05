@@ -140,12 +140,16 @@ class _Fold:
             sub["model"] = sub["model"] or _model_of(event)
 
     def _unclaimed_task(self) -> Optional[Dict[str, Any]]:
+        """The Task call a new subagent belongs to: the oldest one of this
+        run still open, as parallel Tasks start their subagents in the
+        order they were called; else the latest one."""
         claimed = {s["tool_call_id"] for s in self.subagents.values()}
-        for tool in reversed(list(self.tools.values())):
-            if (tool["name"] == "Task" and tool["scope"] == self.cid
-                    and tool["key"] not in claimed):
-                return tool
-        return None
+        tasks = [tool for tool in self.tools.values()
+                 if tool["name"] == "Task" and tool["scope"] == self.cid
+                 and tool["key"] not in claimed]
+        running = [tool for tool in tasks if tool["end_ns"] is None
+                   and tool["segment"] == self.segment]
+        return (running or tasks[-1:] or [None])[0]
 
     def scope_of(self, event: Dict[str, Any]) -> str:
         """The conversation an event ran in: ours, or a subagent's."""

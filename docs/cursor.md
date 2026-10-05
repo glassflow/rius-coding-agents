@@ -4,8 +4,10 @@ The same repo ships a Cursor plugin next to the Claude Code one. It traces
 Cursor agent sessions (the IDE agent and `cursor-agent`) to Rius.
 
 **Beta.** The plugin is tested against hook payloads captured from real
-`cursor-agent` 2026.10.01 sessions, headless (`-p`) and interactive. The IDE
-agent and plugin import have not been run yet.
+`cursor-agent` 2026.10.01 sessions: headless (`-p`) runs with tools and a
+subagent, and an interactive session that ended before any tool ran. Tools
+in an interactive session, the IDE agent and plugin import have not been
+run yet.
 
 ## What you get, and what you don't
 
@@ -41,6 +43,10 @@ Other gaps:
 - Times are when each hook fired, not when the model call started.
 - Cloud and background agents fire no session hooks.
 - Tab completions are not traced.
+- `cursor-agent -p --resume` fires no `sessionStart`, so a Task subagent
+  started in a resumed run cannot be linked to the chat: its Task call
+  closes with the run and has nothing under it, and the subagent's own
+  events are not sent.
 
 ## What gets sent
 
@@ -54,7 +60,8 @@ turns content off everywhere.
 Each hook appends the event to a local spool at
 `~/.cursor/rius/spool/<conversation>.jsonl` (mode 0600). With capture off,
 no content is ever written to the spool; with it on, secrets are removed
-before content is written. Your email and transcript paths are
+before content is written, and the output of a call that reads a
+secret-shaped file (`.env*`, `*.pem`, ...) is never written. Your email and transcript paths are
 never written there. A spool is deleted once its conversation has been idle
 for 7 days and its trace is closed; the cleanup runs when a traced chat
 starts.

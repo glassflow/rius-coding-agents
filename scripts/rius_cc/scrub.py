@@ -43,14 +43,19 @@ _COMBINED = re.compile("|".join("(?P<p%d>%s)" % (i, pattern)
 
 # KEY=VALUE and "key": "value" pairs whose key names a secret. Matching
 # starts at the secret word, and only a short suffix may follow it, so
-# `input_tokens: 12` and `tokenizer=` are left alone. A quote may be escaped:
-# tool inputs arrive JSON-encoded. The key is kept, so a reader still sees
+# `input_tokens: 12` and `tokenizer=` are left alone. Text may be
+# JSON-encoded (tool inputs, a script's JSON.stringify): there `\"`
+# quotes a value and `\n` ends a line, so an unquoted value stops at
+# either, and an escaped quote only pairs with another escaped quote. That
+# keeps the value from swallowing the next line's key, and keeps JSON
+# valid after the value goes. The key is kept, so a reader still sees
 # which setting it was; only the value goes.
 _PAIR = re.compile(
     r"(?i)(?P<key>(?P<word>password|passwd|secret|token|api[_-]?key"
     r"|access[_-]?key|private[_-]?key)(?:[_-]?(?:key|id|value|hash))?"
     r"[\"']?[ \t]{0,8}[:=](?!=)[ \t]{0,8})"
-    r"(?P<value>\\?\"[^\"\n]{1,512}\"|'[^'\n]{1,512}'|[^\s\"',;&)]{1,512})")
+    r"(?P<value>\\\"(?:[^\"\\\n]|\\[^\"\n]){1,512}\\\"|\"[^\"\n]{1,512}\"|'[^'\n]{1,512}'"
+    r"|(?:[^\s\"',;&)\\]|\\(?![nrt\"\\])){1,512})")
 
 # Basenames whose contents are secret as a whole: a .env file is nothing
 # but values, so no pattern could tell its harmless lines from the rest.

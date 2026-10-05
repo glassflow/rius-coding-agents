@@ -142,12 +142,16 @@ def _tool_output(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _joined_text(parts: List[Any]) -> Any:
-    """Code mode's `exec` answers with content parts. Their text, joined as
-    the model reads it: dumped as JSON, every newline would become `\\n` and
-    the scrubber would no longer see a `key = secret` line as one."""
+    """Code mode's `exec` answers with content parts. Their text, one part
+    per line: dumped as JSON, every newline would become `\\n`, and run
+    together, `text(a); text(b)` would glue a's last line to b's first,
+    so the scrubber would no longer see a `key = secret` line as one."""
     texts = [p.get("text") for p in parts
              if isinstance(p, dict) and isinstance(p.get("text"), str)]
-    return "".join(texts) if texts else parts
+    if not texts:
+        return parts
+    lines = [text if text.endswith("\n") else text + "\n" for text in texts[:-1]]
+    return "".join(lines + texts[-1:])
 
 
 _ITEMS = {
@@ -187,11 +191,15 @@ def parse_line(line: str) -> Optional[Record]:
         return None
 
 
+# A session record carries the base instructions (about 20 KB in 0.144.1).
+_SESSION_LINE_MAX = 1 << 20
+
+
 def read_session(path: str) -> Optional[Record]:
     """The session record a rollout opens with, or None."""
     try:
         with open(path, "rb") as fh:
-            first = fh.readline()
+            first = fh.readline(_SESSION_LINE_MAX)
     except OSError:
         return None
     record = parse_line(first.decode("utf-8", errors="replace"))

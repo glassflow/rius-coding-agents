@@ -256,3 +256,63 @@ def test_call_ids_with_underscores_still_make_tool_spans(codex_home, tmp_path,
     ids = {codex_spans.span_id_for(call)
            for call in ("call_t3_5", "call_t3_6")}
     assert ids <= set(_finished(sent))
+
+
+def _uuid7_at(ms, tail):
+    digits = "%012x7%s" % (ms, tail)
+    return "-".join((digits[:8], digits[8:12], digits[12:16], digits[16:20],
+                     digits[20:32]))
+
+
+def test_parallel_spawns_each_hang_under_their_own_call(codex_home, tmp_path,
+                                                        sent, rollouts):
+    """Two spawn_agent calls 1 ms apart, and a child's hook fires before
+    either output is in the rollout. Placed by time, both children would
+    hang under the second call; each output names its own child."""
+    import json
+    lines = [json.loads(line) for line in
+             rollouts[PARENT].read_text().splitlines()]
+    cut = next(i for i, d in enumerate(lines)
+               if d["payload"].get("call_id") == "call_t3_4")
+    created_ms = codex_spans.uuid7_ms(CHILD)
+    children = {"call_A": _uuid7_at(created_ms + 35, "a" * 19),
+                "call_B": _uuid7_at(created_ms + 45, "b" * 19)}
+
+    def spawn(call_id, ts):
+        record = json.loads(json.dumps(lines[cut]))
+        record["timestamp"], record["payload"]["call_id"] = ts, call_id
+        return record
+
+    def output(call_id, ts):
+        return {"timestamp": ts, "type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": call_id,
+            "output": json.dumps({"agent_id": children[call_id]})}}
+
+    def write(path, records):
+        path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    head = lines[:cut] + [spawn("call_A", "2026-10-05T09:29:26.105Z"),
+                          spawn("call_B", "2026-10-05T09:29:26.106Z")]
+    tail = [output("call_A", "2026-10-05T09:29:26.257Z"),
+            output("call_B", "2026-10-05T09:29:26.258Z")]
+    child_lines = [json.loads(line) for line in
+                   rollouts[CHILD].read_text().splitlines()]
+    paths = {}
+    for child in children.values():
+        child_lines[0]["payload"]["id"] = child
+        paths[child] = rollouts[CHILD].with_name("rollout-x-%s.jsonl" % child)
+        write(paths[child], child_lines)
+    write(rollouts[PARENT], head)
+    _run("UserPromptSubmit", tmp_path, rollouts[PARENT])
+    first = children["call_A"]
+    _run("UserPromptSubmit", tmp_path, paths[first], agent_id=first,
+         agent_type="default")
+    write(rollouts[PARENT], head + tail)
+    for child in children.values():
+        _run("SubagentStop", tmp_path, rollouts[PARENT], agent_id=child,
+             agent_type="default", agent_transcript_path=str(paths[child]))
+    _run("Stop", tmp_path, rollouts[PARENT])
+    latest = {s.span_id: s for s in _spans(sent)}
+    for call_id, child in children.items():
+        root = latest[spans.span_id_for("subagent:" + child)]
+        assert root.parent_span_id == spans.span_id_for(call_id)

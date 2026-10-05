@@ -110,6 +110,48 @@ def test_a_headless_subagent_hangs_under_its_task_call(tmp_path):
     assert not any(s.pending for s in out)
 
 
+def _parallel_tasks(spool_dir):
+    """The real subagent run with a second Task called right after the
+    first, and a second child: each child's first event comes in the order
+    the Tasks were called."""
+    events = payloads("real_headless_subagent")
+    session, thoughts, task = events[0], events[1:3], events[3]
+    children = {"aa": "c0de0000-0000-4000-8000-0000000000aa",
+                "bb": "c0de0000-0000-4000-8000-0000000000bb"}
+    tasks = []
+    for name, kind in (("aa", "explore"), ("bb", "generalPurpose")):
+        call = json.loads(json.dumps(task))
+        call["tool_use_id"] = "tool_task_" + name
+        call["tool_input"]["subagent_type"] = kind
+        tasks.append(call)
+    child_events = []
+    for name, cid in sorted(children.items()):
+        grep = json.loads(json.dumps(events[4]))
+        grep["conversation_id"] = grep["generation_id"] = cid
+        grep["tool_use_id"] = "tool_grep_" + name
+        child_events.append(grep)
+    tick = clock()
+    for payload in [session] + thoughts + tasks + child_events + [events[-1]]:
+        payload = dict(payload)
+        env = payload.pop("_hook_env", {})
+        cursor_hook.link_headless_subagent(
+            payload["hook_event_name"], payload["conversation_id"], env,
+            str(spool_dir))
+        cursor_events.record(payload, str(spool_dir), True, 32768, clock=tick)
+    return session["conversation_id"], children
+
+
+def test_parallel_task_subagents_each_hang_under_their_own_task(tmp_path):
+    cid, children = _parallel_tasks(tmp_path)
+    events = cursor_events.read_conversation(str(tmp_path), cid)
+    out = cursor_spans.build(events, cursor_spans.Ctx(cid, True, 32768))
+    tasks = {s.attributes["gen_ai.tool.call.id"]: s for s in _named(out, "Task")}
+    for name, kind in (("aa", "explore"), ("bb", "generalPurpose")):
+        subagent = _named(out, kind)[0]
+        assert subagent.attributes["cursor.subagent.id"] == children[name]
+        assert subagent.parent_span_id == tasks["tool_task_" + name].span_id
+
+
 def test_a_task_call_with_no_end_hook_closes_with_unknown_outcome(tmp_path):
     _, out = _build(tmp_path, "real_headless_subagent")
     task = _named(out, "Task")[0]
@@ -162,7 +204,8 @@ def test_an_interactive_prompt_can_arrive_before_session_start(tmp_path):
 
 def test_capture_off_spools_no_content_from_real_payloads(tmp_path):
     for name in ("real_headless_shell", "real_headless_edit",
-                 "real_headless_subagent", "real_interactive_error"):
+                 "real_headless_subagent", "real_headless_resume",
+                 "real_interactive_error"):
         _spool(name, tmp_path / name, capture=False)
     for folder, _, files in os.walk(str(tmp_path)):
         for name in files:

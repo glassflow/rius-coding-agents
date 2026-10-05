@@ -30,8 +30,9 @@ both. Claude Code: no change in what is traced or sent.
   more) stay under the subagent that spawned them.
 - In Codex's code mode (on by default), a subagent spawned from inside an
   `exec` call hangs under that call; before, it and its model calls were
-  never sent. The text of `exec` output is scrubbed as text, so a
-  `name = secret` line is no longer missed.
+  never sent. The text of `exec` output is scrubbed as text, one line per
+  part, so a `name = secret` line is no longer missed, and a script that
+  reads a secret-shaped file has its output replaced whole as well.
 - With content on, Codex and Cursor remove secrets as Claude Code does:
   every content attribute and error line is scrubbed, and a read of a
   secret-shaped file (`.env*`, `*.pem`, `id_rsa*`, ...) is replaced whole.
@@ -48,6 +49,10 @@ both. Claude Code: no change in what is traced or sent.
   covers `cursor-agent` builds that ignore plugin hooks. (#25, #28)
 - Cursor keeps its own key and state in `~/.cursor/rius`. Spools of
   conversations idle for 7 days are deleted once their trace is closed.
+- Built from real `cursor-agent` (2026.10.01) payloads: a headless run is
+  one turn, a Task subagent hangs under its Task call (parallel Tasks
+  each under their own), and the local spool holds content only with
+  secrets removed, never the output of a secret-shaped file read.
 - The bundled MCP server signs in with OAuth (Connect in Cursor's MCP
   settings). The `/rius-*` commands only run when you type them.
 

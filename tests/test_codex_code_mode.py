@@ -118,9 +118,22 @@ def test_subagent_stop_alone_is_enough_to_link_the_child(
 
 def test_the_spawning_call_is_the_last_one_begun_before_the_child_existed():
     state = codex_spans.new_state()
-    state["tool_starts"] = [[100, "a"], [200, "b"], [300, "c"]]
+    state["tool_starts"] = [[100, "a", "exec"], [200, "b", "exec"],
+                            [300, "c", "exec"]]
     assert codex_spans.spawning_tool(state, 250) == "b"
     assert codex_spans.spawning_tool(state, 50) is None
+
+
+def test_only_an_exec_call_is_placed_by_time():
+    """A spawn_agent call's output names its agent exactly; by time, two
+    spawns in parallel would both land under the second."""
+    state = codex_spans.new_state()
+    state["tool_starts"] = [[100, "a", "exec"],
+                            [200, "b", codex_spans.SPAWN_TOOL],
+                            [300, "c", "exec_command"]]
+    assert codex_spans.spawning_tool(state, 250) is None
+    assert codex_spans.spawning_tool(state, 350) is None
+    assert codex_spans.spawning_tool(state, 150) == "a"
 
 
 def test_exec_output_parts_are_read_as_their_text():
@@ -153,3 +166,76 @@ def test_a_secret_in_exec_output_parts_is_removed():
                                  "aws_secret_access_key = %s\n" % (key_id, secret)}]}})
     output = codex_rollout.parse_line(line).get("output")
     assert secret not in scrub.scrub(output)
+
+
+KEY_ID = "AKIA" + "ABCDEFGHIJKLMNOP"
+AWS_SECRET = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+CREDENTIALS = ("[default]\naws_access_key_id = %s\naws_secret_access_key = %s\n"
+               % (KEY_ID, AWS_SECRET))
+ENV_FILE = ("DATABASE_URL=postgres://admin:S3cr3tPw@db.internal:5432/prod\n"
+            "INTERNAL_HOST=db.internal.acme\n")
+
+
+def _exec_output(script, texts):
+    """One `exec` call and its output parts, built into a tool span with
+    content on."""
+    lines = [
+        {"timestamp": "2026-10-05T16:14:00.000Z", "type": "session_meta",
+         "payload": {"id": PARENT, "cwd": "/tmp/proj",
+                     "cli_version": "0.144.1"}},
+        {"timestamp": "2026-10-05T16:14:00.100Z", "type": "event_msg",
+         "payload": {"type": "task_started", "turn_id": "t1"}},
+        {"timestamp": "2026-10-05T16:14:00.200Z", "type": "turn_context",
+         "payload": {"turn_id": "t1", "model": "gpt-5.6-luna"}},
+        {"timestamp": "2026-10-05T16:14:03.000Z", "type": "response_item",
+         "payload": {"type": "custom_tool_call", "call_id": "c1",
+                     "name": "exec", "input": script}},
+        {"timestamp": "2026-10-05T16:14:03.381Z", "type": "response_item",
+         "payload": {"type": "custom_tool_call_output", "call_id": "c1",
+                     "output": [{"type": "input_text", "text": t}
+                                for t in texts]}}]
+    records = [codex_rollout.parse_line(json.dumps(line)) for line in lines]
+    assert None not in records
+    ctx = spans.Ctx(session_id=PARENT, cwd="/tmp/proj", git_branch="",
+                    cc_version="", service_name="codex",
+                    capture_content=True, max_attr_bytes=32768)
+    out = codex_spans.build(records, codex_spans.new_state(), ctx)
+    tool = [s for s in out if s.name == "exec" and not s.pending][0]
+    return tool.attributes["output.value"]
+
+
+def test_each_exec_output_part_is_its_own_line():
+    """`text(value)` appends one part and no newline: run together, the
+    key id's line swallows the next part's `aws_secret_access_key`."""
+    value = _exec_output("text(r.output)", [
+        "Script completed\nOutput:\n", "[default]",
+        "aws_access_key_id = " + KEY_ID,
+        "aws_secret_access_key = " + AWS_SECRET])
+    assert AWS_SECRET not in value
+    assert "aws_secret_access_key = [redacted:" in value
+
+
+def test_a_secret_in_json_inside_exec_output_is_removed():
+    """`text(JSON.stringify(result))`: each line break is a literal `\\n`."""
+    value = _exec_output("text(JSON.stringify(s))", [
+        "Script completed\nOutput:\n",
+        json.dumps({"status": {"x": {"completed": CREDENTIALS}}})])
+    assert AWS_SECRET not in value
+    assert KEY_ID not in value
+
+
+def test_a_secret_file_read_inside_exec_is_replaced_whole():
+    """Code mode runs `cat .env` from a script, not from JSON arguments."""
+    for script in ('const r = await tools.exec_command({cmd: "cat .env"});'
+                   'text(r.output);',
+                   "text(await tools.exec_command({cmd: 'cat ~/.aws/credentials'}))",
+                   'const p = `${home}/.ssh/id_rsa`; text(await read(p));'):
+        value = _exec_output(script, ["Script completed\nOutput:\n", ENV_FILE])
+        assert value == "[redacted:secret-file]", script
+
+
+def test_a_script_naming_no_secret_file_keeps_its_output():
+    value = _exec_output(
+        'const k = obj.key; text(process.env.HOME); text("ls -la")',
+        ["Script completed\nOutput:\n", "INTERNAL_HOST=db.internal.acme\n"])
+    assert "INTERNAL_HOST=db.internal.acme" in value
