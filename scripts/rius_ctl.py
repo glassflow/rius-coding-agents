@@ -29,6 +29,7 @@ import io
 import os
 import re
 import sys
+import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -492,12 +493,34 @@ def _login(home, cwd, env_flag=None):
     print("Check that the browser shows the same code, then pick a workspace.")
 
 
-def _open_browser(url):
+def _open_browser(url, environ=os.environ, system=sys.platform):
+    """Open the link only where a browser window can appear. Anywhere else
+    the printed link and code are the whole sign-in."""
+    if not _has_desktop(environ, system):
+        return
     try:
-        import webbrowser
-        webbrowser.open(url)
-    except Exception:  # headless or no browser: the printed URL still works
+        browser = webbrowser.get()
+        if _is_console_browser(browser):
+            return
+        browser.open(url)
+    except Exception:  # no usable browser: the printed URL still works
         pass
+
+
+def _has_desktop(environ, system):
+    if environ.get("SSH_CONNECTION") or environ.get("SSH_TTY"):
+        return False
+    if system == "darwin" or system.startswith("win"):
+        return True
+    return bool(environ.get("DISPLAY") or environ.get("WAYLAND_DISPLAY"))
+
+
+def _is_console_browser(browser):
+    # Plain GenericBrowser is how webbrowser runs lynx, w3m and a bare
+    # $BROWSER command: in the foreground, waiting for it to exit. In a slash
+    # command that takes over the terminal and hangs. GUI launchers such as
+    # xdg-open are BackgroundBrowser or their own classes.
+    return type(browser) is webbrowser.GenericBrowser
 
 
 def _login_wait(home, cwd):

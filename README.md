@@ -98,6 +98,8 @@ in the browser, where you sign in or sign up and pick the workspace this
 machine sends to; the plugin stores a key for it. That key only sends
 traces. To ask Claude about your traces, also run `/mcp`, pick `rius` and sign
 in there (see [Asking Claude about your traces](#asking-claude-about-your-traces)).
+Over SSH, or on a machine with no display, no browser is opened: open the
+printed link on any device and check that it shows the same code.
 If `/rius:status` doesn't say `on`, the
 [getting started guide](docs/getting-started.md) covers the rest end to end:
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
