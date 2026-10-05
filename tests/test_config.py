@@ -136,7 +136,7 @@ def test_defaults_and_overrides(tmp_path):
     c = config.resolve("s1", "/x", BASE_ENV, home)
     assert c.endpoint == TEST_ENDPOINT
     assert c.service_name == "claude-code"
-    assert c.capture_content is True
+    assert c.capture_content is False      # no enable rule chose content
     assert c.max_attr_bytes == 32768
     env = dict(BASE_ENV, RIUS_SERVICE_NAME="cc-dev",
                RIUS_CAPTURE_CONTENT="false", RIUS_CLAUDE_MAX_ATTR_BYTES="100")

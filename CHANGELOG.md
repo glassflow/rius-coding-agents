@@ -29,6 +29,21 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
 - New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
   files that have one keep working.
+- Private content is off by default, and secrets are removed.
+  `/rius:enable-here` now sends structure only: models, tokens, cost,
+  timing, tool names and error types, but no prompts, replies, file
+  contents or command output. The new `/rius:enable-content-here` sends
+  those too, for that folder only, after replacing the secrets the plugin
+  recognises (cloud, GitHub, Slack, Stripe, OpenAI, Anthropic and Rius
+  keys, JWTs, private keys, `password=` style values, Authorization
+  headers) with a marker such as `[redacted:aws-key]`, and dropping the
+  output of reads of `.env`, key and credential files. Claude can run
+  neither command for you, and each command's permission grant now covers
+  only its own subcommand. A folder enabled before this release
+  keeps sending content, and `/rius:status` asks you to pick. A session
+  turned on with `/rius:on` in a folder no rule enables sends structure
+  only. A failed tool's withheld detail now reads `content capture off`.
+  (#38)
 - A repo you clone can no longer turn tracing on, or redirect your traces
   or your key. Claude Code hands hooks the `env` block of a project's
   committed `.claude/settings.json`, so the environment may now only turn

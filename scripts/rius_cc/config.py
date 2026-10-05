@@ -42,6 +42,12 @@ IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
                     "server your /rius:login key came from")
 IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
                   "/rius:enable-here to trace a folder")
+IGNORED_CAPTURE = ("RIUS_CAPTURE_CONTENT=true is set but ignored; run "
+                   "/rius:enable-content-here to send content here")
+
+# Per enable rule in config.json: whether that folder sends content. A rule
+# written before the choice existed has no entry, and keeps sending it.
+CONTENT_CHOICES_KEY = "capture_content"
 
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
@@ -50,7 +56,7 @@ _FALSE_VALUES = {"false", "0"}
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
                  capture_content, max_attr_bytes, debug, key_source=None,
-                 workspace_name=None, ignored_env=()):
+                 workspace_name=None, ignored_env=(), unchosen_rule=None):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
@@ -64,6 +70,8 @@ class Config:
         # One line per environment setting that asked for something only
         # the user's own config may grant.
         self.ignored_env = list(ignored_env)
+        # The enable rule deciding capture that predates the content choice.
+        self.unchosen_rule = unchosen_rule
 
 
 def _rius_dir(home: str) -> str:
@@ -293,6 +301,24 @@ def matching_rule(cwd: str, home: str) -> Optional[Tuple[str, bool]]:
     return None
 
 
+def content_choice(rules: dict, rule: str) -> Optional[bool]:
+    choices = rules.get(CONTENT_CHOICES_KEY)
+    choice = choices.get(rule) if isinstance(choices, dict) else None
+    return choice if isinstance(choice, bool) else None
+
+
+def _rule_capture(cwd: str, home: str):
+    """(capture, unchosen_rule) from the enable rule covering `cwd`. A
+    folder no enable rule covers (a /rius:on session) sends no content."""
+    match = matching_rule(cwd, home)
+    if match is None or not match[1]:
+        return False, None
+    choice = content_choice(read_path_rules(home), match[0])
+    if choice is None:
+        return True, match[0]
+    return choice, None
+
+
 def _path_rules_decision(cwd: str, home: str):
     match = matching_rule(cwd, home)
     if match is None:
@@ -395,8 +421,13 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
     profile = agent.active()
     ignored_env = _ignored_env(env)
     service_name = _service_name(env)
+    capture_content, unchosen_rule = _rule_capture(cwd, home)
     # The environment may only lower capture.
-    capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT")) is not False
+    env_capture = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
+    if env_capture is False:
+        capture_content, unchosen_rule = False, None
+    elif env_capture is True and not capture_content:
+        ignored_env.append(IGNORED_CAPTURE)
     max_attr_bytes = _max_attr_bytes(env)
     debug = bool(_parse_bool_env(env.get(profile.env_var("DEBUG"))))
 
@@ -420,4 +451,5 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         key_source=key_source,
         workspace_name=workspace_name,
         ignored_env=ignored_env,
+        unchosen_rule=unchosen_rule,
     )

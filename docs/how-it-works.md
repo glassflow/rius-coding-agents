@@ -24,7 +24,7 @@ first prompt, else `claude-code session`. The console shows the root span's
 name as the trace's name. A `/rename` fires no hook, so the new name reaches
 the trace at the next hook event (your next prompt, a tool call, the end of
 a turn, or the session's end), under the same span id. The name is content:
-with `RIUS_CAPTURE_CONTENT=false` it is never sent, and the trace keeps the
+in a folder that sends structure only it is never sent, and the trace keeps the
 `claude-code session` title. A session disabled mid-way closes under the
 name it had already sent, never one given after the disable.
 

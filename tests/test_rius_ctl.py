@@ -186,9 +186,15 @@ ROOT = pathlib.Path(__file__).parent.parent
 COMMANDS = ROOT / "commands"
 CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
 
-PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "logout")
+PLAIN_ACTIONS = ("login", "disable-here", "logout")
 SESSION_ACTIONS = ("status", "on", "off")
-ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS
+# Commands that take no arguments at all, and the subcommand each runs.
+FOLDER_COMMANDS = {"enable-here": "enable-here",
+                   "enable-content-here": "content-on-here"}
+ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS + tuple(FOLDER_COMMANDS)
+GRANTED = dict({a: (a,) for a in PLAIN_ACTIONS + SESSION_ACTIONS},
+               login=("login", "login-wait"),
+               **{c: (sub,) for c, sub in FOLDER_COMMANDS.items()})
 
 
 def _command_file(action):
@@ -215,8 +221,16 @@ def test_the_catch_all_command_is_gone():
 def test_command_frontmatter_permits_the_launcher(action):
     front = _frontmatter(action)
     assert re.search(r"^description: \S", front, re.M), front
-    assert ("allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)"
-            in front), front
+    grants = " ".join("Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh %s:*)"
+                      % sub for sub in GRANTED[action])
+    assert "allowed-tools: %s\n" % grants in front, front
+
+
+@pytest.mark.parametrize("command", sorted(FOLDER_COMMANDS))
+def test_folder_commands_pass_no_arguments(command):
+    assert _command_line(command) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
+        % FOLDER_COMMANDS[command])
 
 
 @pytest.mark.parametrize("action", PLAIN_ACTIONS)
@@ -288,7 +302,7 @@ def test_enable_here_command_line_enables_the_folder_the_hooks_see(tmp_path):
     proj.mkdir()
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
            "CLAUDE_PLUGIN_ROOT": str(ROOT)}
-    line = _command_line("enable-here").replace("$ARGUMENTS", "")
+    line = _command_line("enable-here")
     r = subprocess.run([BASH, "-c", line], cwd=str(proj),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -407,7 +421,8 @@ def test_disable_here_beats_a_parent_enable(tmp_path):
     assert r.returncode == 0
     assert "disabled for /opt/proj" in r.stdout
     assert _rules(tmp_path) == {"enabled_paths": ["/opt"],
-                                "disabled_paths": ["/opt/proj"]}
+                                "disabled_paths": ["/opt/proj"],
+                                "capture_content": {"/opt": False}}
     status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/sub"], home)
     assert "Rius tracing: off" in status.stdout
     status = _run(["status", "--session", "s1", "--cwd", "/opt/other"], home)
@@ -438,7 +453,8 @@ def test_enable_here_removes_the_disabled_entry(tmp_path):
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.returncode == 0
     assert "enabled for /opt/proj" in r.stdout
-    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": [],
+                                "capture_content": {"/opt/proj": False}}
 
 
 def _store_login(home, workspace_name="eng-shared"):
@@ -455,23 +471,38 @@ def test_enable_here_says_what_this_folder_will_upload_and_where(tmp_path):
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.stdout.splitlines() == [
         "Rius tracing enabled for /opt/proj and everything under it.",
+        "Sessions here now send structure only (models, tokens, timing, tool "
+        "names) to eng-shared: no prompts, replies, file contents or command "
+        "output.",
+        "Structure only is recommended. To include content for this folder, "
+        "run /rius:enable-content-here. Run /rius:disable-here to stop."]
+
+
+def test_enable_here_with_content_says_so_and_how_to_go_back(tmp_path):
+    home = _fresh_home(tmp_path)
+    _store_login(home)
+    r = _run(["content-on-here", "--cwd", "/opt/proj"], home)
+    assert r.stdout.splitlines() == [
+        "Rius tracing enabled for /opt/proj and everything under it.",
         "Sessions here now send prompts, replies, the contents of files Claude "
-        "reads and command output to eng-shared.",
-        "Set RIUS_CAPTURE_CONTENT=false to send structure only (models, "
-        "tokens, timing), or run /rius:disable-here to stop."]
+        "reads and command output to eng-shared, with the secrets Rius "
+        "recognises removed first.",
+        "Run /rius:enable-here to send structure only, or /rius:disable-here "
+        "to stop."]
+    assert _rules(tmp_path)["capture_content"] == {"/opt/proj": True}
 
 
 def test_enable_here_with_content_off_does_not_claim_content_is_sent(tmp_path):
     home = _fresh_home(tmp_path)
     _store_login(home)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home,
+    r = _run(["content-on-here", "--cwd", "/opt/proj"], home,
              {"RIUS_CAPTURE_CONTENT": "false"})
     assert r.stdout.splitlines() == [
         "Rius tracing enabled for /opt/proj and everything under it.",
-        "Sessions here now send structure only (models, tokens, timing) to "
-        "eng-shared; RIUS_CAPTURE_CONTENT=false withholds prompts, replies, "
-        "file contents and command output.",
-        "Run /rius:disable-here to stop."]
+        "Sessions here now send structure only (models, tokens, timing, tool "
+        "names) to eng-shared: no prompts, replies, file contents or command "
+        "output.",
+        "RIUS_CAPTURE_CONTENT=false in your environment keeps content off here."]
 
 
 def test_enable_here_under_an_env_key_still_names_the_login_workspace(tmp_path):
@@ -479,16 +510,16 @@ def test_enable_here_under_an_env_key_still_names_the_login_workspace(tmp_path):
     _store_login(home)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home,
              {"RIUS_API_KEY": "glassflow_attacker"})
-    assert "command output to eng-shared." in r.stdout
+    assert "to eng-shared: no prompts" in r.stdout
 
 
 def test_enable_here_before_login_says_nothing_is_sent_yet(tmp_path):
     home = _fresh_home(tmp_path)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.stdout.splitlines()[1] == (
-        "Sessions here will send prompts, replies, the contents of files "
-        "Claude reads and command output to the workspace you pick once you "
-        "sign in with /rius:login.")
+        "Sessions here will send structure only (models, tokens, timing, tool "
+        "names) to the workspace you pick once you sign in with /rius:login: "
+        "no prompts, replies, file contents or command output.")
     assert "now send" not in r.stdout
 
 
@@ -633,7 +664,8 @@ def test_enable_here_is_idempotent_across_spellings(tmp_path):
     real, link = _linked_dir(tmp_path)
     _run(["enable-here", "--cwd", link], home)
     _run(["enable-here", "--cwd", real], home)
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
@@ -642,7 +674,8 @@ def test_enable_here_stores_the_folder_the_hooks_see(tmp_path):
     real, link = _linked_dir(tmp_path)
     r = _run(["enable-here", "--cwd", link], home)
     assert "enabled for %s " % real in r.stdout
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
@@ -734,7 +767,8 @@ def test_enable_here_replaces_a_rule_written_through_a_symlink(tmp_path):
     with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
         json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
     _run(["enable-here", "--cwd", link], home)
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
     r = _run(["status", "--session", "s1", "--cwd", link], home)
     assert "Rius tracing: on" in r.stdout
     assert "through a symlink" not in r.stdout

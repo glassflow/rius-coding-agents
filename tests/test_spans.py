@@ -215,7 +215,7 @@ def test_capture_content_false_strips_content(fixtures_dir):
     # Fixed string, no content -- and self-explanatory, so a viewer reading
     # the span knows the detail was withheld on purpose rather than lost.
     assert tool.status_message == \
-        "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+        "tool error (detail withheld: content capture off)"
     assert tool.status_message == spans.TOOL_ERROR_WITHHELD
     # structure survives
     assert any(s.attributes.get("gen_ai.tool.name") == "Read" for s in out)

@@ -27,7 +27,8 @@ credit you in the release notes if you'd like.
   the bundled MCP configuration.
 - Anything that sends data somewhere other than the endpoints the
   [README](README.md#privacy-and-security-posture) lists, sends content
-  with `RIUS_CAPTURE_CONTENT=false`, sends anything for a folder that isn't
+  from a folder that sends structure only, ships a secret the scrubber
+  claims to remove, sends anything for a folder that isn't
   enabled, writes the API key to a log or to Claude Code's settings, or
   lets a project's environment turn tracing on, raise content capture, or
   choose the key or the server it is sent to.

@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from . import agent, context_sizes
+from . import agent, context_sizes, scrub
 
 PROVIDER_NAME = agent.CLAUDE_CODE.provider
 
@@ -31,13 +31,13 @@ SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
-TOOL_ERROR_WITHHELD = "tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)"
+TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
 
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
 # was piped after, say) must never be it. The cap bounds the SIZE, not the
 # sensitivity: that line is still command output, and only the capture gate
-# (RIUS_CAPTURE_CONTENT) keeps it off the wire. Raising the cap is safe;
+# keeps it off the wire. Raising the cap is safe;
 # removing the gate is not.
 ERROR_MESSAGE_MAX_BYTES = 256
 
@@ -215,10 +215,27 @@ def tool_error_line(output: str, max_bytes: int = ERROR_MESSAGE_MAX_BYTES) -> st
     return truncate(line, max_bytes)
 
 
+# A secret the cap cuts through must still be recognised whole, so the
+# scrubber sees this much past the cap. A 4096-bit PEM key is ~3.3 KB.
+SCRUB_MARGIN_BYTES = 4096
+
+
+def exportable(value: str, limit: int) -> str:
+    """`value` with secrets removed, capped at `limit` bytes. Only what can
+    be kept is scanned, which bounds the cost of a huge file read."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return scrub.scrub(value)
+    head = encoded[:limit + SCRUB_MARGIN_BYTES].decode("utf-8", errors="ignore")
+    kept = scrub.scrub(head).encode("utf-8")[:limit]
+    return (kept.decode("utf-8", errors="ignore")
+            + " …[truncated %d bytes]" % (len(encoded) - len(kept)))
+
+
 def _content_attr(ctx: Ctx, attrs: Dict[str, Any], key: str, value: str) -> None:
     if not ctx.capture_content:
         return
-    attrs[key] = truncate(value, ctx.max_attr_bytes)
+    attrs[key] = exportable(value, ctx.max_attr_bytes)
 
 
 def _current_turn_parent(state: dict, root_span_id: str) -> str:
@@ -431,22 +448,26 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs["gen_ai.tool.name"] = open_tool["tool_name"]
+                    secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
-                    _content_attr(ctx, attrs, "output.value", content_str)
+                    _content_attr(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
+                                  if secret_file else content_str)
                     status_code = "ERROR" if is_error else "OK"
                     # Status.message is content too: it is a line of the
                     # command's output. It must honour the capture gate
-                    # exactly like input.value/output.value do, or
-                    # RIUS_CAPTURE_CONTENT=false is not the guarantee the
-                    # README makes it out to be.
+                    # exactly like input.value/output.value do, or structure
+                    # only is not the guarantee the README makes it out to be.
                     status_message = ""
                     events = []
                     if is_error:
                         error_type = tool_error_type(open_tool["tool_name"], content_str)
-                        if ctx.capture_content:
-                            status_message = tool_error_line(content_str) or error_type
-                        else:
+                        if not ctx.capture_content:
                             status_message = TOOL_ERROR_WITHHELD
+                        elif secret_file:
+                            status_message = error_type
+                        else:
+                            status_message = (scrub.scrub(tool_error_line(content_str))
+                                              or error_type)
                         attrs["error.type"] = error_type
                         # The backend groups errors by this event's type and
                         # message, and only falls back to the status message
@@ -567,7 +588,8 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
 def clean_title(title: str) -> str:
     """One line, trimmed and capped: a title is shown as a trace's name."""
-    return " ".join(_CONTROL_CHARS.sub(" ", title).split())[:TITLE_MAX_CHARS]
+    one_line = " ".join(_CONTROL_CHARS.sub(" ", title).split())
+    return scrub.scrub(one_line)[:TITLE_MAX_CHARS]
 
 
 def note_titles(state: dict, ctx: Ctx, titles: Dict[str, str]) -> None:
