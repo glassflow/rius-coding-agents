@@ -119,3 +119,13 @@ def test_the_cli_refuses_without_the_cursor_agent(tmp_path, capsys):
                       str(tmp_path))
     assert "Cursor only" in capsys.readouterr().out
     assert not (tmp_path / "h.json").exists()
+
+
+def test_reinstalling_keeps_hooks_added_after_ours_in_place(tmp_path):
+    path = tmp_path / "hooks.json"
+    cursor_install.install(str(path), ROOT)
+    doc = _read(path)
+    doc["hooks"]["stop"].append(THEIRS)
+    _write(path, doc)
+    changed, _ = cursor_install.install(str(path), ROOT)
+    assert not changed and _read(path)["hooks"]["stop"][-1] == THEIRS
