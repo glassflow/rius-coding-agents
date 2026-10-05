@@ -44,12 +44,10 @@ ENVIRONMENTS = {
     "production": {
         "link_base": "https://connect.console.rius-glassflow.com",
         "console_url": "https://console.rius-glassflow.com",
-        "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
     },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
-        "mcp_url": "https://mcp.eu.staging.rius.glassflow.xyz/mcp",
     },
 }
 DEFAULT_ENVIRONMENT = "production"
@@ -71,7 +69,7 @@ _PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
                    "interval", "expires_at")
 _LINK_FIELDS = ("link_id", "device_code", "user_code", "connect_url", "interval",
                 "expires_in")
-_CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
+_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_id",
                       "workspace_name", "org_name", "email", "expires_at")
 _REQUIRED_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_id",
                                "workspace_name", "email")

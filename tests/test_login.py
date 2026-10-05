@@ -142,7 +142,6 @@ def test_pending_then_success_stores_private_credentials(tmp_path):
     creds = _wait(home, clock, post)
     assert creds == {
         "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console",
-        "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
         "env": "production",
         "workspace_id": "22222222-2222-2222-2222-222222222222",
         "workspace_name": "eng-shared", "org_name": "Acme",
@@ -508,7 +507,7 @@ def server(monkeypatch):
         # These run the real sleep; the floor has its own clock-driven test.
         monkeypatch.setattr(login, "MIN_POLL_SECONDS", 0)
         return fake
-    for name in ("RIUS_API_KEY", "RIUS_ENV"):
+    for name in ("RIUS_API_KEY", "RIUS_ENV", "RIUS_MCP_URL"):
         monkeypatch.delenv(name, raising=False)
     return install
 
@@ -825,7 +824,61 @@ def test_the_bundled_mcp_server_is_production_at_a_fixed_url():
     # The directory accepts only an absolute https URL here, and OAuth needs
     # no helper to hand it a key.
     assert _bundled_mcp_server() == {"type": "http", "url": PROD_MCP}
-    assert login.ENVIRONMENTS[login.DEFAULT_ENVIRONMENT]["mcp_url"] == PROD_MCP
+
+
+STAGING_QUERYING = (
+    "Querying traces: the bundled rius server is production; run "
+    "`claude mcp add --transport http rius-staging "
+    "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
+RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
+
+
+def test_login_wait_on_staging_points_mcp_at_a_staging_server(
+        tmp_path, server, capsys):
+    home = str(tmp_path)
+    _park(home, env="staging")
+    server((200, TOKEN_RESPONSE))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    out = capsys.readouterr().out
+    assert STAGING_QUERYING in out
+    assert QUERYING not in out
+
+
+def test_status_on_staging_points_mcp_at_staging_and_retires_the_old_setting(tmp_path):
+    home = str(tmp_path)
+    _store(home, env="staging")
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert STAGING_QUERYING in r.stdout
+    assert QUERYING not in r.stdout
+    assert RETIRED in r.stdout
+
+
+def test_status_flags_a_leftover_rius_mcp_url(tmp_path):
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path),
+             {"RIUS_MCP_URL": "https://mcp.eu.staging.rius.glassflow.xyz/mcp"})
+    assert RETIRED in r.stdout
+
+
+def test_status_on_production_does_not_mention_rius_mcp_url(tmp_path):
+    home = str(tmp_path)
+    _store(home)
+    assert RETIRED not in _ctl(["status", "--session", "s1", "--cwd", "/x"], home).stdout
+
+
+def test_new_credentials_do_not_store_an_mcp_url(tmp_path, server):
+    home = str(tmp_path)
+    _park(home)
+    server((200, TOKEN_RESPONSE))
+    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
+    assert "mcp_url" not in login.read_credentials(home)
+
+
+def test_old_credentials_with_an_mcp_url_still_trace(tmp_path):
+    home = str(tmp_path)
+    _store(home, mcp_url="https://mcp.eu.console.rius-glassflow.com/mcp")
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "Tracing: signed in as workspace personal (Me)" in r.stdout
+    assert QUERYING in r.stdout
 
 
 def test_login_wait_under_an_env_key_says_the_env_key_still_traces(

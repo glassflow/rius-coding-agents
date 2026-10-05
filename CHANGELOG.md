@@ -16,6 +16,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   along with the headers helper and the `MCP:` and `MCP key:` lines in
   `/rius:status`. To query staging, register the staging server yourself
   (see "Signing in to staging" in the getting started guide).
+- After a staging sign-in, `/rius:status` and `/rius:login` print the
+  command that registers the staging MCP server instead of pointing you at
+  production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
+- New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
+  files that have one keep working.
 
 ## 0.4.5 (2026-10-01)
 

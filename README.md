@@ -252,7 +252,7 @@ Code's own MCP OAuth, separately from `/rius:login`:
 | `/rius:login` | Tracing: hooks send sessions to the workspace you pick | A key stored in `~/.claude/rius/credentials.json` |
 | `/mcp`, then `rius` | Querying traces: Claude reads them back | Your Rius account through OAuth, kept by Claude Code |
 
-`/rius:status` shows both, one line each. The OAuth sign-in reaches every
+`/rius:status` tells you how to sign in to each, one line apiece. The OAuth sign-in reaches every
 workspace your account can, so name the workspace in your question when you
 have more than one.
 
