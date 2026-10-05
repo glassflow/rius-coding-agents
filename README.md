@@ -29,35 +29,95 @@ waterfall that fills in while the session is still running.
      docs/assets/console-trace.png and replace this comment with:
      <img src="docs/assets/console-trace.png" alt="A Claude Code session as a trace waterfall in the Rius console" width="100%"> -->
 
-## What gets sent -- read this before enabling anything
+## What Rius sends
 
-Nothing is sent for any folder until you enable it (see
-[Enabling a folder](#enabling-a-folder)). Installing the plugin uploads
-nothing. When you enable a folder, you choose one of two modes for it:
+The plugin works in Claude Code only: the terminal, the desktop app and the
+IDE extensions. It doesn't run in claude.ai or Cowork and sees nothing from
+them.
 
-- **Structure only** (`/rius:enable-here`, the default and the
-  recommendation). The span tree, model names, token counts (including cache
-  reads), cost, timing, status, tool names and error types, a subagent's
-  type and model, and the folder path and git branch. No prompts, no
-  assistant text, no tool inputs or outputs, no subagent briefs or
-  descriptions, no session name (the trace is titled `claude-code session`)
-  and no line of a failed tool's output.
-- **With content** (`/rius:enable-content-here`). All of the above,
-  plus every prompt, assistant message, tool input and tool **output**: the
-  contents of files Claude Code reads and the output of commands it runs.
-  Before export, the plugin replaces the secrets it recognises with a
-  marker such as `[redacted:aws-key]`: AWS, GCP, GitHub, Slack, Stripe,
-  OpenAI, Anthropic and Rius keys, JWTs, private keys, `password=`,
-  `secret=`, `token=` and `api_key=` style values, and Authorization or
-  Bearer headers. The output of a read of `.env*`, `*.pem`, `*.key`,
-  `id_rsa*`, `credentials*`, `.npmrc`, `.pypirc` or `.netrc` is dropped
-  whole. Recognising is not a guarantee: a secret in a format it does not
-  know is sent.
+Installing it sends nothing. You sign in with `/rius:login`, then choose
+each folder to trace. Only you can run these commands: Claude can't run them
+for you, and a repository's settings can't turn tracing on.
 
-Run `/rius:enable-here` or `/rius:enable-content-here` again to change a
-folder's mode. A folder enabled before this choice existed keeps sending
-content until you do, and `/rius:status` says so. `RIUS_CAPTURE_CONTENT=false`
-turns content off for every folder.
+- **Structure only** (`/rius:enable-here`, the default): the span tree,
+  model names, token counts, timing, status, tool names, error types, a
+  subagent's type, and the folder path and git branch. No prompts, replies,
+  tool inputs or outputs, subagent briefs or session name.
+- **With content** (`/rius:enable-content-here`): all of the above, plus
+  your prompts, Claude's replies (never its thinking), tool inputs and tool
+  outputs, which include file contents and command output.
+
+A folder enabled before 0.5.0 keeps sending content until you run one of the
+two commands again; `/rius:status` says so. `RIUS_CAPTURE_CONTENT=false`
+turns content off everywhere.
+
+### Secrets in content mode
+
+Before export, the plugin replaces the secrets it recognises with a marker
+such as `[redacted:aws-key]`: AWS, GCP, GitHub, Slack, Stripe, OpenAI,
+Anthropic and Rius keys, JWTs, private keys, `password=`, `secret=`,
+`token=` and `api_key=` style values, and Authorization or Bearer headers.
+The output of a read of `.env*`, `*.pem`, `*.key`, `id_rsa*`,
+`credentials*`, `.npmrc`, `.pypirc` or `.netrc` is replaced whole. This is
+best effort: a secret in a format it doesn't know is sent. Each value is
+capped at 32 KB.
+
+### Fields
+
+| Field | Example | Sent |
+|---|---|---|
+| `service.name`, `service.instance.id` | `claude-code`, a random id per session | always |
+| `cc.version`, `cc.cwd`, `cc.git_branch` | `2.1.289`, `/Users/ana/src/shop` (can include your user name), `main` | always |
+| span name, ids, start and end time, status | trace and span ids are hashes of the session id | always |
+| `session.id`, `cc.claude_session_id`, `cc.continued_from` | Claude Code session ids | always |
+| `openinference.span.kind`, `gen_ai.operation.name`, `gen_ai.provider.name` | `LLM`, `chat`, `anthropic` | always |
+| `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` | `claude-opus-5-5`, `["tool_use"]` | always |
+| `gen_ai.usage.*` | input, output, reasoning, cache read and cache write token counts | always |
+| `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
+| `gen_ai.tool.name` | `Bash`, `mcp__github__create_issue` | always |
+| `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
+| `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
+| `glassflow.span.pending` | `true` while a span is still running | always |
+| `input.value`, `output.value` | prompt, reply, tool input and output | content mode |
+| `gen_ai.agent.description` | a subagent's description | content mode |
+| session span name | the session title instead of `claude-code session` | content mode |
+| `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)` | content mode |
+
+The plugin sends token counts. Rius prices them at API rates, so the cost in
+the console isn't what you pay on a Pro or Max subscription.
+
+### Where it goes
+
+| Host | When | What |
+|---|---|---|
+| `ingest.eu.console.rius-glassflow.com` | while a traced session runs | spans, and a heartbeat every 15 seconds for at most 12 hours: a random instance id, `claude-code`, the time, the plugin's SDK name and version. No content. |
+| `connect.console.rius-glassflow.com` | `/rius:login`, `/rius:logout` | your computer's hostname (first 64 characters, shown on the approval page), a one-time device code while you approve, and the key once more to revoke it |
+| `mcp.eu.console.rius-glassflow.com` | only when you use the Rius MCP tools | your questions, signed in separately through `/mcp` |
+
+Nothing else is contacted. Everything goes over https, redirects are never
+followed, and the key is only sent to the Rius host it was issued for. The
+key is stored in `~/.claude/rius/credentials.json`, readable only by you,
+and is never logged. The plugin is Python standard library only.
+
+Data is stored in the EU and kept as described in your plan; see
+[pricing](https://www.glassflow.ai/pricing) and the
+[privacy policy](https://www.glassflow.ai/privacy-policy).
+
+### Pricing
+
+Rius is a paid service with a free trial that needs no card. Plans and
+limits are on the [pricing page](https://www.glassflow.ai/pricing). When the
+trial ends or a workspace is paused, Rius refuses new data, and the next
+session start and `/rius:status` tell you so.
+
+### Turn it off and uninstall
+
+1. `/rius:off` stops this session; `/rius:disable-here` stops a folder.
+2. `/rius:logout` revokes the key and deletes it from this machine. Run it
+   **before** uninstalling, or the key stays valid until it expires.
+3. `/plugin uninstall rius`
+4. `rm -rf ~/.claude/rius/` removes folder rules, logs and session state,
+   which uninstalling leaves behind.
 
 ## Quick start
 
@@ -167,7 +227,7 @@ This adds your current working directory to the path rules stored in
 `~/.claude/rius/config.json`. Every subdirectory under it is enabled too. The
 default-off behavior exists so that installing the plugin can never silently
 start uploading a repo nobody has thought about -- see
-[What gets sent](#what-gets-sent----read-this-before-enabling-anything).
+[What gets sent](#what-rius-sends).
 
 You also need a key, from `/rius:login`. Without one, tracing stays off
 regardless of any other setting.
@@ -332,36 +392,6 @@ and more. Anything that already emits OpenTelemetry, whether through
 a plain [OTel SDK](https://docs.glassflow.ai/rius/interoperability/otel-sdks)
 or a [Collector](https://docs.glassflow.ai/rius/interoperability/collector),
 can send to Rius over OTLP.
-
-## Privacy and security posture
-
-- Zero runtime dependencies: the plugin is Python standard library only,
-  nothing is pulled from PyPI at install or run time.
-- Span exports go only to the endpoint stored with the `/rius:login` key,
-  and only when it is an `https` Rius host. `/rius:login` refuses to store a
-  key for any other server. `/rius:login`, `/rius:logout` and a
-  re-login's revoke of the previous key also call the sign-in host
-  (`connect.console.rius-glassflow.com`, or
-  `connect.staging.rius.glassflow.xyz` on staging), and the bundled MCP
-  server talks to `mcp.eu.console.rius-glassflow.com` when you use it.
-  Nothing else is contacted.
-- The API key is never logged. `/rius:status` and debug logs print it
-  redacted (prefix plus an ellipsis).
-
-## Uninstall
-
-```
-/plugin uninstall rius
-```
-
-Local state -- session overrides, path rules, per-session span-count state,
-and debug logs -- lives entirely under `~/.claude/rius/` and is not removed
-by uninstalling the plugin. Delete that directory by hand if you want a clean
-slate:
-
-```
-rm -rf ~/.claude/rius/
-```
 
 ## Documentation
 

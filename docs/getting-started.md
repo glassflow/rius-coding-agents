@@ -4,7 +4,7 @@ Zero to a first trace: get a Rius workspace and an API key, install the
 plugin, sign in, enable one folder, and confirm spans are
 arriving. Every step below is something you do once.
 
-Read [What gets sent](../README.md#what-gets-sent----read-this-before-enabling-anything)
+Read [What gets sent](../README.md#what-rius-sends)
 in the README before you enable any folder. A folder sends structure only
 unless you enable it with `/rius:enable-content-here`, which also sends the contents
 of files Claude Code reads and the output of commands it runs.
@@ -451,6 +451,9 @@ Logs live in `~/.claude/rius/log/`:
 
 ## Uninstall and local state
 
+Run `/rius:logout` first: it revokes the key and deletes it from this
+machine. Then:
+
 ```
 /plugin uninstall rius
 ```
@@ -463,5 +466,5 @@ for a clean slate:
 rm -rf ~/.claude/rius/
 ```
 
-Revoking the API key in the console is a separate step, and the only one
-that stops the credential working.
+A key you minted in the console and stored with `rius_ctl.sh use-key` is
+revoked in the console.
