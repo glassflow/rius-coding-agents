@@ -8,7 +8,7 @@ import pytest
 
 from rius_cc import codex_rollout as cr
 from rius_cc import codex_spans as cs
-from rius_cc import otlp, spans
+from rius_cc import otlp, scrub, spans
 
 FIXTURE = "codex/mock_tools_mcp_resume.jsonl"
 THREAD = "01a10b40-afd3-7d51-a63c-9d2d01e8445e"
@@ -234,3 +234,51 @@ def test_spans_decode_as_otlp(fixtures_dir):
     attrs = {a.key: a.value for a in llm.attributes}
     assert attrs["gen_ai.usage.cache_read.input_tokens"].int_value > 0
     assert decoded[0].trace_id.hex() == spans.trace_id_for(THREAD)
+
+
+# --- secrets in content mode -------------------------------------------------
+
+_AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
+
+
+def _failed_call(name, arguments, output, mcp_error=None):
+    ctx = spans.Ctx("s1", "/x", "", "", "codex", True, 32768)
+    st = cs.new_state()
+    recs = [cr.Record(cr.TURN_START, 1, {"turn_id": "t1"}),
+            cr.Record(cr.TOOL_CALL, 2, {"call_id": "c1", "name": name,
+                                         "arguments": arguments})]
+    if mcp_error is not None:
+        recs.append(cr.Record(cr.MCP_RESULT, 3, {"call_id": "c1",
+                                                  "is_error": True,
+                                                  "error": mcp_error}))
+    recs.append(cr.Record(cr.TOOL_OUTPUT, 4, {"call_id": "c1", "output": output}))
+    out = cs.build(recs, st, ctx)
+    return next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
+
+
+def test_a_failed_commands_error_line_is_scrubbed():
+    span = _failed_call("exec_command", '{"cmd": "deploy"}',
+                        "Process exited with code 1\nOutput:\nerror: bad key %s\n"
+                        % _AWS_KEY)
+    assert span.status_message == "error: bad key [redacted:aws-key]"
+    assert span.events[0][2]["exception.message"] == span.status_message
+    assert _AWS_KEY not in json.dumps(span.attributes)
+
+
+def test_an_mcp_error_is_scrubbed():
+    span = _failed_call("mcp__db__query", "{}", "[]",
+                        mcp_error="auth failed token=abcdef123456")
+    assert span.status_message == "auth failed token=[redacted:token]"
+
+
+@pytest.mark.parametrize("arguments", [
+    '{"cmd": "cat .env"}',
+    '{"command": ["bash", "-lc", "cat config/id_rsa"]}',
+    '{"path": "/repo/.env.local"}',
+])
+def test_a_secret_file_read_is_replaced_whole(arguments):
+    span = _failed_call("exec_command", arguments,
+                        "Process exited with code 1\nOutput:\nONLY_IN_THE_FILE=1\n")
+    assert span.attributes["output.value"] == scrub.SECRET_FILE_MARKER
+    assert span.status_message == "exec_command.exit_1"
+    assert "ONLY_IN_THE_FILE" not in json.dumps([span.attributes, span.events])

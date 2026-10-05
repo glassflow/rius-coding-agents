@@ -24,6 +24,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
+from . import scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
@@ -100,7 +101,24 @@ def _kept(ctx: Ctx, text: str) -> str:
     return text if ctx.capture_content else ""
 
 
+def uuid7_ms(value: str) -> Optional[int]:
+    """The millisecond a UUIDv7 (Codex's thread and turn ids) was minted."""
+    digits = (value or "").replace("-", "")
+    if len(digits) != 32 or digits[12] != "7":
+        return None
+    try:
+        return int(digits[:12], 16)
+    except ValueError:
+        return None
+
+
 def _on_session(rec, state, ctx, out):
+    thread_id = rec.get("thread_id")
+    if state.get("thread_id") and thread_id != state["thread_id"]:
+        return      # a fork's copy of the session it was forked from
+    state["thread_id"] = thread_id
+    if rec.get("forked_from_id"):
+        state["forked_at_ms"] = uuid7_ms(thread_id)
     state["session"] = {k: rec.get(k, "") for k in
                         ("cli_version", "cwd", "originator", "git_branch")}
 
@@ -229,8 +247,28 @@ def _error_detail(tool: dict, output: str) -> str:
 
 
 def error_line(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    """The last line of `text`, secrets removed, capped."""
+    lines = [line.strip() for line in scrub.scrub(text).splitlines()
+             if line.strip()]
     return truncate(lines[-1], ERROR_MESSAGE_MAX_BYTES) if lines else ""
+
+
+def reads_secret_file(arguments: str) -> bool:
+    """scrub.reads_secret_file for Codex's shell tools too: exec_command
+    takes `cmd`, the older shell tool an argv list as `command`."""
+    if scrub.reads_secret_file(arguments):
+        return True
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        return False
+    if not isinstance(args, dict):
+        return False
+    command = args.get("cmd")
+    if isinstance(args.get("command"), list):
+        command = " ".join(str(word) for word in args["command"])
+    return isinstance(command, str) and scrub.reads_secret_file(
+        json.dumps({"command": command}))
 
 
 def _on_tool_output(rec, state, ctx, out):
@@ -245,15 +283,19 @@ def _on_tool_output(rec, state, ctx, out):
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
     _content_attr(ctx, attrs, "input.value", tool["input_json"])
-    _content_attr(ctx, attrs, "output.value", output)
+    secret_file = reads_secret_file(tool["input_json"])
+    _content_attr(ctx, attrs, "output.value",
+                  scrub.SECRET_FILE_MARKER if secret_file else output)
     error_type = tool_error(tool, output)
     status_message, events = "", []
     if error_type:
         attrs["error.type"] = error_type
-        if ctx.capture_content:
-            status_message = error_line(_error_detail(tool, output)) or error_type
-        else:
+        if not ctx.capture_content:
             status_message = TOOL_ERROR_WITHHELD
+        elif secret_file:
+            status_message = error_type
+        else:
+            status_message = error_line(_error_detail(tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
             "exception.type": error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
@@ -330,6 +372,16 @@ _NEEDS_TURN = {cr.USER_MESSAGE, cr.AGENT_MESSAGE, cr.USAGE, cr.TOOL_CALL,
                cr.TURN_END}
 
 
+def _inherited(rec, state: dict) -> bool:
+    """A turn a forked rollout copied from the agent it was forked from
+    (a subagent spawned with fork_context, say). Its parent's trace already
+    has it: replayed, its model calls would be counted twice. Codex ids are
+    UUIDv7, so a turn begun before this thread existed is an inherited one."""
+    forked_at = state.get("forked_at_ms")
+    started = uuid7_ms(rec.get("turn_id"))
+    return bool(forked_at) and started is not None and started < forked_at
+
+
 def _root_attrs(state: dict) -> Dict[str, Any]:
     return {k: v for k, v in (state.get("root_attrs") or {}).items() if v}
 
@@ -345,11 +397,10 @@ def _adopt_role(state: dict, records: List[Any]) -> None:
     told us before its root span goes out."""
     if not state.get("root_id"):
         return
-    for rec in records:
-        if rec.kind == cr.SESSION and rec.get("agent_role"):
-            state["root_name"] = rec.get("agent_role")
-            state["root_attrs"]["gen_ai.agent.name"] = rec.get("agent_role")
-            return
+    session = next((rec for rec in records if rec.kind == cr.SESSION), None)
+    if session is not None and session.get("agent_role"):
+        state["root_name"] = session.get("agent_role")
+        state["root_attrs"]["gen_ai.agent.name"] = session.get("agent_role")
 
 
 def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
@@ -365,6 +416,8 @@ def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
     for rec in records:
         if rec.kind in _NEEDS_TURN and state["turn"] is None:
             continue
+        if rec.kind == cr.TURN_START and _inherited(rec, state):
+            continue    # and with no turn open, all that follows it too
         _HANDLERS[rec.kind](rec, state, ctx, out)
     return out
 

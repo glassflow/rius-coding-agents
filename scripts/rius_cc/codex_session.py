@@ -37,14 +37,31 @@ def note_payload(st: dict, event: str,
         return st.get("transcript_path") or None
     sub_path = ""
     if event == SUBAGENT_STOP:
+        # transcript_path names the rollout of the agent that SPAWNED this
+        # one, a subagent's when nested: not necessarily the session's.
         sub_path = payload.get("agent_transcript_path") or ""
     elif agent_id:
-        sub_path, path = path, ""
-    if path:
-        st["transcript_path"] = path
+        sub_path = path
+    if path and (not agent_id or (event == SUBAGENT_STOP
+                                  and _may_be_parents(st, path))):
+        _set_parent_path(st, path)
     if agent_id:
         _remember(st, agent_id, sub_path, payload.get("agent_type") or "")
     return st.get("transcript_path") or None
+
+
+def _may_be_parents(st: dict, path: str) -> bool:
+    """A SubagentStop's transcript_path, as a last resort before any of the
+    parent's own events named its rollout: unless a subagent's it is."""
+    return not st.get("transcript_path") and all(
+        sub.get("path") != path for sub in st["codex_subs"].values())
+
+
+def _set_parent_path(st: dict, path: str) -> None:
+    """An offset only means something in the file it was read from."""
+    if st.get("transcript_path") and st["transcript_path"] != path:
+        st["offset"] = 0
+    st["transcript_path"] = path
 
 
 def _remember(st: dict, agent_id: str, path: str, agent_type: str) -> None:

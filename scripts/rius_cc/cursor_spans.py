@@ -19,8 +19,9 @@ import json
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
-from .spans import (TOOL_ERROR_WITHHELD, Span, span_id_for, tool_error_line,
-                    trace_id_for, truncate)
+from . import scrub
+from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Span,
+                    exportable, span_id_for, tool_error_line, trace_id_for)
 
 SERVICE_NAME = "cursor"
 DEFAULT_ROOT_NAME = "cursor session"
@@ -79,8 +80,11 @@ def _base_attrs(ctx: Ctx, kind_oi: str, model: str = "") -> Dict[str, Any]:
 def _content(ctx: Ctx, attrs: Dict[str, Any], key: str, value: Any) -> None:
     if not ctx.capture_content or value in (None, "", [], {}):
         return
-    text = value if isinstance(value, str) else json.dumps(value)
-    attrs[key] = truncate(text, ctx.max_attr_bytes)
+    attrs[key] = exportable(_as_text(value), ctx.max_attr_bytes)
+
+
+def _as_text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def _set(attrs: Dict[str, Any], key: str, value: Any) -> None:
@@ -328,7 +332,8 @@ def _root_span(fold: _Fold, ctx: Ctx, ids: _Ids, end_ns: Optional[int]) -> Span:
     status, message = "OK", ""
     if root.get("reason") == "error":
         status = "ERROR"
-        message = (root.get("error_message") or "session error"
+        message = (exportable(root.get("error_message") or "session error",
+                              ERROR_MESSAGE_MAX_BYTES)
                    if ctx.capture_content else SESSION_ERROR_WITHHELD)
     return _span(ids, ids.root, None, DEFAULT_ROOT_NAME, "AGENT",
                  root["start_ns"], end_ns, attrs, status, message)
@@ -398,11 +403,18 @@ def _shell_output(tool_output: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
+def _reads_secret_file(tool: Dict[str, Any]) -> bool:
+    return tool["input"] is not None and scrub.reads_secret_file(
+        _as_text(tool["input"]))
+
+
 def _tool_error_message(ctx: Ctx, tool: Dict[str, Any], error_type: str) -> str:
     if not ctx.capture_content:
         return TOOL_ERROR_WITHHELD
+    if _reads_secret_file(tool):
+        return error_type
     text = tool["error"] if tool["failure"] else _shell_output(tool["output"])
-    return tool_error_line(text or "") or error_type
+    return tool_error_line(scrub.scrub(text or "")) or error_type
 
 
 def _tool_parent(fold: _Fold, ids: _Ids, tool: Dict[str, Any]) -> str:
@@ -420,7 +432,8 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
     if tool["interrupted"]:
         attrs["cursor.tool.interrupted"] = True
     _content(ctx, attrs, "input.value", tool["input"])
-    _content(ctx, attrs, "output.value", tool["output"])
+    _content(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
+             if tool["output"] and _reads_secret_file(tool) else tool["output"])
     finished = tool["end_ns"] and not tool["interrupted"]
     status, message, events = ("OK" if finished else "UNSET"), "", []
     if _tool_failed(tool):
