@@ -1,0 +1,465 @@
+{
+ "_source": "DOCS-DERIVED, not captured from a live run. Field names follow cursor.com/docs/agent/hooks (fetched 2026-10-05) and the payload builders in the cursor-agent 2026.02.13-41ac335 bundle (index.js, 357.index.js, 434.index.js): session events carry generation_id == conversation_id, MCP tools are named 'MCP:<tool>', Shell output is {output, exitCode}. Replace with T5 captures.",
+ "events": [
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "sessionStart",
+   "generation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "session_id": "c0ffee00-0000-4000-8000-000000000001",
+   "is_background_agent": false,
+   "composer_mode": "agent"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "beforeSubmitPrompt",
+   "generation_id": "gen-0001",
+   "prompt": "Find why the invoice totals test is failing in billing",
+   "attachments": [
+    {
+     "type": "file",
+     "file_path": "/Users/dev/acme-api/billing/invoice.py"
+    }
+   ]
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "afterAgentThought",
+   "generation_id": "gen-0001",
+   "text": "The rounding in invoice totals looks suspicious, check decimals",
+   "duration_ms": 1800
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Shell",
+   "tool_input": {
+    "command": "pytest tests/test_invoice.py -q"
+   },
+   "tool_use_id": "tool-shell-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "postToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Shell",
+   "tool_input": {
+    "command": "pytest tests/test_invoice.py -q"
+   },
+   "tool_output": "{\"output\": \"FAILED tests/test_invoice.py::test_totals - AssertionError: 10.01 != 10.00\", \"exitCode\": 1}",
+   "duration": 2400,
+   "tool_use_id": "tool-shell-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "afterShellExecution",
+   "generation_id": "gen-0001",
+   "command": "pytest tests/test_invoice.py -q",
+   "output": "FAILED tests/test_invoice.py::test_totals - AssertionError: 10.01 != 10.00",
+   "duration": 2400,
+   "sandbox": false
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Read",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/billing/invoice.py"
+   },
+   "tool_use_id": "tool-read-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "postToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Read",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/billing/invoice.py"
+   },
+   "tool_output": "def total(lines): return round(sum(l.amount for l in lines), 2)",
+   "duration": 12,
+   "tool_use_id": "tool-read-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "MCP:list_traces",
+   "tool_input": {
+    "workspace": "acme-prod"
+   },
+   "tool_use_id": "tool-mcp-1"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "postToolUseFailure",
+   "generation_id": "gen-0001",
+   "tool_name": "MCP:list_traces",
+   "tool_input": {
+    "workspace": "acme-prod"
+   },
+   "error_message": "upstream timed out after 30s waiting for list_traces",
+   "failure_type": "timeout",
+   "duration": 30000,
+   "tool_use_id": "tool-mcp-1",
+   "is_interrupt": false
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Write",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/billing/invoice.py",
+    "contents": "from decimal import Decimal, ROUND_HALF_UP"
+   },
+   "tool_use_id": "tool-write-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "postToolUse",
+   "generation_id": "gen-0001",
+   "tool_name": "Write",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/billing/invoice.py",
+    "contents": "from decimal import Decimal, ROUND_HALF_UP"
+   },
+   "tool_output": "Wrote 1 file successfully",
+   "duration": 40,
+   "tool_use_id": "tool-write-1",
+   "cwd": "/Users/dev/acme-api"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "afterFileEdit",
+   "generation_id": "gen-0001",
+   "file_path": "/Users/dev/acme-api/billing/invoice.py",
+   "edits": [
+    {
+     "old_string": "return round(sum(l.amount for l in lines), 2)",
+     "new_string": "return sum(...).quantize(Decimal('0.01'), ROUND_HALF_UP)"
+    }
+   ]
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "afterAgentResponse",
+   "generation_id": "gen-0001",
+   "text": "Fixed: totals now use Decimal quantize with ROUND_HALF_UP."
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "stop",
+   "generation_id": "gen-0001",
+   "status": "completed",
+   "loop_count": 0
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "beforeSubmitPrompt",
+   "generation_id": "gen-0002",
+   "prompt": "Now explore the codebase for other float money math",
+   "attachments": []
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0002",
+   "tool_name": "Task",
+   "tool_input": {
+    "description": "explore money math",
+    "prompt": "Search the repo for float arithmetic on amounts"
+   },
+   "tool_use_id": "tool-task-1"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "subagentStart",
+   "generation_id": "gen-0002",
+   "subagent_id": "5ub00000-0000-4000-8000-000000000002",
+   "subagent_type": "explore",
+   "task": "Search the repo for float arithmetic on amounts",
+   "parent_conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "tool_call_id": "tool-task-1",
+   "subagent_model": "composer-1",
+   "is_parallel_worker": false,
+   "git_branch": "fix/invoice-rounding"
+  },
+  {
+   "conversation_id": "5ub00000-0000-4000-8000-000000000002",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "composer-1",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-sub-1",
+   "tool_name": "Grep",
+   "tool_input": {
+    "pattern": "float\\(.*amount"
+   },
+   "tool_use_id": "tool-grep-1"
+  },
+  {
+   "conversation_id": "5ub00000-0000-4000-8000-000000000002",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "composer-1",
+   "hook_event_name": "postToolUse",
+   "generation_id": "gen-sub-1",
+   "tool_name": "Grep",
+   "tool_input": {
+    "pattern": "float\\(.*amount"
+   },
+   "tool_output": "billing/refund.py:12: float(refund.amount)",
+   "duration": 90,
+   "tool_use_id": "tool-grep-1"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "subagentStop",
+   "generation_id": "gen-0002",
+   "subagent_id": "5ub00000-0000-4000-8000-000000000002",
+   "subagent_type": "explore",
+   "status": "completed",
+   "task": "Search the repo for float arithmetic on amounts",
+   "description": "explore money math",
+   "summary": "One more float use in billing/refund.py line 12",
+   "duration_ms": 5000,
+   "message_count": 4,
+   "tool_call_count": 1,
+   "loop_count": 0,
+   "modified_files": [],
+   "parent_conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "agent_transcript_path": null
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "postToolUse",
+   "generation_id": "gen-0002",
+   "tool_name": "Task",
+   "tool_input": {
+    "description": "explore money math",
+    "prompt": "Search the repo for float arithmetic on amounts"
+   },
+   "tool_output": "One more float use in billing/refund.py line 12",
+   "duration": 5200,
+   "tool_use_id": "tool-task-1"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "preCompact",
+   "generation_id": "gen-0002",
+   "trigger": "auto",
+   "context_usage_percent": 85,
+   "context_tokens": 108800,
+   "context_window_size": 128000,
+   "message_count": 45,
+   "messages_to_compact": 30,
+   "is_first_compaction": true
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "afterAgentResponse",
+   "generation_id": "gen-0002",
+   "text": "billing/refund.py also uses float for refunds; want me to fix it?"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gpt-5.1-codex",
+   "hook_event_name": "stop",
+   "generation_id": "gen-0002",
+   "status": "completed",
+   "loop_count": 0
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "claude-4.5-sonnet-thinking",
+   "hook_event_name": "sessionEnd",
+   "generation_id": "c0ffee00-0000-4000-8000-000000000001",
+   "session_id": "c0ffee00-0000-4000-8000-000000000001",
+   "reason": "completed",
+   "duration_ms": 61000,
+   "is_background_agent": false,
+   "final_status": "completed"
+  }
+ ]
+}

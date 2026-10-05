@@ -76,7 +76,10 @@ jobs:
                       "rius_cc.subagents", "rius_cc.agent",
                       "rius_cc.codex_rollout", "rius_cc.codex_spans",
                       "rius_cc.codex_session", "rius_cc.codex_trust",
-                      "exporter", "heartbeat", "hook", "rius_ctl"):
+                      "rius_cc.cursor_events", "rius_cc.cursor_spans",
+                      "rius_cc.cursor_export", "rius_cc.cursor_hook",
+                      "rius_cc.cursor_install", "exporter",
+                      "heartbeat", "hook", "rius_ctl"):
               importlib.import_module(mod)
           print("%d modules parse and import on %s" % (len(files), sys.version.split()[0]))
           PY
@@ -208,6 +211,43 @@ jobs:
               assert "\nname: %s\n" % name in skill, name
               assert "--agent codex" in skill, name
           print("codex manifest valid; %d hooks, %d skills" % (len(hooks), len(skills)))
+          PY
+
+  cursor-plugin-manifests:
+    # Cursor loads hooks/hooks.json, commands/ and mcp.json when its manifest
+    # leaves a path out -- the Claude Code files. So every path is explicit,
+    # points into cursor/, and nothing there names CLAUDE_PLUGIN_ROOT.
+    name: cursor plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python - <<'PY'
+          import glob, json, os, re
+          plugin = json.load(open(".cursor-plugin/plugin.json"))
+          market = json.load(open(".cursor-plugin/marketplace.json"))
+          claude = json.load(open(".claude-plugin/plugin.json"))
+          assert plugin["name"] == "rius", plugin["name"]
+          assert [p["name"] for p in market["plugins"]] == ["rius"]
+          assert plugin["version"] == claude["version"], "version drift"
+          for key in ("hooks", "commands", "mcpServers"):
+              path = plugin.get(key)
+              assert isinstance(path, str) and path.startswith("./cursor/"), \
+                  "%s must name a path under cursor/: %r" % (key, path)
+              assert os.path.exists(path), "%s is missing: %s" % (key, path)
+          hooks = json.load(open("cursor/hooks.json"))["hooks"]
+          for event, entries in hooks.items():
+              for entry in entries:
+                  for rel in re.findall(r"\$\{CURSOR_PLUGIN_ROOT\}(/[\w./-]+)",
+                                        entry["command"]):
+                      assert os.path.exists(rel.lstrip("/")), rel
+                  assert "--agent cursor" in entry["command"], entry
+          shipped = ["cursor/hooks.json", "cursor/mcp.json",
+                     ".cursor-plugin/plugin.json"] + glob.glob("cursor/commands/*.md")
+          for path in shipped:
+              assert "CLAUDE_PLUGIN_ROOT" not in open(path).read(), path
+          print("cursor manifests valid; %d hook events; %d commands"
+                % (len(hooks), len(glob.glob("cursor/commands/*.md"))))
           PY
 
   secrets:

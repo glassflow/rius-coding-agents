@@ -1,0 +1,23 @@
+{
+  "name": "rius",
+  "description": "Stream Cursor agent sessions to Rius as OTLP GenAI traces (beta)",
+  "version": "0.5.0",
+  "author": {
+    "name": "GlassFlow"
+  },
+  "homepage": "https://github.com/glassflow/rius-coding-agents",
+  "repository": "https://github.com/glassflow/rius-coding-agents",
+  "license": "MIT",
+  "keywords": [
+    "observability",
+    "opentelemetry",
+    "tracing",
+    "llm",
+    "ai-agents",
+    "mcp",
+    "rius"
+  ],
+  "hooks": "./cursor/hooks.json",
+  "commands": "./cursor/commands",
+  "mcpServers": "./cursor/mcp.json"
+}

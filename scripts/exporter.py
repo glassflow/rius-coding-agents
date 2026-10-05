@@ -16,8 +16,9 @@ from typing import Mapping
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
-                     log as rius_log, notice, otlp, platform_compat, spans,
-                     state, subagents, transcript)
+                     cursor_export, cursor_spans, log as rius_log, notice,
+                     otlp, platform_compat, spans, state, subagents,
+                     transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -577,8 +578,113 @@ def _run_codex_session(event, cfg, payload, home, instance_id) -> int:
                      on_success=_on_shipped(session_id, home, st, []))
 
 
+def _ship_cursor(st, events, out, conversation_id, home, cfg) -> int:
+    resource = cursor_spans.resource_attributes(
+        events, service_name=cfg.service_name)
+    return _ship(out, resource, st, len(events), conversation_id, home, cfg,
+                 on_success=lambda: state.sync_open_marker(conversation_id,
+                                                           home, st))
+
+
+def _export_cursor(event, cfg, conversation_id, home) -> int:
+    """Send what changed in a Cursor conversation's spool since the last
+    accepted export. A folder disabled mid-session sends nothing more until
+    sessionEnd, which closes the open spans without content."""
+    closing = event == "sessionEnd"
+    block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                     if event in cursor_export.FINAL_EVENTS else 0.0)
+    with state.session_lock(conversation_id, home,
+                            block_timeout=block_timeout) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held, skipping %s"
+                 % (conversation_id, event))
+            return 0
+        st = state.load(conversation_id, home)
+        if not cfg.enabled and not (closing and state.trace_is_open(st)):
+            _log(home, cfg, "session %s: %s" % (conversation_id, cfg.reason))
+            return 0
+        events = cursor_export.read_events(home, conversation_id)
+        out = cursor_export.spans_to_send(
+            st, events, conversation_id,
+            capture_content=cfg.enabled and cfg.capture_content,
+            max_attr_bytes=cfg.max_attr_bytes,
+            final_ns=_now_ns() if closing else None,
+            closing_only=not cfg.enabled)
+        return _ship_cursor(st, events, out, conversation_id, home, cfg)
+
+
+def _close_stale_cursor(cfg, conversation_id, home, fingerprint,
+                        now_ns) -> None:
+    """Cursor gives no pid to watch, so a conversation idle this long with
+    its trace still open is taken to have ended without a sessionEnd."""
+    with state.session_lock(conversation_id, home) as got:
+        if not got:
+            return
+        st = state.load(conversation_id, home)
+        if not state.trace_is_open(st):
+            state.sync_open_marker(conversation_id, home, st)
+            return
+        last_ns = st.get("last_ns") or 0
+        if (st.get("key_fingerprint") != fingerprint
+                or now_ns - last_ns < STALE_AFTER_S * 10**9):
+            return
+        _log(home, cfg, "session %s: never ended; closing its trace"
+             % conversation_id)
+        events = cursor_export.read_events(home, conversation_id)
+        out = cursor_export.spans_to_send(
+            st, events, conversation_id, capture_content=False,
+            max_attr_bytes=cfg.max_attr_bytes, final_ns=last_ns,
+            closing_only=True)
+        _ship_cursor(st, events, out, conversation_id, home, cfg)
+
+
+def sweep_stale_cursor(cfg, current_id, home, now_ns=None) -> None:
+    fingerprint = config.key_fingerprint(cfg.api_key, cfg.endpoint)
+    if not fingerprint:
+        return
+    now_ns = _now_ns() if now_ns is None else now_ns
+    for conversation_id in state.open_marked_sessions(home):
+        if conversation_id == current_id:
+            continue
+        try:
+            _close_stale_cursor(cfg, conversation_id, home, fingerprint,
+                                now_ns)
+        except Exception as exc:
+            _log(home, cfg, "session %s: stale-trace sweep failed: %r"
+                 % (conversation_id, exc), force=True)
+
+
+def run_cursor(event: str, payload: dict, env: Mapping[str, str],
+               home: str) -> int:
+    cfg = None
+    try:
+        conversation_id = payload.get("conversation_id")
+        if not conversation_id:
+            return 0
+        cfg = config.resolve(conversation_id, payload.get("cwd") or "", env,
+                             home)
+        if not cfg.api_key:
+            return 0
+        result = _export_cursor(event, cfg, conversation_id, home)
+        if event == "sessionStart":
+            if cfg.enabled:
+                sweep_stale_cursor(cfg, conversation_id, home)
+            cursor_export.prune(cursor_export.spool_dir(home),
+                                state.open_marked_sessions(home))
+        return result
+    except BaseException as exc:  # never raise out of the exporter
+        try:
+            _log(home, cfg, "exception in run_cursor(): %r" % (exc,),
+                 force=True)
+        except BaseException:
+            pass
+        return 0
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         instance_id: str = "") -> int:
+    if agent.active().name == agent.CURSOR.name:
+        return run_cursor(event, payload, env, home)
     cfg = None
     try:
         session_id = payload.get("session_id")

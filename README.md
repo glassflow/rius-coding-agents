@@ -344,6 +344,22 @@ Codex keeps its own login, key and settings in `${CODEX_HOME:-~/.codex}/rius`,
 separate from Claude Code's. See [docs/codex.md](docs/codex.md) for details,
 the MCP sign-in and the known gaps.
 
+## Cursor (beta)
+
+The repo also ships a Cursor plugin (`.cursor-plugin/`). It traces Cursor
+agent sessions: one trace per conversation, with a span for each turn, model
+answer, tool call and subagent. Install it with "Import from Repo"
+(`glassflow/rius-coding-agents`) in Cursor's plugin settings, then run
+`/rius-login` and `/rius-enable-here` in the agent chat.
+
+- **No token counts or cost.** Cursor's hooks do not report usage.
+- **Beta.** It is tested against Cursor's documented hook payloads, not yet
+  against a live Cursor session.
+- Its key, settings and state are its own, under `~/.cursor/rius/`.
+
+[docs/cursor.md](docs/cursor.md) has the details, including a fallback for
+older `cursor-agent` builds that ignore plugin hooks.
+
 ## Beyond Claude Code
 
 Rius traces other agents as well. The
@@ -399,6 +415,7 @@ rm -rf ~/.claude/rius/
 | [Installing and updating](docs/install.md) | Marketplace cache, upgrading from `rius-claude-code`, local checkout, platforms |
 | [How it works](docs/how-it-works.md) | The span tree, subagents, live spans, generation timing, heartbeat |
 | [API keys](docs/api-keys.md) | Minting a key by hand and where to keep it |
+| [Cursor (beta)](docs/cursor.md) | The Cursor plugin: install, commands, what is and is not traced |
 | [Design records](docs/design/) | The original spec, plan and build log |
 | [Changelog](CHANGELOG.md) | What changed in each version |
 | [Rius docs](https://docs.glassflow.ai/rius) | The product: console, alerts, MCP tools, SDKs |
