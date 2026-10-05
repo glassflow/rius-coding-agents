@@ -4,6 +4,131 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.5.0 (2026-10-05)
+
+Hardening for Anthropic's plugin directory: safer defaults, sign-ins that
+can't be redirected, and no slowdown when Rius is off.
+
+### Upgrading from 0.4.x
+
+Update with `claude plugin marketplace update rius-coding-agents && claude
+plugin update rius@rius-coding-agents` (see [Updating](README.md#updating)),
+then restart Claude Code or run `/reload-plugins`.
+
+- **Querying traces needs one OAuth sign-in.** Run `/mcp`, pick `rius` and
+  sign in. The `/rius:login` key no longer reaches the MCP server.
+- **`RIUS_API_KEY`, `RIUS_ENDPOINT`, `RIUS_ENV` and `RIUS_CLAUDE_ENABLED=true`
+  in the environment are ignored.** For staging, run `/rius:login --env
+  staging`. Sign in with `/rius:login`, or store a console
+  key with `rius_ctl.sh use-key` (see [API keys](docs/api-keys.md)). Use
+  `/rius:enable-here` to turn a folder on.
+- **Folders you enabled before keep sending content** until you pick:
+  `/rius:status` asks. New folders send structure only unless you run
+  `/rius:enable-content-here`.
+- **A plain `http://` endpoint that isn't on this machine is refused.**
+
+### Changes
+
+- Cursor and Codex can run Claude Code plugin hooks: Cursor does so by
+  default through its third-party compatibility setting, and Codex installs
+  this plugin from the same marketplace. Their sessions no longer show up
+  as empty "claude-code session" traces with a heartbeat. The hook now
+  ignores a payload that carries Cursor's `cursor_version` or
+  `conversation_id`, or whose transcript is a Codex `rollout-*.jsonl` or
+  lies under `CODEX_HOME` (`~/.codex` by default). (#24)
+- The bundled Rius MCP server now signs in with Claude Code's own MCP OAuth:
+  run `/mcp`, pick `rius` and sign in with your Rius account. It no longer
+  uses the `/rius:login` key, which from now on is only for sending traces.
+  `/rius:status` and `/rius:login` say this in two lines: `Tracing: signed
+  in as workspace X` and `Querying traces: run /mcp and sign in to rius`.
+- The bundled server's URL is fixed to
+  `https://mcp.eu.console.rius-glassflow.com/mcp`. `RIUS_MCP_URL` is gone,
+  along with the headers helper and the `MCP:` and `MCP key:` lines in
+  `/rius:status`. To query staging, register the staging server yourself
+  (see "Signing in to staging" in the getting started guide).
+- After a staging sign-in, `/rius:status` and `/rius:login` print the
+  command that registers the staging MCP server instead of pointing you at
+  production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
+- New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
+  files that have one keep working. (#35)
+- Private content is off by default, and secrets are removed.
+  `/rius:enable-here` now sends structure only: models, tokens, cost,
+  timing, tool names and error types, but no prompts, replies, file
+  contents or command output. The new `/rius:enable-content-here` sends
+  those too, for that folder only, after replacing the secrets the plugin
+  recognises (cloud, GitHub, Slack, Stripe, OpenAI, Anthropic and Rius
+  keys, JWTs, private keys, `password=` style values, Authorization
+  headers) with a marker such as `[redacted:aws-key]`, and dropping the
+  output of reads of `.env`, key and credential files. Claude can run
+  neither command for you, and each command's permission grant now covers
+  only its own subcommand. A folder enabled before this release
+  keeps sending content, and `/rius:status` asks you to pick. A session
+  turned on with `/rius:on` in a folder no rule enables sends structure
+  only. A failed tool's withheld detail now reads `content capture off`.
+  (#38)
+- A repo you clone can no longer turn tracing on, or redirect your traces
+  or your key. Claude Code hands hooks the `env` block of a project's
+  committed `.claude/settings.json`, so the environment may now only turn
+  things off:
+  - `RIUS_CLAUDE_ENABLED=false` still turns tracing off. `=true` is
+    ignored: only `/rius:enable-here` or `/rius:on` turn tracing on, and a
+    `/rius:disable-here` folder stays off unless you run `/rius:on` in that
+    session.
+  - `RIUS_CAPTURE_CONTENT` can only lower capture.
+  - `RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored. The plugin traces only
+    with the `/rius:login` key, and sends it only to the server stored with
+    it, which must be `https` on one of the hosts Rius runs for that
+    environment. `/rius:login` refuses to store
+    a key whose ingest or MCP server is not one. If you used
+    `RIUS_API_KEY`, run `/rius:login`, or store a console key with
+    `rius_ctl.sh use-key [--env staging]`, which reads it from stdin and
+    takes the endpoint from the environment you name.
+  - The plugin finds your home folder from the operating system, not
+    `HOME` or `USERPROFILE`, which a repo could point at a folder it ships
+    with its own key and path rules.
+  - `RIUS_CLAUDE_MAX_ATTR_BYTES` can only lower the cap, and
+    `RIUS_SERVICE_NAME` must be a short plain name.
+  - `/rius:status` prints one line for each setting that is ignored, and
+    the session's start logs it in `~/.claude/rius/log/`. (#37)
+- Each session now starts with one short line saying whether Rius is
+  tracing it, and to which workspace, with content on or off. A folder you
+  enabled before signing in says to run `/rius:login`. Right after
+  install, Rius says once how to get started, then stays quiet until you
+  opt in. It is a status line for you, with no instructions for Claude, and
+  a resumed or compacted session sees it again only if it changed. A
+  session that stopped tracing when its folder was disabled is not told it
+  is tracing.
+- When the backend refuses data because the trial ended or the workspace is
+  locked or paused (HTTP 402), the plugin used to drop it without a word.
+  Now the next session and `/rius:status` say so. The notice clears after
+  the next successful export. (#33)
+- Zero values show up correctly in traces: attributes holding 0, 0.0 or
+  an empty string keep their value and type, so a filter for `= 0` finds
+  them. Unknown resource values (no git branch, no Claude Code version) are
+  left out instead of sent empty. Ints outside int64, lone surrogates,
+  dicts and bytes are encoded instead of wrapping or crashing. (#29)
+- The key is only sent over https (plain http only to this machine), and
+  redirects are never followed. Everything under `~/.claude/rius` is
+  owner-only (0700 folders, 0600 files), a path-shaped session id is
+  ignored, `/rius:enable-here` refuses your home folder and its parents, and
+  the temporary hook payload never lingers. (#30)
+- The plugin never slows a session down: with no stored key and nothing to
+  report, `hook.sh` exits before starting Python. Every hook declares a
+  timeout (SessionEnd 5 s). Python runs isolated (`-I`), never from inside
+  the project folder or a relative `PATH` entry, and never as the macOS
+  Command Line Tools stub. An absolute path in `~/.claude/rius/python` pins
+  the interpreter. (#36)
+- Only you can run `/rius:*` commands: every command sets
+  `disable-model-invocation`, each action accepts only its own flags and
+  values, typed text reaches the script as one quoted word, and each
+  command's permission grant covers only its own subcommand. (#32)
+- `/rius:login` no longer hangs over SSH or on a machine with no display:
+  it opens a browser only on a desktop session, and never a console
+  browser. The printed link and code always work. (#34)
+- Internal: paths and names come from an agent profile, in preparation for
+  Codex and Cursor. Claude Code's behaviour and wire bytes are unchanged.
+  (#26)
+
 ## 0.4.5 (2026-10-01)
 
 - A session that is killed or crashes, and so never sends SessionEnd, no

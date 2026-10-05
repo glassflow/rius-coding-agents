@@ -4,12 +4,14 @@ import pytest
 
 import exporter
 from rius_cc import config, state
+from tests.signed_in import TEST_ENDPOINT, sign_in
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     with open(config.path_rules_path(str(h)), "w") as fh:
         json.dump({"enabled_paths": ["/tmp"]}, fh)
     return str(h)
@@ -28,7 +30,7 @@ def _payload(fixtures_dir, name, session_id, event, cwd="/tmp/proj"):
             "cwd": cwd, "hook_event_name": event}
 
 
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 
 
 def test_exports_spans_and_advances_offset(home, captured, fixtures_dir):
@@ -36,7 +38,7 @@ def test_exports_spans_and_advances_offset(home, captured, fixtures_dir):
     n = exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"), ENV, home)
     assert n > 0
     assert len(captured) == 1
-    assert captured[0][0] == "https://ingest.test"
+    assert captured[0][0] == TEST_ENDPOINT
     assert state.load(sid, home)["offset"] > 0
 
 
@@ -232,7 +234,7 @@ def test_permanent_4xx_advances_the_offset_and_records_why(home, monkeypatch, fi
     assert st["spans_exported"] == 0
     err = st["last_export_error"]
     assert err["status"] == 403
-    assert "RIUS_API_KEY" in err["reason"]
+    assert "/rius:login" in err["reason"]
     assert err["at"]
 
     # and the next batch is genuinely a NEW batch, not the same one again
@@ -292,7 +294,7 @@ def test_a_transport_failure_is_transient_and_named(home, monkeypatch, fixtures_
                  ENV, home)
     st = state.load(sid, home)
     assert st["offset"] == 0
-    assert "RIUS_ENDPOINT" in st["last_export_error"]["reason"]
+    assert "network" in st["last_export_error"]["reason"]
 
 
 def test_skipped_lines_are_logged_once_even_across_export_failures(home, monkeypatch, tmp_path):
@@ -416,3 +418,50 @@ def test_a_transient_failure_rewinds_the_subagent_offsets(home, captured,
     assert st["offset"] == 0
     assert st["sub_offsets"] == {}
     assert st["consecutive_export_failures"] == 1
+
+
+
+def _transcript_outside_git(tmp_path, fixtures_dir):
+    lines = []
+    for line in (fixtures_dir / "simple.jsonl").read_text().splitlines():
+        record = json.loads(line)
+        record.pop("gitBranch", None)
+        lines.append(json.dumps(record))
+    path = tmp_path / "no_git.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+def _resource_attrs_sent(monkeypatch, home, transcript, events):
+    seen = []
+    real_encode = exporter.otlp.encode
+    monkeypatch.setattr(exporter.otlp, "encode",
+                        lambda attrs, out: seen.append(dict(attrs)) or real_encode(attrs, out))
+    monkeypatch.setattr(exporter.otlp, "export", lambda *_a, **_kw: 200)
+    sid = "12121212-1212-1212-1212-121212121212"
+    for event in events:
+        payload = {"session_id": sid, "transcript_path": transcript,
+                   "cwd": "/tmp/proj", "hook_event_name": event}
+        exporter.run(event, payload, ENV, home, "inst-1")
+    return seen
+
+
+def test_unknown_resource_values_are_left_out_not_sent_empty(
+        home, tmp_path, fixtures_dir, monkeypatch):
+    """A folder outside git has no branch: the key is absent, not "", or the
+    console's attribute catalog fills with empty values."""
+    seen = _resource_attrs_sent(monkeypatch, home,
+                                _transcript_outside_git(tmp_path, fixtures_dir),
+                                ("PostToolUse", "SessionEnd"))
+    assert len(seen) >= 2
+    for attrs in seen:
+        assert "" not in attrs.values() and None not in attrs.values()
+        assert "cc.git_branch" not in attrs
+        assert attrs["service.instance.id"] == "inst-1"
+
+
+def test_known_resource_values_are_still_sent(home, fixtures_dir, monkeypatch):
+    seen = _resource_attrs_sent(monkeypatch, home,
+                                str(fixtures_dir / "simple.jsonl"), ("PostToolUse",))
+    assert seen[0]["cc.git_branch"] == "main"
+    assert seen[0]["cc.cwd"] == "/tmp/proj"

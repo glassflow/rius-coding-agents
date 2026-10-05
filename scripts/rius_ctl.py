@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """CLI backing the /rius:* slash commands (one command file per action).
 
-Actions: on | off | clear | enable-here | disable-here | status | login |
-         login-wait | logout
+Actions: on | off | clear | enable-here | content-on-here | disable-here |
+         status | login | login-wait | logout | use-key
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
+         --agent <claude-code|codex|cursor> (default claude-code)
+         `-- '<typed text>'`: what the user typed after a slash command
+
+Each action takes only the flags ACTION_FLAGS lists, with values
+FLAG_VALUES accepts; anything else is refused before the action runs.
+`--agent` is taken off first, and only before `--`.
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
 to run without an explicit `--session`: guessing the session (from the most
@@ -18,17 +24,23 @@ verbatim), the redacted key, the endpoint and, when known, spans
 exported so far. Every action exits 0, including an unknown one, which
 prints usage.
 """
+import contextlib
+import io
 import os
+import re
 import sys
+import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, login, platform_compat, state  # noqa: E402
+from rius_cc import agent, config, login, notice, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout> "
-    "[--session <id>] [--cwd <path>] [--env <production|staging>]"
+    "<on|off|clear|enable-here|content-on-here|disable-here|status|login|"
+    "login-wait|logout|use-key> "
+    "[--session <id>] [--cwd <path>] [--env <production|staging>] "
+    "[--debug] (status only)"
 )
 
 # Actions that WRITE a per-session override. These must never guess which
@@ -61,26 +73,120 @@ def _no_session_message(action):
     return NO_SESSION_MESSAGE % action + hint
 
 
+class ArgumentError(Exception):
+    """An argument outside the whitelist. Nothing runs when one is raised."""
+
+
+def _is_session_id(value):
+    return re.fullmatch(r"[A-Za-z0-9_-]*", value) is not None
+
+
+def _is_folder(value):
+    return bool(value) and not value.startswith("-") and "\0" not in value
+
+
+# Every flag any action takes, with what its value must look like. A new
+# flag is one entry here plus its name in ACTION_FLAGS.
+FLAG_VALUES = {
+    "--session": ("a session id (letters, digits, - and _)", _is_session_id),
+    "--cwd": ("a folder path", _is_folder),
+    "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
+}
+# Flags that take no value.
+SWITCHES = ("--debug",)
+ACTION_FLAGS = {
+    "on": ("--session", "--cwd"),
+    "off": ("--session", "--cwd"),
+    "clear": ("--session", "--cwd"),
+    "status": ("--session", "--cwd", "--debug"),
+    "enable-here": ("--cwd",),
+    "content-on-here": ("--cwd",),
+    "disable-here": ("--cwd",),
+    "login": ("--cwd", "--env"),
+    "login-wait": ("--cwd",),
+    "logout": ("--cwd",),
+    "use-key": ("--cwd", "--env"),
+}
+# What a person may type after a slash command, e.g. `/rius:login --env
+# staging`. The command file passes that text as ONE quoted word after `--`,
+# so the shell never interprets it; it is split and checked here.
+TYPED_FLAGS = ("--env",)
+
+
 def _parse_args(argv):
+    """Return (action, {flag: value}); raise ArgumentError on anything else."""
     # No action (just the flags) means `status`.
-    has_action = bool(argv) and not argv[0].startswith("--")
+    has_action = bool(argv) and not argv[0].startswith("-")
     action = argv[0] if has_action else "status"
-    flags = {"--session": None, "--cwd": None, "--env": None}
-    i = 1 if has_action else 0
-    while i < len(argv):
-        if argv[i] in flags and i + 1 < len(argv):
-            flags[argv[i]] = argv[i + 1]
-            i += 2
-        else:
+    if action not in ACTION_FLAGS:
+        return action, {}
+    passed, typed = _split_typed(argv[1:] if has_action else argv)
+    allowed = ACTION_FLAGS[action]
+    flags = _read_flags(action, passed, allowed)
+    typed_flags = _read_flags(action, typed,
+                              [f for f in allowed if f in TYPED_FLAGS])
+    for flag in typed_flags:
+        if flag in flags:
+            raise ArgumentError("Rius: `%s` was given twice." % flag)
+    flags.update(typed_flags)
+    return action, flags
+
+
+def _split_typed(args):
+    if "--" not in args:
+        return args, []
+    cut = args.index("--")
+    return args[:cut], " ".join(args[cut + 1:]).split()
+
+
+def _read_flags(action, tokens, allowed):
+    flags = {}
+    i = 0
+    while i < len(tokens):
+        flag = tokens[i]
+        if flag not in allowed:
+            raise ArgumentError(_not_accepted(action, flag, allowed))
+        if flag in flags:
+            raise ArgumentError("Rius: `%s` was given twice." % flag)
+        if flag in SWITCHES:
+            flags[flag] = True
             i += 1
-    return action, flags["--session"], flags["--cwd"], flags["--env"]
+            continue
+        flags[flag] = _flag_value(flag, tokens[i + 1:i + 2])
+        i += 2
+    return flags
+
+
+def _flag_value(flag, rest):
+    wanted, accepts = FLAG_VALUES[flag]
+    if not rest:
+        raise ArgumentError("Rius: `%s` needs a value: %s." % (flag, wanted))
+    if not accepts(rest[0]):
+        raise ArgumentError("Rius: `%s %s` is not accepted. %s takes %s."
+                            % (flag, rest[0], flag, wanted))
+    return rest[0]
+
+
+# enable-here only ever sends structure: content is its own subcommand, so
+# a grant for this one can never reach it.
+CONTENT_IS_ITS_OWN_COMMAND = (" To send content from this folder, run "
+                              "/rius:enable-content-here.")
+
+
+def _not_accepted(action, flag, allowed):
+    takes = ("only " + ", ".join("`%s`" % f for f in allowed) if allowed
+             else "no arguments")
+    hint = CONTENT_IS_ITS_OWN_COMMAND if action == "enable-here" else ""
+    return ("Rius: `%s` does not accept `%s`; it takes %s.%s"
+            % (action, flag, takes, hint))
 
 
 def _most_recent_session(home):
     """Resolve a session id from the most recently modified state file."""
-    d = os.path.join(home, ".claude", "rius", "state")
+    d = agent.active().state_dir(home)
     try:
-        entries = [f for f in os.listdir(d) if f.endswith(".json")]
+        entries = [f for f in os.listdir(d) if f.endswith(".json")
+                   and state.is_valid_session_id(f[:-len(".json")])]
     except OSError:
         return None
     if not entries:
@@ -94,9 +200,10 @@ STILL_OFF = ("Still OFF: `%s` is disabled. Run `/rius:enable-here` in that "
              "folder instead.")
 
 
-def _move_path(home, cwd, to_key, from_key):
+def _move_path(home, cwd, to_key, from_key, with_content=None):
     """Any other spelling of `cwd` goes, from both lists: a rule written
-    through a symlink before 0.4.4 never matched what the hooks see."""
+    through a symlink before 0.4.4 never matched what the hooks see.
+    An enable records whether the folder sends content."""
     rules = config.read_path_rules(home)
     rules[from_key] = [p for p in config.rule_list(rules, from_key)
                        if not config.same_folder(p, cwd)]
@@ -106,7 +213,21 @@ def _move_path(home, cwd, to_key, from_key):
         target.append(cwd)
     rules[to_key] = target
     rules["disabled_paths"] = _resolved_disables(rules["disabled_paths"])
+    choices = _content_choices(rules, cwd, with_content)
+    rules.pop(config.CONTENT_CHOICES_KEY, None)
+    if choices:
+        rules[config.CONTENT_CHOICES_KEY] = choices
     config.write_path_rules(home, rules)
+
+
+def _content_choices(rules, cwd, with_content):
+    """Choices for the enable rules that are left, plus this one's."""
+    enabled = config.rule_list(rules, "enabled_paths")
+    choices = {rule: config.content_choice(rules, rule) for rule in enabled}
+    if with_content is not None:
+        choices[cwd] = with_content
+    return {rule: choice for rule, choice in choices.items()
+            if choice is not None}
 
 
 def _resolved_disables(disables):
@@ -125,32 +246,54 @@ def _resolved_disables(disables):
 TOO_BROAD = ("Not changed: `%s` is too broad for a rule (the filesystem or a "
              "drive root, or a *, ? or [ right below it).")
 
+HOLDS_HOME = ("Not changed: `%s` holds your home folder, so every project on "
+              "this machine would be traced. Run /rius:enable-here inside a "
+              "project folder instead.")
 
-def _enable_here(cwd, home):
+
+def _normalised(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _holds_home(folder, home):
+    """Is `folder` the home folder or one of its parents?"""
+    folder = _normalised(folder)
+    home = _normalised(config.resolved(home))
+    return home == folder or home.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _enable_here(cwd, home, with_content):
     cwd = config.resolved(cwd)
     if not config.is_usable_rule(cwd):
         print(TOO_BROAD % cwd)
         return
-    _move_path(home, cwd, "enabled_paths", "disabled_paths")
+    if _holds_home(cwd, home):
+        print(HOLDS_HOME % cwd)
+        return
+    _move_path(home, cwd, "enabled_paths", "disabled_paths", with_content)
     match = config.matching_rule(cwd, home)
     if match and not match[1]:
         print(STILL_OFF % match[0])
     else:
-        print(_enabled_disclosure(cwd, home))
+        print(_enabled_disclosure(cwd, home, with_content))
 
 
 SENDS_CONTENT = ("Sessions here %s prompts, replies, the contents of files "
-                 "Claude reads and command output to %s.")
-SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing) "
-                   "to %s; RIUS_CAPTURE_CONTENT=false withholds prompts, "
-                   "replies, file contents and command output.")
-STOP_WITH_CONTENT = ("Set RIUS_CAPTURE_CONTENT=false to send structure only "
-                     "(models, tokens, timing), or run /rius:disable-here to "
-                     "stop.")
-STOP_WITHOUT_CONTENT = "Run /rius:disable-here to stop."
+                 "Claude reads and command output to %s, with the secrets "
+                 "Rius recognises removed first.")
+SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing, "
+                   "tool names) to %s: no prompts, replies, file contents or "
+                   "command output.")
+STOP_WITH_CONTENT = ("Run /rius:enable-here to send structure only, or "
+                     "/rius:disable-here to stop.")
+STOP_WITHOUT_CONTENT = ("Structure only is recommended. To include content "
+                        "for this folder, run /rius:enable-content-here. "
+                        "Run /rius:disable-here to stop.")
+ENV_KEEPS_CONTENT_OFF = ("RIUS_CAPTURE_CONTENT=false in your environment keeps "
+                         "content off here.")
 
 
-def _enabled_disclosure(cwd, home):
+def _enabled_disclosure(cwd, home, with_content):
     """RIUS-969: enabling a folder is the consent act, so say what it will
     upload, where to, and how to stop -- and only what is true right now."""
     cfg = config.resolve("", cwd, os.environ, home)
@@ -159,9 +302,13 @@ def _enabled_disclosure(cwd, home):
     else:
         verb = "will send"
         dest = "the workspace you pick once you sign in with /rius:login"
-    sends, stop = ((SENDS_CONTENT, STOP_WITH_CONTENT) if cfg.capture_content
-                   else (SENDS_STRUCTURE, STOP_WITHOUT_CONTENT))
-    return "\n".join([_enabled_scope(cwd, home), sends % (verb, dest), stop])
+    if cfg.capture_content:
+        lines = [SENDS_CONTENT % (verb, dest), STOP_WITH_CONTENT]
+    elif with_content:
+        lines = [SENDS_STRUCTURE % (verb, dest), ENV_KEEPS_CONTENT_OFF]
+    else:
+        lines = [SENDS_STRUCTURE % (verb, dest), STOP_WITHOUT_CONTENT]
+    return "\n".join([_enabled_scope(cwd, home)] + lines)
 
 
 def _enabled_scope(cwd, home):
@@ -198,7 +345,22 @@ STOPPED_NOTE = ("Stopped: this session stopped tracing when its folder was "
                 "again. New sessions in this folder are traced as usual.")
 
 
-def _print_status(session_id, cwd, home, inferred=False):
+SIGN_IN_NEXT = "Next: run /rius:login, then /rius:enable-here in a project"
+ENABLE_NEXT = ("Next: run /rius:enable-here (or /rius:enable-content-here to "
+               "include content)")
+
+
+def _reason_lines(cfg):
+    """The reason, or the one step that turns tracing on when it is simply
+    not set up yet."""
+    if not cfg.reason.startswith(config.NO_RULE_REASON):
+        return ["Reason: %s" % cfg.reason]
+    if not cfg.api_key:
+        return [SIGN_IN_NEXT]
+    return ["Reason: %s" % cfg.reason, ENABLE_NEXT]
+
+
+def _print_status(session_id, cwd, home, inferred=False, debug=False):
     # Decide for the folder the hooks are handed, not the shell's spelling.
     typed_cwd = cwd
     cwd = config.resolved(cwd) if cwd else cwd
@@ -207,7 +369,12 @@ def _print_status(session_id, cwd, home, inferred=False):
     # without this the rules would say "on" for a session that sends nothing.
     stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
     print("Rius tracing: %s" % ("on" if cfg.enabled and not stopped else "off"))
-    print("Reason: %s" % cfg.reason)
+    for line in _reason_lines(cfg):
+        print(line)
+    for note in cfg.ignored_env:
+        print(note)
+    if notice.is_refused(home, cfg):
+        print(notice.REFUSED)
     if stopped:
         print(STOPPED_NOTE)
     print(_cwd_line(typed_cwd))
@@ -219,16 +386,21 @@ def _print_status(session_id, cwd, home, inferred=False):
               "this machine, not necessarily this one)" % session_id)
     else:
         print("session: %s" % session_id)
-    print("Platform: %s" % platform_compat.describe())
+    if debug or cfg.debug:
+        print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
-    print("MCP: %s" % config.mcp_url(os.environ))
-    print(_mcp_key_line(home))
-    if login.read_credentials(home):
-        print(_mcp_hint(home, " with this key"))
+    creds = login.read_credentials(home)
+    print(_tracing_sign_in_line(cfg, creds))
+    print(_querying_traces_line(creds))
+    if _is_staging(creds) or os.environ.get("RIUS_MCP_URL"):
+        print(RIUS_MCP_URL_RETIRED)
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
     _print_rule(cwd, home)
+    print(_content_line(cfg))
+    if cfg.unchosen_rule:
+        print(UNCHOSEN_RULE % cfg.unchosen_rule)
     for rule, enables in (config.symlinked_rules(typed_cwd, home)
                           if typed_cwd else []):
         verb = "enable" if enables else "disable"
@@ -249,6 +421,17 @@ def _print_status(session_id, cwd, home, inferred=False):
     if (cfg.enabled and not stopped and session_id
             and not os.path.exists(state.state_path(session_id, home))):
         print(NO_HOOK_RAN)
+
+
+CONTENT_ON = "Content: prompts, replies, file contents and command output"
+CONTENT_OFF = "Content: none (structure only)"
+UNCHOSEN_RULE = ("Rule `%s` predates the content choice, so it still sends "
+                 "content. Pick one: /rius:enable-here (structure only, "
+                 "recommended) or /rius:enable-content-here.")
+
+
+def _content_line(cfg):
+    return CONTENT_ON if cfg.capture_content else CONTENT_OFF
 
 
 STALE_RULE = ("Rule `%s` %ss nothing: Claude Code calls that folder %s. "
@@ -287,61 +470,85 @@ def _print_account(home, creds):
     print("Key expires: %s" % _date(creds.get("expires_at")))
 
 
-def _mcp_key_line(home):
-    if login.read_credentials(home):
-        return "MCP key: /rius:login"
-    if os.environ.get("RIUS_API_KEY"):
-        return ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
-                "bundled MCP server; run /rius:login to query your traces.")
-    return "MCP key: none; run /rius:login to query your traces."
+QUERYING_TRACES = "Querying traces: run /mcp and sign in to rius"
+QUERYING_STAGING_TRACES = (
+    "Querying traces: the bundled rius server is production; run "
+    "`claude mcp add --transport http rius-staging "
+    "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
+RIUS_MCP_URL_RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
 
 
-def _mcp_hint(home, suffix=""):
-    wanted = config.misdirected_mcp_url(os.environ, home)
-    if wanted is None:
-        return 'Reconnect "rius" in /mcp to query your traces%s.' % suffix
-    return ('This key\'s MCP server is %s, but the bundled "rius" server points '
-            "at %s. To query your traces, restart Claude Code with "
-            "RIUS_MCP_URL=%s set." % (wanted, config.mcp_url(os.environ), wanted))
+def _querying_traces_line(creds):
+    if _is_staging(creds):
+        return QUERYING_STAGING_TRACES
+    return QUERYING_TRACES
+
+
+def _is_staging(creds):
+    return bool(creds) and creds.get("env", login.DEFAULT_ENVIRONMENT) != login.DEFAULT_ENVIRONMENT
+
+
+def _tracing_signed_in(creds):
+    return "Tracing: signed in as workspace %s%s" % (
+        creds["workspace_name"], _in_org(creds))
+
+
+def _tracing_sign_in_line(cfg, creds):
+    if cfg.key_source == config.STORED_KEY_SOURCE and creds:
+        return _tracing_signed_in(creds)
+    if cfg.key_source:
+        return "Tracing: using the key from %s" % cfg.key_source
+    return "Tracing: not signed in; run /rius:login"
+
+
+# Only a marker: commands/login.md names the fixed command that waits, so
+# Claude never runs a command it read from this output.
+LOGIN_PENDING = "RIUS_LOGIN_PENDING: sign-in is not finished yet."
 
 
 def _login(home, cwd, env_flag=None):
     print(login.DISCLOSURE)
     print()
-    env_name = login.choose_environment(env_flag, os.environ)
+    env_name = login.choose_environment(env_flag)
     pending = login.start(home, env_name)
     if env_name != login.DEFAULT_ENVIRONMENT:
         print("Environment: %s (%s)"
               % (env_name, login.ENVIRONMENTS[env_name]["console_url"]))
     _open_browser(pending["connect_url"])
-    print(_pending_line(cwd))
+    print(LOGIN_PENDING)
     print("Open:  %s" % pending["connect_url"])
     print("Code:  %s" % pending["user_code"])
     print("Check that the browser shows the same code, then pick a workspace.")
 
 
-_CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh")
-
-
-def _pending_line(cwd):
-    return "RIUS_LOGIN_PENDING: bash %s login-wait --cwd %s" % (
-        _shell_quote(_CTL_SH), _shell_quote(cwd))
-
-
-def _shell_quote(path):
-    # Unquoted when safe, so the command matches the `allowed-tools` pattern
-    # in commands/login.md and runs without a permission prompt.
-    if all(c.isalnum() or c in "/._-~" for c in path):
-        return path
-    return "'" + path.replace("'", "'\\''") + "'"
-
-
-def _open_browser(url):
+def _open_browser(url, environ=os.environ, system=sys.platform):
+    """Open the link only where a browser window can appear. Anywhere else
+    the printed link and code are the whole sign-in."""
+    if not _has_desktop(environ, system):
+        return
     try:
-        import webbrowser
-        webbrowser.open(url)
-    except Exception:  # headless or no browser: the printed URL still works
+        browser = webbrowser.get()
+        if _is_console_browser(browser):
+            return
+        browser.open(url)
+    except Exception:  # no usable browser: the printed URL still works
         pass
+
+
+def _has_desktop(environ, system):
+    if environ.get("SSH_CONNECTION") or environ.get("SSH_TTY"):
+        return False
+    if system == "darwin" or system.startswith("win"):
+        return True
+    return bool(environ.get("DISPLAY") or environ.get("WAYLAND_DISPLAY"))
+
+
+def _is_console_browser(browser):
+    # Plain GenericBrowser is how webbrowser runs lynx, w3m and a bare
+    # $BROWSER command: in the foreground, waiting for it to exit. In a slash
+    # command that takes over the terminal and hangs. GUI launchers such as
+    # xdg-open are BackgroundBrowser or their own classes.
+    return type(browser) is webbrowser.GenericBrowser
 
 
 def _login_wait(home, cwd):
@@ -349,19 +556,16 @@ def _login_wait(home, cwd):
     creds = login.wait(home)
     if creds is None:
         print("Still waiting for approval in the browser.")
-        print(_pending_line(cwd))
+        print(LOGIN_PENDING)
         return
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
+    print(_tracing_signed_in(creds))
+    print(_querying_traces_line(creds))
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
-    print(_mcp_hint(home))
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
         print(moved)
-    if os.environ.get("RIUS_API_KEY"):
-        print("NOTE: RIUS_API_KEY is set in your environment and still wins "
-              "over this key for tracing. Unset it to trace with the new one. "
-              "The bundled MCP server uses the new key either way.")
 
 
 def _in_org(creds):
@@ -393,6 +597,13 @@ def _logout(home, cwd):
               % _date(creds.get("expires_at")))
 
 
+def _use_key(home, env_flag):
+    env_name = env_flag or login.DEFAULT_ENVIRONMENT
+    creds = login.use_key(home, sys.stdin.read().strip(), env_name)
+    print("Stored the key for %s; it is sent only to %s. Run /rius:enable-here "
+          "in a folder to trace it." % (env_name, creds["endpoint"]))
+
+
 def _date(timestamp):
     return timestamp[:10] if isinstance(timestamp, str) else "unknown"
 
@@ -401,7 +612,8 @@ def _run_account_action(action, home, cwd, env_flag):
     cwd = cwd or os.getcwd()
     handlers = {"login": lambda: _login(home, cwd, env_flag),
                 "login-wait": lambda: _login_wait(home, cwd),
-                "logout": lambda: _logout(home, cwd)}
+                "logout": lambda: _logout(home, cwd),
+                "use-key": lambda: _use_key(home, env_flag)}
     try:
         handlers[action]()
     except (login.WaitInProgress, login.Superseded) as exc:
@@ -411,13 +623,46 @@ def _run_account_action(action, home, cwd, env_flag):
 
 
 def dispatch(argv, home):
-    action, session_id, cwd, env_flag = _parse_args(argv)
+    try:
+        profile, argv = agent.from_argv(argv, os.environ)
+    except agent.UnknownAgent as exc:
+        print("Rius: %s." % exc)
+        return
+    with agent.using(profile), _localized_stdout(profile):
+        _dispatch(argv, home)
 
-    if action in ("login", "login-wait", "logout"):
+
+@contextlib.contextmanager
+def _localized_stdout(profile):
+    """Every message names Claude Code's commands; reword them once, here."""
+    if profile is agent.CLAUDE_CODE:
+        yield
+        return
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            yield
+    finally:
+        sys.stdout.write(profile.localize(out.getvalue()))
+
+
+def _dispatch(argv, home):
+    try:
+        action, flags = _parse_args(argv)
+    except ArgumentError as exc:
+        print("%s Nothing was changed." % exc)
+        return
+    session_id, cwd = flags.get("--session"), flags.get("--cwd")
+    env_flag = flags.get("--env")
+
+    if action in ("login", "login-wait", "logout", "use-key"):
         _run_account_action(action, home, cwd, env_flag)
         return
 
     inferred = False
+    if session_id and not state.is_valid_session_id(session_id):
+        print("Rius: %r is not a session id, so nothing was changed." % session_id)
+        return
     if action in SESSION_WRITE_ACTIONS and not session_id:
         # Refuse loudly rather than guess. Still exit 0, like every path here.
         print(_no_session_message(action))
@@ -438,11 +683,14 @@ def dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        _enable_here(cwd or os.getcwd(), home)
+        _enable_here(cwd or os.getcwd(), home, False)
+    elif action == "content-on-here":
+        _enable_here(cwd or os.getcwd(), home, True)
     elif action == "disable-here":
         _disable_here(cwd or os.getcwd(), home)
     elif action == "status":
-        _print_status(session_id, cwd, home, inferred=inferred)
+        _print_status(session_id, cwd, home, inferred=inferred,
+                      debug=bool(flags.get("--debug")))
     else:
         print(USAGE)
 

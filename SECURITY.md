@@ -10,8 +10,7 @@ Please don't open a public issue. Report it privately instead:
 
 - **GitHub:** [open a private security advisory](https://github.com/glassflow/rius-coding-agents/security/advisories/new)
   on this repository, or
-- **Email:** [help@glassflow.ai](mailto:help@glassflow.ai) with "Security"
-  in the subject.
+- **Email:** [security@glassflow.ai](mailto:security@glassflow.ai).
 
 Include what you found, how to reproduce it, the plugin version (from
 `.claude-plugin/plugin.json` or `/plugin`), and your OS and Claude Code
@@ -26,9 +25,16 @@ credit you in the release notes if you'd like.
 - Code in this repository: the hooks, exporter, heartbeat, login flow and
   the bundled MCP configuration.
 - Anything that sends data somewhere other than the endpoints the
-  [README](README.md#privacy-and-security-posture) lists, sends content
-  with `RIUS_CAPTURE_CONTENT=false`, sends anything for a folder that isn't
-  enabled, or writes the API key to a log or to Claude Code's settings.
+  [README](README.md#where-it-goes) lists, sends content
+  from a folder that sends structure only, ships a secret the scrubber
+  claims to remove, sends anything for a folder that isn't
+  enabled, writes the API key to a log or to Claude Code's settings, or
+  lets a project's environment turn tracing on, raise content capture, or
+  choose the key or the server it is sent to.
+
+Trusting a repo in Claude Code means trusting its settings. Issues that need
+a trusted malicious repo are out of scope unless they bypass a protection
+this repository documents.
 
 Issues in the Rius service itself (the console, ingest or the MCP server)
 are welcome through the same channels.

@@ -10,6 +10,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
 import heartbeat  # noqa: E402
 from rius_cc import state  # noqa: E402
+from tests.signed_in import sign_in  # noqa: E402
 
 
 # --- URL construction --------------------------------------------------
@@ -290,8 +291,7 @@ def test_main_uses_instance_id_from_state_not_a_fresh_uuid(monkeypatch, home):
 
     monkeypatch.setattr(heartbeat, "Pinger", FakePinger)
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/tmp/proj", home, str(os.getpid())])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_k")
-    monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
+    sign_in(home, api_key="glassflow_k")
     heartbeat.main()
     assert captured["instance_id"] == "persisted-instance-id"
 
@@ -311,8 +311,7 @@ def test_main_does_nothing_without_persisted_instance_id(monkeypatch, home):
 
     monkeypatch.setattr(heartbeat, "Pinger", FakePinger)
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/tmp/proj", home, str(os.getpid())])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_k")
-    monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
+    sign_in(home, api_key="glassflow_k")
     heartbeat.main()
     assert called["n"] == 0
 
@@ -337,8 +336,7 @@ def test_main_accepts_the_instance_id_minted_by_hook_on_argv(monkeypatch, home):
     monkeypatch.setattr(heartbeat, "Pinger", FakePinger)
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/tmp/proj", home,
                                       str(os.getpid()), "minted-by-hook"])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_k")
-    monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
+    sign_in(home, api_key="glassflow_k")
     heartbeat.main()
     assert captured["instance_id"] == "minted-by-hook"
 
@@ -349,8 +347,7 @@ def test_main_logs_why_it_refuses_to_start(monkeypatch, home, tmp_path):
     sid = "66666666-6666-6666-6666-666666666666"
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/tmp/proj", home,
                                       str(os.getpid())])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_supersecret")
-    monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
+    sign_in(home, api_key="glassflow_supersecret")
     monkeypatch.setenv("RIUS_CLAUDE_DEBUG", "true")
     heartbeat.main()   # no instance id anywhere -> refuses
 
@@ -365,7 +362,7 @@ def test_main_logs_when_disabled(monkeypatch, home):
     sid = "77777777-7777-7777-7777-777777777777"
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/nowhere", home,
                                       str(os.getpid()), "inst-1"])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_k")
+    sign_in(home, api_key="glassflow_k")
     monkeypatch.setenv("RIUS_CLAUDE_DEBUG", "true")
     heartbeat.main()
     logs = list(pathlib.Path(home, ".claude", "rius", "log").glob("*.log"))
@@ -390,8 +387,7 @@ def test_main_does_nothing_when_disabled(monkeypatch, home):
     monkeypatch.setattr(heartbeat, "Pinger", FakePinger)
     # cwd not in enabled_paths -> disabled by default
     monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/nowhere", home, str(os.getpid())])
-    monkeypatch.setenv("RIUS_API_KEY", "glassflow_k")
-    monkeypatch.setenv("RIUS_ENDPOINT", "https://ingest.test")
+    sign_in(home, api_key="glassflow_k")
     heartbeat.main()
     assert called["n"] == 0
 

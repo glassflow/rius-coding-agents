@@ -33,6 +33,7 @@ import json
 import os
 from typing import Any, List, Optional, Set, Tuple
 
+from . import agent
 from . import state as state_mod
 from . import transcript
 
@@ -134,8 +135,8 @@ HANDOFF_LOCK_TIMEOUT_S = 1.0
 def _stop_heartbeat(session_id: str, home: str) -> None:
     """What hook.py does on SessionEnd: tell that id's pinger to stop."""
     try:
-        with open(os.path.join(state_mod.state_dir(home),
-                               session_id + ".heartbeat.stop"), "w") as fh:
+        with open(state_mod.session_file(session_id, home, ".heartbeat.stop"),
+                  "w") as fh:
             fh.write("")
     except OSError:
         pass
@@ -207,8 +208,11 @@ def link(session_id: str, transcript_path: str, home: str,
 
 def _was_traced(session_id: str, home: str) -> bool:
     """Whether the old id has state: a conversation never traced has
-    nothing to take over, and looking must not create its files."""
-    return os.path.exists(os.path.join(home, ".claude", "rius", "state",
+    nothing to take over, and looking must not create its files. An id
+    read from a transcript is never trusted to name a file."""
+    if not state_mod.is_valid_session_id(session_id):
+        return False
+    return os.path.exists(os.path.join(agent.active().state_dir(home),
                                        session_id + ".json"))
 
 

@@ -8,7 +8,8 @@
 # hooks are required to exit 0 and write nothing to stdout, nothing said so.
 #
 # Rules this script inherits from hook.py and must not break:
-#   * never write to stdout -- stdout is a control channel for hooks;
+#   * stdout carries at most one hook JSON object -- it is a control
+#     channel for hooks;
 #   * never exit non-zero -- Claude Code treats that as a hook failure;
 #   * pass stdin through untouched -- the hook payload arrives on it.
 #
@@ -30,6 +31,53 @@ case "$0" in
     *)    dir= ;;
 esac
 
+# Fast exit, before any Python starts (RIUS-1224): with no stored key,
+# hook.py resolves no key and returns without doing anything, so on a
+# signed-out machine every tool call would pay two interpreter startups for
+# nothing. File tests only. Anything uncertain falls through to hook.py,
+# including a home folder that could not be resolved.
+# RIUS_API_KEY is not a reason to run: hook.py ignores it. Another agent's
+# files are not under ~/.claude, so `--agent` always falls through.
+rius_os_home_resolved=
+if [ -n "$dir" ] && [ -r "$dir/_os_home.sh" ]; then
+    . "$dir/_os_home.sh"
+fi
+
+rius_hook_has_work() {
+    [ "${1:-}" = "--agent" ] && return 0
+    if [ "${rius_trusts_env:-0}" = "1" ]; then
+        [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
+        for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
+            [ -n "$rius_home" ] || continue
+            rius_home_has_work "$rius_home/.claude/rius" "${1:-}" && return 0
+        done
+        return 1
+    fi
+    [ -n "${rius_os_home:-}" ] || return 0
+    rius_home_has_work "$rius_os_home/.claude/rius" "${1:-}"
+}
+
+rius_home_has_work() {
+    rius_dir=$1
+    [ -e "$rius_dir/credentials.json" ] && return 0
+    # A trace still open on the backend (state.sync_open_marker).
+    for rius_open in "$rius_dir"/state/*.open; do
+        [ -e "$rius_open" ] && return 0
+    done
+    # SessionStart may owe a notice: the once-ever install hint, or
+    # "run /rius:login" for folders or sessions turned on before signing
+    # in (path rules, or a /rius:on override in sessions/).
+    if [ "$2" = "SessionStart" ]; then
+        [ -e "$rius_dir/install-notice-shown" ] || return 0
+        [ -e "$rius_dir/config.json" ] && return 0
+        for rius_override in "$rius_dir"/sessions/*; do
+            [ -e "$rius_override" ] && return 0
+        done
+    fi
+    return 1
+}
+rius_hook_has_work "${1:-}" || exit 0
+
 # Guarded, not bare: a failed `.` would end this shell non-zero, which is
 # the one thing a hook may never do.
 if [ -n "$dir" ] && [ -r "$dir/_find_python.sh" ]; then
@@ -50,7 +98,7 @@ if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then
     # walk lands one level short, on a shell that is already exiting: the
     # pinger would see a dead process on its first iteration and quit,
     # producing zero heartbeats -- silently, as ever.
-    exec "$rius_py" "$dir/hook.py" "$@"
+    exec "$rius_py" -I "$dir/hook.py" "$@"
 fi
 
 # Nothing to run. Leave a breadcrumb, then exit 0 like every other path here.
@@ -61,7 +109,17 @@ fi
 # land under a different root than the plugin's own logs. It is a last-
 # resort message written when nothing else can run; a second location for
 # it is a far smaller problem than no message at all.
-log_dir="${HOME:-$USERPROFILE}/.claude/rius/log"
+# Same for the per-agent homes in rius_cc/agent.py.
+event=$1
+agent_home="${HOME:-$USERPROFILE}/.claude"
+if [ "$1" = "--agent" ]; then
+    event=$3
+    case "$2" in
+        codex)  agent_home="${CODEX_HOME:-${HOME:-$USERPROFILE}/.codex}" ;;
+        cursor) agent_home="${HOME:-$USERPROFILE}/.cursor" ;;
+    esac
+fi
+log_dir="$agent_home/rius/log"
 if [ -n "$dir" ]; then
     reason="no Python interpreter found on PATH (tried: $rius_candidates).
 Install Python 3.9+ and make sure one of those names is on PATH."
@@ -70,7 +128,7 @@ else
 directory. Claude Code should invoke it by path via \${CLAUDE_PLUGIN_ROOT}."
 fi
 mkdir -p "$log_dir" 2>/dev/null && cat >>"$log_dir/bootstrap.log" 2>/dev/null <<EOF
-$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) rius hook "$1": $reason
+$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) rius hook "$event": $reason
 The Rius plugin cannot run and is tracing nothing.
 EOF
 exit 0

@@ -19,10 +19,11 @@ import pytest
 
 import exporter
 from rius_cc import config, spans, state, transcript
+from tests.signed_in import sign_in
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 SID = "33333333-3333-3333-3333-333333333333"
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 ROOT = spans.span_id_for("session:" + SID)
 DEFAULT = "claude-code session"
 
@@ -48,6 +49,7 @@ def prompt(uuid, prompt_id, ts, text="carry on"):
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     _rules(str(h), enabled=["/tmp"])
     return str(h)
 

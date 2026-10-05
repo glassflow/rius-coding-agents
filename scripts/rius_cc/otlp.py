@@ -8,33 +8,53 @@ opentelemetry-proto library to guarantee correctness.
 """
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List
 
-from . import proto
+from . import net, proto
 
 SCOPE_NAME = "glassflow"
 RETRY_DELAY_S = 0.5
 
 
 def _any_value(value: Any) -> bytes:
-    # An AnyValue with no field set is how OTLP spells "no value". Falling
-    # through to str(value) would emit the literal string "None".
+    """AnyValue.value is a oneof, so the member is written even when it holds
+    0, 0.0 or "" -- an AnyValue with nothing set means "no value"."""
+    # Falling through to str(value) would emit the literal string "None".
     if value is None:
         return b""
     # bool MUST be checked before int -- bool is an int subclass in Python.
     if isinstance(value, bool):
         return proto.tag(2, proto.WIRE_VARINT) + proto.varint(1 if value else 0)
     if isinstance(value, int):
-        return proto.varint_field(3, value)
+        return _int_value(value)
     if isinstance(value, float):
-        return proto.double_field(4, value)
+        return proto.double_member(4, value)
     if isinstance(value, (list, tuple)):
         inner = b"".join(proto.ld(1, _any_value(v)) for v in value)
         return proto.ld(5, inner)
-    return proto.string_field(1, str(value))
+    if isinstance(value, (bytes, bytearray)):
+        return proto.ld(7, bytes(value))
+    if isinstance(value, dict):
+        return proto.string_member(1, _json_text(value))
+    return proto.string_member(1, str(value))
+
+
+def _int_value(value: int) -> bytes:
+    # Beyond int64 there is no OTLP int that holds it; the digits survive as text.
+    if proto.INT64_MIN <= value <= proto.INT64_MAX:
+        return proto.int64_member(3, value)
+    return proto.string_member(1, str(value))
+
+
+def _json_text(value: dict) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _attributes(field: int, attrs: Dict[str, Any]) -> bytes:
@@ -108,7 +128,8 @@ def encode(resource_attrs: Dict[str, object], span_list: List[Any]) -> bytes:
 def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0,
            retry_delay: float = RETRY_DELAY_S, sleep=time.sleep) -> int:
     """POST to <endpoint>/v1/traces. Returns the HTTP status, or 0 for a
-    transport failure. One retry, and only for 5xx/transport.
+    transport failure or a refused (non-https) URL. One retry, and only for
+    5xx/transport. A redirect is not followed: its 3xx is the status.
 
     The retry waits `retry_delay` first (spec section 9). Retrying instantly
     spends both attempts inside the same instant of an outage -- a receiver
@@ -120,13 +141,15 @@ def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0,
         "Authorization": "Bearer " + api_key,
     }
     url = endpoint.rstrip("/") + "/v1/traces"
+    if not net.is_allowed_url(url):
+        return 0                    # no retry can make an http URL safe
     last_status = 0
     for attempt in range(2):
         if attempt:
             sleep(retry_delay)
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with net.urlopen(req, timeout=timeout) as resp:
                 status = resp.getcode()
         except urllib.error.HTTPError as exc:
             status = exc.code

@@ -1,0 +1,155 @@
+"""Which coding agent this process serves, and everything that differs by it.
+
+One process serves exactly one agent, chosen by `--agent` on its command
+line (default: Claude Code) and fixed for the life of the process. So the
+profile is process-wide rather than threaded through every path helper:
+those helpers take `home` in dozens of places, and Claude Code, the default,
+must resolve to exactly the literals it used before there were profiles.
+
+Imports nothing from rius_cc, so every module (platform_compat included)
+can import it.
+"""
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import os
+from typing import Iterator, List, Mapping, Optional, Tuple
+
+FLAG = "--agent"
+
+
+class UnknownAgent(ValueError):
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class AgentProfile:
+    name: str
+    display_name: str
+    service_name: str
+    root_name: str
+    provider: str
+    home_parts: Tuple[str, ...]
+    home_env: Optional[str]
+    attr_prefix: str
+    env_prefix: str
+    command_prefix: str
+    login_wait_budget: int
+    sends_agent_on_link: bool
+    base_dir: Optional[str] = None
+
+    def rius_dir(self, home: str) -> str:
+        base = self.base_dir or os.path.join(home, *self.home_parts)
+        return os.path.join(base, "rius")
+
+    def state_dir(self, home: str) -> str:
+        return os.path.join(self.rius_dir(home), "state")
+
+    def log_dir(self, home: str) -> str:
+        return os.path.join(self.rius_dir(home), "log")
+
+    def env_var(self, suffix: str) -> str:
+        return self.env_prefix + suffix
+
+    def command(self, action: str) -> str:
+        return self.command_prefix + action
+
+    def localize(self, text: str) -> str:
+        """Messages are written in Claude Code's terms; say them in this
+        agent's."""
+        if self is CLAUDE_CODE:
+            return text
+        return (text.replace(CLAUDE_CODE.command_prefix, self.command_prefix)
+                .replace(CLAUDE_CODE.display_name, self.display_name))
+
+    def bind(self, env: Mapping[str, str]) -> "AgentProfile":
+        """This profile with its home taken from `home_env` when that is set."""
+        override = env.get(self.home_env) if self.home_env else None
+        if not override:
+            return self
+        return dataclasses.replace(self, base_dir=override)
+
+
+# Wait budgets stay under the agent's own limit on one shell command, so a
+# `login-wait` returns (and can be re-run) instead of being killed mid-poll.
+CLAUDE_CODE = AgentProfile(
+    name="claude-code", display_name="Claude Code",
+    service_name="claude-code", root_name="claude-code session",
+    provider="anthropic", home_parts=(".claude",), home_env=None,
+    attr_prefix="cc.", env_prefix="RIUS_CLAUDE_", command_prefix="/rius:",
+    login_wait_budget=540, sends_agent_on_link=False)
+
+CODEX = AgentProfile(
+    name="codex", display_name="Codex",
+    service_name="codex", root_name="codex session",
+    provider="openai", home_parts=(".codex",), home_env="CODEX_HOME",
+    attr_prefix="codex.", env_prefix="RIUS_CODEX_", command_prefix="$rius-",
+    login_wait_budget=540, sends_agent_on_link=True)
+
+# Cursor routes to several vendors, so its provider comes from each model name.
+CURSOR = AgentProfile(
+    name="cursor", display_name="Cursor",
+    service_name="cursor", root_name="cursor session",
+    provider="", home_parts=(".cursor",), home_env=None,
+    attr_prefix="cursor.", env_prefix="RIUS_CURSOR_", command_prefix="/rius-",
+    login_wait_budget=540, sends_agent_on_link=True)
+
+PROFILES = {p.name: p for p in (CLAUDE_CODE, CODEX, CURSOR)}
+
+_active = CLAUDE_CODE
+
+
+def active() -> AgentProfile:
+    return _active
+
+
+@contextlib.contextmanager
+def using(profile: AgentProfile) -> Iterator[AgentProfile]:
+    global _active
+    previous, _active = _active, profile
+    try:
+        yield profile
+    finally:
+        _active = previous
+
+
+def activate(profile: AgentProfile) -> None:
+    """For a process entry point: serve `profile` until the process exits."""
+    global _active
+    _active = profile
+
+
+def select(name: str, env: Mapping[str, str]) -> AgentProfile:
+    try:
+        return PROFILES[name].bind(env)
+    except KeyError:
+        raise UnknownAgent("unknown agent %r (choose %s)"
+                           % (name, ", ".join(sorted(PROFILES))))
+
+
+def split_flag(argv: List[str]) -> Tuple[str, List[str]]:
+    """(agent name, argv without `--agent <name>`). Anything after `--` is
+    text a person typed, never this flag."""
+    rest = list(argv)
+    end = rest.index("--") if "--" in rest else len(rest)
+    if FLAG not in rest[:end]:
+        return CLAUDE_CODE.name, rest
+    i = rest.index(FLAG)
+    if i + 1 >= len(rest):
+        raise UnknownAgent("%s needs a name" % FLAG)
+    name = rest[i + 1]
+    del rest[i:i + 2]
+    return name, rest
+
+
+def from_argv(argv: List[str],
+              env: Mapping[str, str]) -> Tuple[AgentProfile, List[str]]:
+    name, rest = split_flag(argv)
+    return select(name, env), rest
+
+
+def child_argv(profile: AgentProfile) -> List[str]:
+    """The flag that hands `profile` to a spawned script. Empty for Claude
+    Code, so its children's command lines are what they always were."""
+    return [] if profile.name == CLAUDE_CODE.name else [FLAG, profile.name]

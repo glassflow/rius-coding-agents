@@ -6,6 +6,7 @@ import pathlib
 import pytest
 
 from tests.platforms import BASH, IS_WINDOWS, minimal_env, posix_only
+from tests.signed_in import sign_in
 
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 
@@ -18,46 +19,40 @@ def _run(args, home, env=None):
 
 
 def test_status_explains_why_it_is_off(tmp_path):
-    home = str(tmp_path)
-    (tmp_path / ".claude" / "rius").mkdir(parents=True)
-    r = _run(["status", "--session", "s1", "--cwd", "/x/y"], home,
-             {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/x/y"], home)
     assert r.returncode == 0
     assert "off" in r.stdout.lower()
     assert "/x/y" in r.stdout or "default" in r.stdout.lower()
 
 
 def test_status_never_prints_the_key(tmp_path):
-    home = str(tmp_path)
-    (tmp_path / ".claude" / "rius").mkdir(parents=True)
+    home = _fresh_home(tmp_path)
+    sign_in(home, api_key="glassflow_supersecret")
     r = _run(["status", "--session", "s1", "--cwd", "/x"], home,
-             {"RIUS_API_KEY": "glassflow_supersecret"})
+             {"RIUS_API_KEY": "glassflow_envsecret"})
     assert "supersecret" not in r.stdout
+    assert "envsecret" not in r.stdout
 
 
 def test_on_then_status_reports_on(tmp_path):
-    home = str(tmp_path)
-    (tmp_path / ".claude" / "rius").mkdir(parents=True)
-    _run(["on", "--session", "s1", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
-    r = _run(["status", "--session", "s1", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    _run(["on", "--session", "s1", "--cwd", "/x"], home)
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
     assert "on" in r.stdout.lower()
 
 
 def test_enable_here_adds_a_path_rule(tmp_path):
-    home = str(tmp_path)
-    (tmp_path / ".claude" / "rius").mkdir(parents=True)
-    _run(["enable-here", "--session", "s1", "--cwd", "/opt/proj"], home,
-         {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
     rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
     assert "/opt/proj" in rules["enabled_paths"]
 
 
 def test_enable_here_is_idempotent(tmp_path):
-    home = str(tmp_path)
-    (tmp_path / ".claude" / "rius").mkdir(parents=True)
+    home = _signed_in_home(tmp_path)
     for _ in range(3):
-        _run(["enable-here", "--session", "s1", "--cwd", "/opt/proj"], home,
-             {"RIUS_API_KEY": "glassflow_k"})
+        _run(["enable-here", "--cwd", "/opt/proj"], home)
     rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
     assert rules["enabled_paths"].count("/opt/proj") == 1
 
@@ -70,13 +65,19 @@ def _fresh_home(tmp_path):
     return home
 
 
+def _signed_in_home(tmp_path):
+    home = _fresh_home(tmp_path)
+    sign_in(home)
+    return home
+
+
 def test_on_without_session_refuses_instead_of_guessing(tmp_path):
     """commands/rius.md never passes --session. On a fresh install there is
     no state file, so the guessed session id was "" -- which made the
     override path the sessions DIRECTORY and open(dir, "w") raise
     IsADirectoryError. /rius on simply did not work on a fresh install."""
-    home = _fresh_home(tmp_path)
-    r = _run(["on"], home, {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["on"], home)
     assert r.returncode == 0
     lower = r.stdout.lower()
     assert "isadirectory" not in lower and "error:" not in lower
@@ -86,19 +87,19 @@ def test_on_without_session_refuses_instead_of_guessing(tmp_path):
 
 
 def test_off_and_clear_without_session_also_refuse(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     for action in ("off", "clear"):
-        r = _run([action], home, {"RIUS_API_KEY": "glassflow_k"})
+        r = _run([action], home)
         assert r.returncode == 0
         assert "enable-here" in r.stdout, action
         assert "isadirectory" not in r.stdout.lower(), action
 
 
 def test_the_no_session_hint_names_only_commands_that_exist(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     commands = pathlib.Path(__file__).parent.parent / "commands"
     for action in ("on", "off", "clear"):
-        r = _run([action], home, {"RIUS_API_KEY": "glassflow_k"})
+        r = _run([action], home)
         hinted = (commands / (action + ".md")).exists()
         assert ("/rius:%s" % action in r.stdout) == hinted, action
 
@@ -106,21 +107,21 @@ def test_the_no_session_hint_names_only_commands_that_exist(tmp_path):
 def test_on_without_session_never_targets_another_live_session(tmp_path):
     """Two concurrent sessions: the override used to land on whichever one
     wrote state most recently, silently enabling somebody else's session."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     import sys as _sys, pathlib as _pathlib
     _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent / "scripts"))
     from rius_cc import state as _state
     _state.save("other-session", home, _state.new_state())
 
-    r = _run(["on"], home, {"RIUS_API_KEY": "glassflow_k"})
+    r = _run(["on"], home)
     assert r.returncode == 0
     assert "enable-here" in r.stdout
     assert not (tmp_path / ".claude" / "rius" / "sessions" / "other-session").exists()
 
 
 def test_on_with_an_empty_session_argument_refuses(tmp_path):
-    home = _fresh_home(tmp_path)
-    r = _run(["on", "--session", ""], home, {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["on", "--session", ""], home)
     assert r.returncode == 0
     assert "enable-here" in r.stdout
     assert not (tmp_path / ".claude" / "rius" / "sessions").exists()
@@ -128,7 +129,7 @@ def test_on_with_an_empty_session_argument_refuses(tmp_path):
 
 def test_status_without_session_says_it_inferred_one(tmp_path):
     """status keeps the fallback -- it only reads -- but must say so."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     import sys as _sys, pathlib as _pathlib
     _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent / "scripts"))
     from rius_cc import state as _state
@@ -136,7 +137,7 @@ def test_status_without_session_says_it_inferred_one(tmp_path):
     st["spans_exported"] = 7
     _state.save("guessed-session", home, st)
 
-    r = _run(["status", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
+    r = _run(["status", "--cwd", "/x"], home)
     assert r.returncode == 0
     assert "guessed-session" in r.stdout
     assert "inferred" in r.stdout.lower()
@@ -144,24 +145,22 @@ def test_status_without_session_says_it_inferred_one(tmp_path):
 
 
 def test_status_on_a_fresh_install_does_not_crash(tmp_path):
-    home = _fresh_home(tmp_path)
-    r = _run(["status", "--cwd", "/x"], home, {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["status", "--cwd", "/x"], home)
     assert r.returncode == 0
     assert "unknown" in r.stdout.lower()
     assert "error" not in r.stdout.lower()
 
 
 def test_status_with_an_explicit_session_does_not_claim_to_infer(tmp_path):
-    home = _fresh_home(tmp_path)
-    r = _run(["status", "--session", "s1", "--cwd", "/x"], home,
-             {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
     assert "inferred" not in r.stdout.lower()
 
 
 def test_enable_here_still_needs_no_session(tmp_path):
-    home = _fresh_home(tmp_path)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home,
-             {"RIUS_API_KEY": "glassflow_k"})
+    home = _signed_in_home(tmp_path)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.returncode == 0
     rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
     assert "/opt/proj" in rules["enabled_paths"]
@@ -187,9 +186,15 @@ ROOT = pathlib.Path(__file__).parent.parent
 COMMANDS = ROOT / "commands"
 CTL_SH = str(ROOT / "scripts" / "rius_ctl.sh")
 
-PLAIN_ACTIONS = ("login", "enable-here", "disable-here", "logout")
+PLAIN_ACTIONS = ("login", "disable-here", "logout")
 SESSION_ACTIONS = ("status", "on", "off")
-ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS
+# Commands that take no arguments at all, and the subcommand each runs.
+FOLDER_COMMANDS = {"enable-here": "enable-here",
+                   "enable-content-here": "content-on-here"}
+ALL_ACTIONS = PLAIN_ACTIONS + SESSION_ACTIONS + tuple(FOLDER_COMMANDS)
+GRANTED = dict({a: (a,) for a in PLAIN_ACTIONS + SESSION_ACTIONS},
+               login=("login", "login-wait"),
+               **{c: (sub,) for c, sub in FOLDER_COMMANDS.items()})
 
 
 def _command_file(action):
@@ -213,25 +218,57 @@ def test_the_catch_all_command_is_gone():
 
 
 @pytest.mark.parametrize("action", ALL_ACTIONS)
-def test_command_frontmatter_permits_the_launcher(action):
+def test_command_frontmatter_permits_only_its_own_action(action):
     front = _frontmatter(action)
     assert re.search(r"^description: \S", front, re.M), front
-    assert ("allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)"
-            in front), front
+    for sub in GRANTED[action]:
+        assert ('Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s'
+                % sub) in front, front
+    assert front.count("Bash(") == len(GRANTED[action]), front
 
 
-@pytest.mark.parametrize("action", PLAIN_ACTIONS)
-def test_command_passes_its_action_and_the_arguments(action):
+@pytest.mark.parametrize("command", sorted(FOLDER_COMMANDS))
+def test_folder_commands_pass_no_arguments(command):
+    assert _command_line(command) == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
+        % FOLDER_COMMANDS[command])
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_only_the_user_can_run_the_command(action):
+    """RIUS-1222: text in a repo must not be able to talk Claude into
+    enabling tracing or signing in."""
+    assert re.search(r"^disable-model-invocation: true$", _frontmatter(action),
+                     re.M), action
+
+
+def test_every_command_file_is_user_only():
+    for path in sorted(COMMANDS.glob("*.md")):
+        front = path.read_text().split("---")[1]
+        assert "\ndisable-model-invocation: true\n" in front, path.name
+
+
+NO_ARGUMENT_ACTIONS = ("enable-here", "disable-here", "logout")
+
+
+@pytest.mark.parametrize("action", NO_ARGUMENT_ACTIONS)
+def test_command_passes_its_action_and_no_typed_text(action):
     assert _command_line(action) == (
-        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s $ARGUMENTS '
-        '--cwd "$PWD"' % action)
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
+        % action)
+
+
+def test_login_passes_typed_text_as_one_single_quoted_word():
+    assert _command_line("login") == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login --cwd "$PWD" '
+        "-- '$ARGUMENTS'")
 
 
 @pytest.mark.parametrize("action", SESSION_ACTIONS)
 def test_session_commands_pass_the_session_id(action):
     assert _command_line(action) == (
         'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s '
-        '--session ${CLAUDE_SESSION_ID} $ARGUMENTS --cwd "$PWD"' % action)
+        '--session ${CLAUDE_SESSION_ID} --cwd "$PWD"' % action)
 
 
 @pytest.mark.parametrize("action", ALL_ACTIONS)
@@ -259,14 +296,25 @@ def test_login_command_tells_claude_to_wait_in_the_background():
         assert needle in body, needle
 
 
+LOGIN_WAIT = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login-wait'
+
+
+def test_login_names_a_fixed_wait_command_instead_of_one_from_the_output():
+    text = _command_file("login").read_text()
+    assert "`%s`" % LOGIN_WAIT in text
+    assert "follows `RIUS_LOGIN_PENDING:`" not in text
+    assert "Bash(%s)" % LOGIN_WAIT in _frontmatter("login")
+
+
 def test_slash_command_line_runs_end_to_end(tmp_path):
     """Run the literal line from the command file, not an approximation."""
     home = tmp_path / "home"
     (home / ".claude" / "rius").mkdir(parents=True)
+    sign_in(home)
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
-           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k",
+           "CLAUDE_PLUGIN_ROOT": str(ROOT),
            "CLAUDE_SESSION_ID": "s-e2e"}
-    line = _command_line("status").replace("$ARGUMENTS", "")
+    line = _command_line("status")
     r = subprocess.run([BASH, "-c", line], cwd=str(tmp_path),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -283,11 +331,12 @@ def test_enable_here_command_line_enables_the_folder_the_hooks_see(tmp_path):
     two spellings meet."""
     home = tmp_path / "home"
     (home / ".claude" / "rius").mkdir(parents=True)
+    sign_in(home)
     proj = tmp_path / "proj"
     proj.mkdir()
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
-           "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
-    line = _command_line("enable-here").replace("$ARGUMENTS", "")
+           "CLAUDE_PLUGIN_ROOT": str(ROOT)}
+    line = _command_line("enable-here")
     r = subprocess.run([BASH, "-c", line], cwd=str(proj),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -295,7 +344,7 @@ def test_enable_here_command_line_enables_the_folder_the_hooks_see(tmp_path):
         [sys.executable, "-c", "import os; print(os.getcwd())"],
         cwd=str(proj), capture_output=True, text=True, check=True).stdout.strip()
     from rius_cc import config
-    assert config.resolve("s1", native_cwd, KEY, str(home)).enabled, (
+    assert config.resolve("s1", native_cwd, {}, str(home)).enabled, (
         "enable-here wrote %r, which does not cover the hook's cwd %r"
         % (config.read_path_rules(str(home)), native_cwd))
 
@@ -371,12 +420,31 @@ def test_bare_invocation_means_status(tmp_path):
     assert "cwd: /x/y" in r.stdout
 
 
-def test_manifests_name_the_plugin_rius_at_0_4_5():
+def _manifests():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    return plugin, market
+
+
+def test_manifests_name_the_plugin_rius_at_0_5_0():
+    plugin, market = _manifests()
     listed = {p["name"]: p["version"] for p in market["plugins"]}
-    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.5")
-    assert listed == {"rius": "0.4.5"}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.5.0")
+    assert listed == {"rius": "0.5.0"}
+
+
+def test_marketplace_lists_the_plugin_at_its_own_version():
+    """`claude plugin update` compares against plugin.json; a marketplace
+    entry at another version makes it answer "already at latest"."""
+    plugin, market = _manifests()
+    entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
+    assert entry["version"] == plugin["version"]
+
+
+def test_marketplace_entry_declares_no_headers_helper():
+    _, market = _manifests()
+    for entry in market["plugins"]:
+        assert "headersHelper" not in json.dumps(entry), entry
 
 
 def test_pyproject_version_matches_the_manifests():
@@ -397,54 +465,55 @@ def _config_is_private(tmp_path):
     return IS_WINDOWS or os.stat(path).st_mode & 0o777 == 0o600
 
 
-KEY = {"RIUS_API_KEY": "glassflow_k"}
 
 
 def test_disable_here_beats_a_parent_enable(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt"], home, KEY)
-    r = _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home)
+    r = _run(["disable-here", "--cwd", "/opt/proj"], home)
     assert r.returncode == 0
     assert "disabled for /opt/proj" in r.stdout
     assert _rules(tmp_path) == {"enabled_paths": ["/opt"],
-                                "disabled_paths": ["/opt/proj"]}
-    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/sub"], home, KEY)
+                                "disabled_paths": ["/opt/proj"],
+                                "capture_content": {"/opt": False}}
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj/sub"], home)
     assert "Rius tracing: off" in status.stdout
-    status = _run(["status", "--session", "s1", "--cwd", "/opt/other"], home, KEY)
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/other"], home)
     assert "Rius tracing: on" in status.stdout
 
 
 def test_disable_here_removes_the_folder_from_enabled_paths(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
-    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
+    _run(["disable-here", "--cwd", "/opt/proj"], home)
     assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": ["/opt/proj"]}
 
 
 def test_enable_here_under_a_disabled_parent_says_still_off(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["disable-here", "--cwd", "/opt"], home, KEY)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt"], home)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.returncode == 0
     assert r.stdout.strip() == ("Still OFF: `/opt` is disabled. Run "
                                 "`/rius:enable-here` in that folder instead.")
-    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    status = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: off" in status.stdout
 
 
 def test_enable_here_removes_the_disabled_entry(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt/proj"], home)
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.returncode == 0
     assert "enabled for /opt/proj" in r.stdout
-    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": ["/opt/proj"], "disabled_paths": [],
+                                "capture_content": {"/opt/proj": False}}
 
 
 def _store_login(home, workspace_name="eng-shared"):
     from rius_cc import login as _login
     _login._write_private(_login.credentials_path(home), {
-        "api_key": "ri_stored", "endpoint": "https://ingest", "env": "production",
+        "api_key": "ri_stored", "endpoint": "https://ingest.eu.console.rius-glassflow.com", "env": "production",
         "workspace_id": "w", "workspace_name": workspace_name,
         "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"})
 
@@ -455,40 +524,55 @@ def test_enable_here_says_what_this_folder_will_upload_and_where(tmp_path):
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.stdout.splitlines() == [
         "Rius tracing enabled for /opt/proj and everything under it.",
+        "Sessions here now send structure only (models, tokens, timing, tool "
+        "names) to eng-shared: no prompts, replies, file contents or command "
+        "output.",
+        "Structure only is recommended. To include content for this folder, "
+        "run /rius:enable-content-here. Run /rius:disable-here to stop."]
+
+
+def test_enable_here_with_content_says_so_and_how_to_go_back(tmp_path):
+    home = _fresh_home(tmp_path)
+    _store_login(home)
+    r = _run(["content-on-here", "--cwd", "/opt/proj"], home)
+    assert r.stdout.splitlines() == [
+        "Rius tracing enabled for /opt/proj and everything under it.",
         "Sessions here now send prompts, replies, the contents of files Claude "
-        "reads and command output to eng-shared.",
-        "Set RIUS_CAPTURE_CONTENT=false to send structure only (models, "
-        "tokens, timing), or run /rius:disable-here to stop."]
+        "reads and command output to eng-shared, with the secrets Rius "
+        "recognises removed first.",
+        "Run /rius:enable-here to send structure only, or /rius:disable-here "
+        "to stop."]
+    assert _rules(tmp_path)["capture_content"] == {"/opt/proj": True}
 
 
 def test_enable_here_with_content_off_does_not_claim_content_is_sent(tmp_path):
     home = _fresh_home(tmp_path)
     _store_login(home)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home,
+    r = _run(["content-on-here", "--cwd", "/opt/proj"], home,
              {"RIUS_CAPTURE_CONTENT": "false"})
     assert r.stdout.splitlines() == [
         "Rius tracing enabled for /opt/proj and everything under it.",
-        "Sessions here now send structure only (models, tokens, timing) to "
-        "eng-shared; RIUS_CAPTURE_CONTENT=false withholds prompts, replies, "
-        "file contents and command output.",
-        "Run /rius:disable-here to stop."]
+        "Sessions here now send structure only (models, tokens, timing, tool "
+        "names) to eng-shared: no prompts, replies, file contents or command "
+        "output.",
+        "RIUS_CAPTURE_CONTENT=false in your environment keeps content off here."]
 
 
-def test_enable_here_under_an_env_key_names_no_workspace_it_cannot_know(tmp_path):
+def test_enable_here_under_an_env_key_still_names_the_login_workspace(tmp_path):
     home = _fresh_home(tmp_path)
     _store_login(home)
-    r = _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
-    assert "command output to your Rius workspace." in r.stdout
-    assert "eng-shared" not in r.stdout
+    r = _run(["enable-here", "--cwd", "/opt/proj"], home,
+             {"RIUS_API_KEY": "glassflow_attacker"})
+    assert "to eng-shared: no prompts" in r.stdout
 
 
 def test_enable_here_before_login_says_nothing_is_sent_yet(tmp_path):
     home = _fresh_home(tmp_path)
     r = _run(["enable-here", "--cwd", "/opt/proj"], home)
     assert r.stdout.splitlines()[1] == (
-        "Sessions here will send prompts, replies, the contents of files "
-        "Claude reads and command output to the workspace you pick once you "
-        "sign in with /rius:login.")
+        "Sessions here will send structure only (models, tokens, timing, tool "
+        "names) to the workspace you pick once you sign in with /rius:login: "
+        "no prompts, replies, file contents or command output.")
     assert "now send" not in r.stdout
 
 
@@ -517,35 +601,36 @@ def test_a_sibling_with_a_shared_prefix_is_not_an_exception(tmp_path):
 
 @pytest.mark.parametrize("action", ["enable-here", "disable-here"])
 def test_path_rules_are_written_privately(tmp_path, action):
-    home = _fresh_home(tmp_path)
-    _run([action, "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run([action, "--cwd", "/opt/proj"], home)
     assert _config_is_private(tmp_path)
 
 
 def test_status_names_the_matching_rule(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt"], home, KEY)
-    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
-    on = _run(["status", "--session", "s1", "--cwd", "/opt/x"], home, KEY)
-    off = _run(["status", "--session", "s1", "--cwd", "/opt/proj/y"], home, KEY)
-    none = _run(["status", "--session", "s1", "--cwd", "/elsewhere"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt"], home)
+    _run(["disable-here", "--cwd", "/opt/proj"], home)
+    on = _run(["status", "--session", "s1", "--cwd", "/opt/x"], home)
+    off = _run(["status", "--session", "s1", "--cwd", "/opt/proj/y"], home)
+    none = _run(["status", "--session", "s1", "--cwd", "/elsewhere"], home)
     assert "Rule: `/opt` enables this folder" in on.stdout
     assert "Rule: `/opt/proj` disables this folder" in off.stdout
     assert "Rule: none matches this folder" in none.stdout
 
 
-def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
+def test_status_names_the_signed_in_account_and_both_sign_ins(tmp_path):
     home = _fresh_home(tmp_path)
     from rius_cc import login as _login
     _login._write_private(_login.credentials_path(home), {
-        "api_key": "ri_secret", "endpoint": "https://ingest", "env": "production",
+        "api_key": "ri_secret", "endpoint": "https://ingest.eu.console.rius-glassflow.com", "env": "production",
         "workspace_id": "w", "workspace_name": "eng-shared", "org_name": "Acme",
         "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z"})
     r = _run(["status", "--session", "s1", "--cwd", "/x"], home)
     assert "Signed in as: x@acme.com" in r.stdout
     assert "Workspace: eng-shared (Acme)" in r.stdout
     assert "Key expires: 2026-12-26" in r.stdout
-    assert 'Reconnect "rius" in /mcp' in r.stdout
+    assert "Tracing: signed in as workspace eng-shared (Acme)" in r.stdout
+    assert "Querying traces: run /mcp and sign in to rius" in r.stdout
     assert "ri_secret" not in r.stdout
 
 
@@ -562,28 +647,28 @@ def _stop_session(home, sid="s1"):
 
 
 def test_status_of_a_stopped_session_in_an_enabled_folder_says_off(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
     _stop_session(home)
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: off" in r.stdout
     assert "Rius tracing: on" not in r.stdout
     assert STOPPED_NOTE in r.stdout
 
 
 def test_status_of_a_stopped_session_in_a_disabled_folder_explains_it(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["disable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["disable-here", "--cwd", "/opt/proj"], home)
     _stop_session(home)
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: off" in r.stdout
     assert STOPPED_NOTE in r.stdout
 
 
 def test_status_of_a_session_that_was_never_stopped_is_unchanged(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: on" in r.stdout
     assert "Stopped:" not in r.stdout
 
@@ -601,73 +686,75 @@ def test_status_agrees_with_the_hooks_across_a_symlink(tmp_path):
     """enable-here gets the shell's $PWD (/tmp/proj on macOS); the hooks get
     Claude Code's resolved cwd (/private/tmp/proj). Status run from either
     spelling must give the hooks' answer."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    _run(["enable-here", "--cwd", link], home, KEY)
+    _run(["enable-here", "--cwd", link], home)
     for cwd in (link, real):
-        r = _run(["status", "--session", "s1", "--cwd", cwd], home, KEY)
+        r = _run(["status", "--session", "s1", "--cwd", cwd], home)
         assert "Rius tracing: on" in r.stdout, cwd
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_shows_the_folder_the_hooks_see(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", link], home)
     assert "cwd: %s (hooks see %s)" % (link, real) in r.stdout
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_disable_here_through_a_symlink_replaces_the_enable(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    _run(["enable-here", "--cwd", link], home, KEY)
-    _run(["disable-here", "--cwd", real], home, KEY)
+    _run(["enable-here", "--cwd", link], home)
+    _run(["disable-here", "--cwd", real], home)
     assert _rules(tmp_path) == {"enabled_paths": [], "disabled_paths": [real]}
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_is_idempotent_across_spellings(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    _run(["enable-here", "--cwd", link], home, KEY)
-    _run(["enable-here", "--cwd", real], home, KEY)
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    _run(["enable-here", "--cwd", link], home)
+    _run(["enable-here", "--cwd", real], home)
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_stores_the_folder_the_hooks_see(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
-    r = _run(["enable-here", "--cwd", link], home, KEY)
+    r = _run(["enable-here", "--cwd", link], home)
     assert "enabled for %s " % real in r.stdout
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_decides_for_the_folder_the_hooks_see(tmp_path):
     """$PWD ~/proj/vendor, where vendor -> ~/secret: the hooks are handed
     ~/secret, which no rule enables, so status must not say on."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     proj = tmp_path / "proj"
     proj.mkdir()
     secret = tmp_path / "secret"
     secret.mkdir()
     (proj / "vendor").symlink_to(secret, target_is_directory=True)
-    _run(["enable-here", "--cwd", str(proj)], home, KEY)
+    _run(["enable-here", "--cwd", str(proj)], home)
     r = _run(["status", "--session", "s1", "--cwd", str(proj / "vendor")],
-             home, KEY)
+             home)
     assert "Rius tracing: off" in r.stdout
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_names_a_rule_written_through_a_symlink(tmp_path):
     """0.4.3 stored $PWD as written, so its /tmp rules never matched."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
     with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
         json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
-    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", link], home)
     assert "Rius tracing: off" in r.stdout
     assert ("Rule `%s` enables nothing: Claude Code calls that folder %s. "
             "Run /rius:enable-here in %s to fix it." % (link, real, link)
@@ -676,12 +763,12 @@ def test_status_names_a_rule_written_through_a_symlink(tmp_path):
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
     (tmp_path / "real" / "sub").mkdir()
     with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
         json.dump({"enabled_paths": [], "disabled_paths": [link]}, fh)
-    r = _run(["status", "--session", "s1", "--cwd", link + "/sub"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", link + "/sub"], home)
     assert ("Rule `%s` disables nothing: Claude Code calls that folder %s. "
             "Run /rius:disable-here in %s to fix it." % (link, real, link)
             ) in r.stdout
@@ -691,25 +778,25 @@ def test_status_points_a_stale_disable_at_its_own_folder(tmp_path):
 def test_enabling_a_parent_again_keeps_an_old_carve_out_off(tmp_path):
     """0.4.3 rules: enable link, disable link/sub; neither matched. Re-running
     enable-here on the parent must not start tracing sub."""
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
     (tmp_path / "real" / "sub").mkdir()
     (tmp_path / "real" / "sab").mkdir()
     with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
         json.dump({"enabled_paths": [link],
                    "disabled_paths": [link + "/sub", link + "/sa*"]}, fh)
-    r = _run(["enable-here", "--cwd", link], home, KEY)
+    r = _run(["enable-here", "--cwd", link], home)
     assert "except %s/sub and %s/sa* (disabled)" % (real, real) in r.stdout
     for sub in ("sub", "sab"):
         status = _run(["status", "--session", "s1", "--cwd", real + "/" + sub],
-                      home, KEY)
+                      home)
         assert "Rius tracing: off" in status.stdout, sub
 
 
 @pytest.mark.parametrize("action", ["enable-here", "disable-here"])
 def test_a_folder_too_broad_for_a_rule_is_refused_out_loud(tmp_path, action):
-    home = _fresh_home(tmp_path)
-    r = _run([action, "--cwd", "/"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    r = _run([action, "--cwd", "/"], home)
     assert r.stdout.startswith("Not changed: `/` is too broad for a rule")
     assert not (tmp_path / ".claude" / "rius" / "config.json").exists()
 
@@ -720,21 +807,22 @@ def test_enable_here_in_a_folder_typed_in_the_wrong_case(tmp_path):
     probe.mkdir()
     if not (tmp_path / "CASEPROBE").is_dir():
         pytest.skip("needs a case-insensitive filesystem")
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     (tmp_path / "abc").mkdir()
-    _run(["enable-here", "--cwd", str(tmp_path / "ABC")], home, KEY)
+    _run(["enable-here", "--cwd", str(tmp_path / "ABC")], home)
     assert _rules(tmp_path)["enabled_paths"] == [str(tmp_path / "abc")]
 
 
 @posix_only("resolved() leaves Windows paths as written, by design")
 def test_enable_here_replaces_a_rule_written_through_a_symlink(tmp_path):
-    home = _fresh_home(tmp_path)
+    home = _signed_in_home(tmp_path)
     real, link = _linked_dir(tmp_path)
     with open(str(tmp_path / ".claude" / "rius" / "config.json"), "w") as fh:
         json.dump({"enabled_paths": [link], "disabled_paths": []}, fh)
-    _run(["enable-here", "--cwd", link], home, KEY)
-    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": []}
-    r = _run(["status", "--session", "s1", "--cwd", link], home, KEY)
+    _run(["enable-here", "--cwd", link], home)
+    assert _rules(tmp_path) == {"enabled_paths": [real], "disabled_paths": [],
+                                "capture_content": {real: False}}
+    r = _run(["status", "--session", "s1", "--cwd", link], home)
     assert "Rius tracing: on" in r.stdout
     assert "through a symlink" not in r.stdout
 
@@ -743,24 +831,62 @@ NO_HOOK_HINT = "No Rius hook has traced this session yet."
 
 
 def test_status_says_when_no_hook_has_run_in_this_session(tmp_path):
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert NO_HOOK_HINT in r.stdout
 
 
 def test_status_drops_the_hint_once_a_hook_has_traced(tmp_path):
     from rius_cc import state as _state
-    home = _fresh_home(tmp_path)
-    _run(["enable-here", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
     _state.save("s1", home, _state.new_state())
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert NO_HOOK_HINT not in r.stdout
 
 
 def test_status_in_a_folder_that_is_off_gives_no_hook_hint(tmp_path):
     """Off is explained by the Reason line; hooks there write nothing."""
-    home = _fresh_home(tmp_path)
-    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home, KEY)
+    home = _signed_in_home(tmp_path)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
     assert "Rius tracing: off" in r.stdout
     assert NO_HOOK_HINT not in r.stdout
+
+
+# --- status: the next step, and debug-only platform details -------------------
+
+def test_status_signed_out_gives_one_next_step(tmp_path):
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], _fresh_home(tmp_path))
+    assert "Next: run /rius:login, then /rius:enable-here in a project" in r.stdout
+    assert "Reason:" not in r.stdout and "also no API key" not in r.stdout
+
+
+def test_status_signed_in_but_not_enabled_says_to_enable(tmp_path):
+    r = _run(["status", "--session", "s1", "--cwd", "/x"], _signed_in_home(tmp_path))
+    assert ("Next: run /rius:enable-here (or /rius:enable-content-here to "
+            "include content)") in r.stdout
+
+
+def test_status_enabled_has_no_next_step(tmp_path):
+    home = _signed_in_home(tmp_path)
+    _run(["enable-here", "--cwd", "/opt/proj"], home)
+    r = _run(["status", "--session", "s1", "--cwd", "/opt/proj"], home)
+    assert "Rius tracing: on" in r.stdout and "Next:" not in r.stdout
+
+
+def test_status_shows_the_platform_only_in_debug(tmp_path):
+    home = _fresh_home(tmp_path)
+    plain = _run(["status", "--session", "s1", "--cwd", "/x"], home)
+    assert "Platform:" not in plain.stdout
+    flag = _run(["status", "--session", "s1", "--cwd", "/x", "--debug"], home)
+    assert "Platform:" in flag.stdout and "locking:" in flag.stdout
+    env = _run(["status", "--session", "s1", "--cwd", "/x"], home,
+               {"RIUS_CLAUDE_DEBUG": "1"})
+    assert "Platform:" in env.stdout
+
+
+def test_debug_takes_no_value_and_only_on_status(tmp_path):
+    home = _fresh_home(tmp_path)
+    r = _run(["enable-here", "--cwd", "/opt/proj", "--debug"], home)
+    assert "does not accept `--debug`" in r.stdout

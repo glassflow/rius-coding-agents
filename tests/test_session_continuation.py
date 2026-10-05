@@ -19,11 +19,12 @@ import pytest
 
 import exporter
 from rius_cc import config, spans, state
+from tests.signed_in import sign_in
 
 OLD = "aaaaaaaa-0000-0000-0000-000000000001"
 NEW = "bbbbbbbb-0000-0000-0000-000000000002"
 NEWER = "cccccccc-0000-0000-0000-000000000003"
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 SWITCH_TS = "2026-09-30T10:05:00.000Z"
 TRACE = spans.trace_id_for(OLD)
 ROOT = spans.span_id_for("session:" + OLD)
@@ -92,6 +93,7 @@ def _enable(home, paths):
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     _enable(str(h), ["/tmp"])
     return str(h)
 

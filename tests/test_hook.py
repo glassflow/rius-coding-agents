@@ -14,7 +14,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 import hook as hook_mod  # noqa: E402
 from tests.platforms import (BASH, IS_WINDOWS, PYTHON_FOR_SH, SH,  # noqa: E402
                              TOOLS_WITHOUT_PYTHON, minimal_env, posix_only)
-from rius_cc import config, state  # noqa: E402
+from rius_cc import config, login, state  # noqa: E402
+from tests.signed_in import sign_in  # noqa: E402
 
 HOOK = str(pathlib.Path(__file__).parent.parent / "scripts" / "hook.py")
 
@@ -86,11 +87,8 @@ def _enabled_env(tmp_path):
     with open(config.path_rules_path(str(home)), "w") as fh:
         json.dump({"enabled_paths": [str(tmp_path)]}, fh)
     env = dict(os.environ)
-    env.update({
-        "HOME": str(home),
-        "RIUS_API_KEY": "glassflow_k",
-        "RIUS_ENDPOINT": "https://ingest.test",
-    })
+    env.update({"HOME": str(home)})
+    sign_in(home)
     return env, str(home)
 
 
@@ -627,7 +625,7 @@ def test_launcher_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_pat
     directory with no _find_python.sh and assert the breadcrumb names the
     real fault, with exit 0 preserved."""
     home = tmp_path / "home"
-    home.mkdir()
+    sign_in(str(home))
     bare = tmp_path / "bare_scripts"
     bare.mkdir()
     import shutil
@@ -678,7 +676,7 @@ def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
     breadcrumb. Exiting 0 with nothing written is the failure mode this
     whole plugin exists to avoid."""
     home = tmp_path / "home"
-    home.mkdir()
+    sign_in(str(home))
     # A PATH with the shell's own utilities but no python of any name.
     if IS_WINDOWS:
         tools = TOOLS_WITHOUT_PYTHON
@@ -711,7 +709,7 @@ def _disabled_env_with_open_trace(tmp_path, sid, open_trace=True, key=True):
     if open_trace:
         state.save(sid, home, {"root_started": True, "instance_id": "i-1"})
     if not key:
-        env.pop("RIUS_API_KEY")
+        login.clear_credentials(home)
     return env, home
 
 
@@ -721,7 +719,7 @@ def _payload_in_disabled(tmp_path, sid):
 
 
 def _spawned(calls):
-    return [pathlib.Path(c["argv"][1]).name for c in calls]
+    return [pathlib.Path(c["argv"][2]).name for c in calls]
 
 
 def test_a_disabled_session_with_an_open_trace_still_reaches_the_exporter(

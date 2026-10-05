@@ -23,14 +23,16 @@ import socket
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
-from rius_cc import platform_compat
+from rius_cc import agent, net, platform_compat
 
-# `wait` runs under Claude Code's Bash tool, which kills a command after ten
-# minutes. Returning before that leaves the pending link on disk so a second
-# `wait` can pick it up, instead of being killed mid-poll.
+# `wait` runs under the agent's shell tool, which kills a command after a
+# while (ten minutes for Claude Code's Bash). Returning before that leaves the
+# pending link on disk so a second `wait` can pick it up, instead of being
+# killed mid-poll. Each agent's profile may only lower this ceiling.
 WAIT_BUDGET_SECONDS = 540
 MAX_BACKOFF_SECONDS = 60
 # The sign-in host rate-limits per IP, whatever interval the server names.
@@ -44,21 +46,33 @@ ENVIRONMENTS = {
     "production": {
         "link_base": "https://connect.console.rius-glassflow.com",
         "console_url": "https://console.rius-glassflow.com",
-        "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
+        "ingest_url": "https://ingest.eu.console.rius-glassflow.com",
+        "hosts": ("ingest.eu.console.rius-glassflow.com",
+                  "mcp.eu.console.rius-glassflow.com",
+                  "connect.console.rius-glassflow.com"),
     },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
-        "mcp_url": "https://mcp.eu.staging.rius.glassflow.xyz/mcp",
+        "ingest_url": "https://ingest.eu.staging.rius.glassflow.xyz",
+        "hosts": ("ingest.eu.staging.rius.glassflow.xyz",
+                  "ingest.staging.rius.glassflow.xyz",
+                  "mcp.eu.staging.rius.glassflow.xyz",
+                  "mcp.staging.rius.glassflow.xyz",
+                  "connect.staging.rius.glassflow.xyz"),
     },
 }
+# Plain http is only ever accepted for a server on this machine.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 DEFAULT_ENVIRONMENT = "production"
 ENVIRONMENT_VAR = "RIUS_ENV"
 
 DISCLOSURE = (
-    "Folders you enable send full sessions (prompts, replies, file contents, "
-    "command output) to the workspace you pick. Everyone with access to that "
-    "workspace, including its admins, can read them.")
+    "Folders you enable send their session structure (models, tokens, "
+    "timing) to the workspace you pick, and prompts, replies, file contents "
+    "and command output only from folders you enable with "
+    "/rius:enable-content-here. Everyone with access to that workspace, "
+    "including its admins, can read them.")
 
 LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
 NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
@@ -71,7 +85,7 @@ _PENDING_FIELDS = ("env", "link_id", "device_code", "user_code", "connect_url",
                    "interval", "expires_at")
 _LINK_FIELDS = ("link_id", "device_code", "user_code", "connect_url", "interval",
                 "expires_in")
-_CREDENTIAL_FIELDS = ("api_key", "endpoint", "mcp_url", "workspace_id",
+_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_id",
                       "workspace_name", "org_name", "email", "expires_at")
 _REQUIRED_CREDENTIAL_FIELDS = ("api_key", "endpoint", "workspace_id",
                                "workspace_name", "email")
@@ -96,7 +110,7 @@ def _send(req: urllib.request.Request, timeout: float = REQUEST_TIMEOUT_SECONDS)
     """(status, parsed JSON body). Error statuses are data here, not
     exceptions: 428 is how the server says "not yet"."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with net.urlopen(req, timeout=timeout) as resp:
             return resp.status, _parse(resp.read())
     except urllib.error.HTTPError as err:
         return err.code, _parse(err.read())
@@ -119,6 +133,26 @@ def post_json(url: str, payload: dict, bearer: Optional[str] = None):
     return _send(req)
 
 
+def is_rius_url(url, env_name: Optional[str]) -> bool:
+    """True for an https URL on one of the Rius hosts of `env_name`
+    (production when unknown), or an http(s) URL on this machine. Nothing
+    else is ever handed the key."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    if parts.username is not None or parts.password is not None:
+        return False
+    if host in _LOCAL_HOSTS:
+        return parts.scheme in ("http", "https")
+    hosts = ENVIRONMENTS.get(env_name or "",
+                             ENVIRONMENTS[DEFAULT_ENVIRONMENT])["hosts"]
+    return parts.scheme == "https" and host in hosts
+
+
 def _is_success(status: int) -> bool:
     return 200 <= status < 300
 
@@ -134,7 +168,7 @@ def _detail(body: dict) -> str:
 # --- Files ------------------------------------------------------------------
 
 def _rius_dir(home: str) -> str:
-    return os.path.join(home, ".claude", "rius")
+    return agent.active().rius_dir(home)
 
 
 def pending_path(home: str) -> str:
@@ -152,8 +186,7 @@ def wait_lock_path(home: str) -> str:
 def _write_private(path: str, data: dict) -> None:
     """Write via a 0600 temp file and rename, so the secret is never readable
     by others, not even for the instant before a chmod."""
-    directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
+    directory = platform_compat.ensure_private_dir(os.path.dirname(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".rius-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
@@ -217,9 +250,10 @@ def _link_base(env_name: str) -> str:
     return ENVIRONMENTS[env_name]["link_base"]
 
 
-def choose_environment(flag: Optional[str], env) -> str:
-    """`--env` beats RIUS_ENV beats production."""
-    return flag or env.get(ENVIRONMENT_VAR) or DEFAULT_ENVIRONMENT
+def choose_environment(flag: Optional[str]) -> str:
+    """`--env`, else production. Never the environment: a repo's settings
+    could set it to send your sign-in elsewhere."""
+    return flag or DEFAULT_ENVIRONMENT
 
 
 def _require_known(env_name: str) -> None:
@@ -235,7 +269,7 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
     _require_known(env_name)
     url = _link_base(env_name) + "/v1/agent-links"
     try:
-        status, body = post(url, {"client_name": socket.gethostname()[:64]})
+        status, body = _create_link(url, post, agent.active())
     except _NETWORK_ERRORS as exc:
         raise LoginError("Could not reach Rius to start the sign-in (%s)." % exc)
     if not _is_success(status):
@@ -256,6 +290,19 @@ def start(home: str, env_name: str = DEFAULT_ENVIRONMENT,
     }
     _write_private(pending_path(home), pending)
     return pending
+
+
+def _create_link(url: str, post: Callable, profile):
+    """Claude Code sends only `client_name`. Other agents name themselves,
+    and fall back to `client_name` alone when the control plane predates
+    the `agent` field and rejects it as unknown (422)."""
+    named = {"client_name": socket.gethostname()[:64]}
+    if not profile.sends_agent_on_link:
+        return post(url, named)
+    status, body = post(url, dict(named, agent=profile.name))
+    if status == 422:
+        return post(url, named)
+    return status, body
 
 
 # --- Polling ----------------------------------------------------------------
@@ -285,7 +332,7 @@ def poll_for_key(pending: dict, post: Callable = post_json,
     `is_current` says a newer link replaced it."""
     url = _link_base(pending["env"]) + "/v1/agent-links/token"
     if budget is None:
-        budget = WAIT_BUDGET_SECONDS
+        budget = min(WAIT_BUDGET_SECONDS, agent.active().login_wait_budget)
     give_up_at = min(now() + budget, pending["expires_at"])
     failures = 0
     while now() < give_up_at:
@@ -296,6 +343,7 @@ def poll_for_key(pending: dict, post: Callable = post_json,
         status, body = _poll_once(url, pending["device_code"], post)
         if _is_success(status) and body.get("api_key"):
             _require_credentials(body)
+            _require_rius_urls(body, pending["env"])
             return body
         if status == 428:
             failures = 0
@@ -318,9 +366,39 @@ def _require_credentials(body: dict) -> None:
                          "again." % ", ".join(missing))
 
 
+def _require_rius_urls(body: dict, env_name: str) -> None:
+    urls = [body["endpoint"]] + ([body["mcp_url"]] if body.get("mcp_url") else [])
+    for url in urls:
+        if not is_rius_url(url, env_name):
+            raise LoginError("Rius issued a key for a server that is not a "
+                             "Rius server (%s), so it was not saved. Run "
+                             "`/rius:login` again." % url)
+
+
 def _credentials(env_name: str, body: dict) -> dict:
     creds = {field: body.get(field) for field in _CREDENTIAL_FIELDS}
     creds["env"] = env_name
+    return creds
+
+
+USE_KEY_SOURCE = "rius_ctl.sh use-key"
+
+
+def use_key(home: str, api_key: str, env_name: str,
+            post: Callable = post_json) -> dict:
+    """Store a key minted in the console, as `/rius:login` would store its
+    own. The endpoint is the environment's built-in one, never an input."""
+    _require_known(env_name)
+    if not api_key or any(c.isspace() for c in api_key):
+        raise LoginError("No key read. Pipe the key in on stdin, e.g. "
+                         "`pbpaste | rius_ctl.sh use-key`.")
+    environment = ENVIRONMENTS[env_name]
+    creds = {"api_key": api_key, "endpoint": environment["ingest_url"],
+             "env": env_name, "source": USE_KEY_SOURCE}
+    previous = read_credentials(home)
+    _write_private(credentials_path(home), creds)
+    if previous and previous["api_key"] != api_key:
+        revoke(previous, post=post)
     return creds
 
 
@@ -345,8 +423,8 @@ def _single_wait(home: str, sleep: Callable, now: Callable):
     """Two waits on one link would each mint a key, and the slower one could
     store a key the other's re-mint already revoked."""
     path = wait_lock_path(home)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = platform_compat.open_lock_file(path, mode=0o600)
+    platform_compat.ensure_private_dir(os.path.dirname(path))
+    fd = platform_compat.open_lock_file(path)
     try:
         _take_lock(fd, sleep, now)
         try:

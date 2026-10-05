@@ -12,7 +12,11 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, continuation, log as rius_log, otlp,
+# Run with -I, which leaves this script's own folder off sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from rius_cc import (agent, config, continuation, log as rius_log,  # noqa: E402
+                     notice, otlp,
                      platform_compat, spans, state, subagents, transcript)
 
 
@@ -39,15 +43,19 @@ STALE_AFTER_S = 12 * 60 * 60
 def _export_error_reason(status: int) -> str:
     """Short, actionable, and free of anything secret."""
     if not status:
-        return ("could not reach the endpoint at all (DNS, TLS, network or a "
-                "wrong RIUS_ENDPOINT)")
+        return "could not reach the endpoint at all (DNS, TLS or network)"
+    if 300 <= status < 400:
+        return ("redirected (HTTP %d); redirects are not followed, so the key "
+                "is never sent on -- run /rius:login again" % status)
     if status in (401, 403):
-        return ("rejected the API key (HTTP %d) -- check RIUS_API_KEY or run "
-                "/rius:login; a key minted in the last ~30s is not live yet"
-                % status)
+        return ("rejected the API key (HTTP %d) -- run /rius:login again; a "
+                "key minted in the last ~30s is not live yet" % status)
     if status == 404:
-        return ("no OTLP receiver at that URL (HTTP 404) -- RIUS_ENDPOINT "
-                "must be a BASE url; /v1/traces is appended")
+        return ("no OTLP receiver at that URL (HTTP 404) -- run /rius:login "
+                "again")
+    if status == notice.REFUSED_STATUS:
+        return ("the workspace is not accepting data (HTTP 402: trial ended, "
+                "billing locked or workspace paused) -- open the console")
     if status == 429:
         return "rate limited (HTTP 429)"
     if 400 <= status < 500:
@@ -115,6 +123,7 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     """
     reason = _export_error_reason(status)
     permanent = _is_permanent(status)
+    notice.record_refusal(home, cfg, status)
 
     if permanent:
         # Dropping the batch: keep the built state, whose offset now moves
@@ -160,6 +169,12 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     return 0
 
 
+def _present(attrs: dict) -> dict:
+    """An unknown resource value (no git repo, no CC version yet) is left out,
+    so it stays absent rather than arriving as an empty string."""
+    return {k: v for k, v in attrs.items() if v is not None and v != ""}
+
+
 def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
           on_success=None) -> int:
     """Export `out` (if any), then persist the state and the new offset.
@@ -167,7 +182,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
     `on_success` runs only once the spans are accepted (or there were none).
     """
     if out:
-        body = otlp.encode(resource_attrs, out)
+        body = otlp.encode(_present(resource_attrs), out)
         status = otlp.export(cfg.endpoint, cfg.api_key, body)
         _log(home, cfg, "session %s: exported %d spans, status=%s"
              % (session_id, len(out), status))
@@ -185,6 +200,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
         st["spans_exported"] = st.get("spans_exported", 0) + len(out)
         st["consecutive_export_failures"] = 0
         st.pop("last_export_error", None)
+        notice.clear_refusal(home)
 
     st["offset"] = new_offset
     state.save(session_id, home, st)
@@ -262,6 +278,17 @@ def _on_shipped(session_id, home, st, saves):
     return done
 
 
+def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
+    prefix = agent.active().attr_prefix
+    return {
+        "service.name": cfg.service_name,
+        "service.instance.id": instance_id,
+        prefix + "version": version,
+        prefix + "cwd": cwd,
+        prefix + "git_branch": git_branch,
+    }
+
+
 def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
                  end_ns) -> int:
     """Close every open span of the session, with no content, reading
@@ -278,13 +305,7 @@ def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
                                         end_ns, final=True)
     out += adopted
     out += spans.finalize_session(st, ctx, end_ns)
-    resource_attrs = {
-        "service.name": cfg.service_name,
-        "service.instance.id": st.get("instance_id") or "",
-        "cc.version": "",
-        "cc.cwd": cwd,
-        "cc.git_branch": "",
-    }
+    resource_attrs = _resource_attrs(cfg, st.get("instance_id") or "", cwd)
     return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
                  home, cfg, on_success=_on_shipped(session_id, home, st, saves))
 
@@ -305,8 +326,8 @@ def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
             state.sync_open_marker(session_id, home, st)
             return
         # Sent with any other key, the closing spans would land in that
-        # key's workspace, or none: a project's own RIUS_API_KEY can point
-        # this session and that one at different tenants.
+        # key's workspace, or none: a /rius:login since that session started
+        # can point this session and that one at different tenants.
         if st.get("key_fingerprint") != fingerprint:
             return
         last_seen_ns = _last_seen_ns(st)
@@ -493,13 +514,8 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                      % (session_id, exc), force=True)
             out += spans.finalize_session(st, ctx, now_ns)
 
-        resource_attrs = {
-            "service.name": cfg.service_name,
-            "service.instance.id": instance_id,
-            "cc.version": first_cc_version,
-            "cc.cwd": first_cwd,
-            "cc.git_branch": first_git_branch,
-        }
+        resource_attrs = _resource_attrs(cfg, instance_id, first_cwd,
+                                         first_cc_version, first_git_branch)
         return _ship(out, resource_attrs, st, new_offset, session_id,
                      home, cfg,
                      on_success=_on_shipped(session_id, home, st, saves))
@@ -513,7 +529,9 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         cwd = payload.get("cwd")
         transcript_path = payload.get("transcript_path")
 
-        if not session_id or not cwd or not transcript_path:
+        if not cwd or not transcript_path:
+            return 0
+        if not state.is_valid_session_id(session_id):
             return 0
 
         cfg = config.resolve(session_id, cwd, env, home)
@@ -545,18 +563,24 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
 
 def main() -> None:
     try:
-        payload_path = sys.argv[1]
-        instance_id = sys.argv[2] if len(sys.argv) > 2 else ""
-        with open(payload_path) as fh:
-            wrapper = json.load(fh)
+        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        agent.activate(profile)
+        payload_path = argv[0]
+        instance_id = argv[1] if len(argv) > 1 else ""
+        try:
+            with open(payload_path) as fh:
+                wrapper = json.load(fh)
+        finally:
+            # Prompt text and tool output: gone as soon as it is read, even
+            # when it does not parse.
+            try:
+                os.remove(payload_path)
+            except OSError:
+                pass
         event = wrapper.get("event")
         payload = wrapper.get("payload") or {}
         home = platform_compat.home_dir(os.environ)
         run(event, payload, os.environ, home, instance_id)
-        try:
-            os.remove(payload_path)
-        except OSError:
-            pass
     except BaseException:
         pass
     finally:

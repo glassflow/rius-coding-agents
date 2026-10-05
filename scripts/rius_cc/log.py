@@ -11,11 +11,11 @@ from __future__ import annotations
 import datetime
 import os
 
-from . import config
+from . import agent, config, platform_compat
 
 
 def log_dir(home: str) -> str:
-    return os.path.join(home, ".claude", "rius", "log")
+    return agent.active().log_dir(home)
 
 
 def write(home: str, cfg, message: str, force: bool = False) -> None:
@@ -32,11 +32,10 @@ def write(home: str, cfg, message: str, force: bool = False) -> None:
         api_key = getattr(cfg, "api_key", None)
         if api_key:
             text = text.replace(api_key, config.redact(api_key))
-        d = log_dir(home)
-        os.makedirs(d, exist_ok=True)
+        d = platform_compat.rius_dir(home, "log")
         # timezone-aware: datetime.utcnow() is deprecated from 3.12.
         date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-        with open(os.path.join(d, date + ".log"), "a") as fh:
+        with platform_compat.open_private_append(os.path.join(d, date + ".log")) as fh:
             fh.write(text.rstrip("\n") + "\n")
     except BaseException:
         pass
