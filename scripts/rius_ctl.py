@@ -243,10 +243,11 @@ def _print_status(session_id, cwd, home, inferred=False):
         print("session: %s" % session_id)
     print("Platform: %s" % platform_compat.describe())
     print("Endpoint: %s" % cfg.endpoint)
-    print("MCP: %s" % config.mcp_url(os.environ))
-    print(_mcp_key_line(home))
-    if login.read_credentials(home):
-        print(_mcp_hint(home, " with this key"))
+    creds = login.read_credentials(home)
+    print(_tracing_sign_in_line(cfg, creds))
+    print(_querying_traces_line(creds))
+    if _is_staging(creds) or os.environ.get("RIUS_MCP_URL"):
+        print(RIUS_MCP_URL_RETIRED)
     print("API key: %s" % config.redact(cfg.api_key))
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
@@ -309,22 +310,35 @@ def _print_account(home, creds):
     print("Key expires: %s" % _date(creds.get("expires_at")))
 
 
-def _mcp_key_line(home):
-    if login.read_credentials(home):
-        return "MCP key: /rius:login"
-    if os.environ.get("RIUS_API_KEY"):
-        return ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
-                "bundled MCP server; run /rius:login to query your traces.")
-    return "MCP key: none; run /rius:login to query your traces."
+QUERYING_TRACES = "Querying traces: run /mcp and sign in to rius"
+QUERYING_STAGING_TRACES = (
+    "Querying traces: the bundled rius server is production; run "
+    "`claude mcp add --transport http rius-staging "
+    "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
+RIUS_MCP_URL_RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
 
 
-def _mcp_hint(home, suffix=""):
-    wanted = config.misdirected_mcp_url(os.environ, home)
-    if wanted is None:
-        return 'Reconnect "rius" in /mcp to query your traces%s.' % suffix
-    return ('This key\'s MCP server is %s, but the bundled "rius" server points '
-            "at %s. To query your traces, restart Claude Code with "
-            "RIUS_MCP_URL=%s set." % (wanted, config.mcp_url(os.environ), wanted))
+def _querying_traces_line(creds):
+    if _is_staging(creds):
+        return QUERYING_STAGING_TRACES
+    return QUERYING_TRACES
+
+
+def _is_staging(creds):
+    return bool(creds) and creds.get("env", login.DEFAULT_ENVIRONMENT) != login.DEFAULT_ENVIRONMENT
+
+
+def _tracing_signed_in(creds):
+    return "Tracing: signed in as workspace %s%s" % (
+        creds["workspace_name"], _in_org(creds))
+
+
+def _tracing_sign_in_line(cfg, creds):
+    if cfg.key_source == config.STORED_KEY_SOURCE and creds:
+        return _tracing_signed_in(creds)
+    if cfg.key_source:
+        return "Tracing: using the key from %s" % cfg.key_source
+    return "Tracing: not signed in; run /rius:login"
 
 
 def _login(home, cwd, env_flag=None):
@@ -375,15 +389,15 @@ def _login_wait(home, cwd):
         return
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
+    print(_tracing_signed_in(creds))
+    print(_querying_traces_line(creds))
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
-    print(_mcp_hint(home))
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
         print(moved)
     if os.environ.get("RIUS_API_KEY"):
         print("NOTE: RIUS_API_KEY is set in your environment and still wins "
-              "over this key for tracing. Unset it to trace with the new one. "
-              "The bundled MCP server uses the new key either way.")
+              "over this key for tracing. Unset it to trace with the new one.")
 
 
 def _in_org(creds):

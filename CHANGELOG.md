@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.4.6 (2026-10-05)
+## Unreleased
 
 - Cursor and Codex can run Claude Code plugin hooks: Cursor does so by
   default through its third-party compatibility setting, and Codex installs
@@ -14,6 +14,21 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   `conversation_id`, that runs with `CURSOR_VERSION` set, or whose
   transcript is a Codex `rollout-*.jsonl` or lies under `CODEX_HOME`
   (`~/.codex` by default).
+- The bundled Rius MCP server now signs in with Claude Code's own MCP OAuth:
+  run `/mcp`, pick `rius` and sign in with your Rius account. It no longer
+  uses the `/rius:login` key, which from now on is only for sending traces.
+  `/rius:status` and `/rius:login` say this in two lines: `Tracing: signed
+  in as workspace X` and `Querying traces: run /mcp and sign in to rius`.
+- The bundled server's URL is fixed to
+  `https://mcp.eu.console.rius-glassflow.com/mcp`. `RIUS_MCP_URL` is gone,
+  along with the headers helper and the `MCP:` and `MCP key:` lines in
+  `/rius:status`. To query staging, register the staging server yourself
+  (see "Signing in to staging" in the getting started guide).
+- After a staging sign-in, `/rius:status` and `/rius:login` print the
+  command that registers the staging MCP server instead of pointing you at
+  production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
+- New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
+  files that have one keep working.
 
 ## 0.4.5 (2026-10-01)
 

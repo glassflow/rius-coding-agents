@@ -534,7 +534,7 @@ def test_status_names_the_matching_rule(tmp_path):
     assert "Rule: none matches this folder" in none.stdout
 
 
-def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
+def test_status_names_the_signed_in_account_and_both_sign_ins(tmp_path):
     home = _fresh_home(tmp_path)
     from rius_cc import login as _login
     _login._write_private(_login.credentials_path(home), {
@@ -545,7 +545,8 @@ def test_status_names_the_signed_in_account_and_the_mcp_hint(tmp_path):
     assert "Signed in as: x@acme.com" in r.stdout
     assert "Workspace: eng-shared (Acme)" in r.stdout
     assert "Key expires: 2026-12-26" in r.stdout
-    assert 'Reconnect "rius" in /mcp' in r.stdout
+    assert "Tracing: signed in as workspace eng-shared (Acme)" in r.stdout
+    assert "Querying traces: run /mcp and sign in to rius" in r.stdout
     assert "ri_secret" not in r.stdout
 
 

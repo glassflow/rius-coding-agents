@@ -88,7 +88,9 @@ run each of these on its own:
 
 `/rius:login` opens the Rius console (`https://console.rius-glassflow.com`)
 in the browser, where you sign in or sign up and pick the workspace this
-machine sends to; the plugin stores a key for it. That is the whole flow.
+machine sends to; the plugin stores a key for it. That key only sends
+traces. To ask Claude about your traces, also run `/mcp`, pick `rius` and sign
+in there (see [Asking Claude about your traces](#asking-claude-about-your-traces)).
 If `/rius:status` doesn't say `on`, the
 [getting started guide](docs/getting-started.md) covers the rest end to end:
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
@@ -211,10 +213,9 @@ and project `.claude/settings.json`/`settings.local.json`).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored, for tracing. With neither, tracing is disabled regardless of every other setting. The bundled MCP server never sees it: Claude Code withholds credential-named variables from a plugin's `headersHelper`. |
+| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored, for tracing. With neither, tracing is disabled regardless of every other setting. The bundled MCP server never uses it: it signs in with OAuth. |
 | `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. A key from `/rius:login` brings its own. |
 | `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
-| `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
 | `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
 | `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description, the session's name (the trace is titled `claude-code session` instead) and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
@@ -242,20 +243,20 @@ or to decide where a hand-minted key should live, see
 ## Asking Claude about your traces
 
 The plugin bundles the Rius MCP server as `rius`, so you can query the
-traces it produces from inside Claude Code. It uses the key `/rius:login`
-stored (through a `headersHelper`, so the key never lands in an MCP config;
-`RIUS_API_KEY` never reaches it, because Claude Code withholds
-credential-named variables from a plugin's helper) and
-connects to `https://mcp.eu.console.rius-glassflow.com/mcp`. After
-`/rius:login`, reconnect `rius` in `/mcp` or restart Claude Code.
+traces it produces from inside Claude Code. It connects to
+`https://mcp.eu.console.rius-glassflow.com/mcp` and signs in with Claude
+Code's own MCP OAuth, separately from `/rius:login`:
 
-A staging key needs `RIUS_MCP_URL` pointed at the staging MCP host before
-Claude Code starts: `.mcp.json` can only expand environment variables, so
-the plugin cannot follow the stored key there by itself. `/rius:login` and
-`/rius:status` print the exact setting when it is needed.
+| Sign-in | For | How |
+|---|---|---|
+| `/rius:login` | Tracing: hooks send sessions to the workspace you pick | A key stored in `~/.claude/rius/credentials.json` |
+| `/mcp`, then `rius` | Querying traces: Claude reads them back | Your Rius account through OAuth, kept by Claude Code |
 
-The server needs a `read`-scoped key; a hand-minted ingest-only key is
-rejected with a 403. With it connected, questions like "which of my sessions
+`/rius:status` tells you how to sign in to each, one line apiece. The OAuth sign-in reaches every
+workspace your account can, so name the workspace in your question when you
+have more than one.
+
+With it connected, questions like "which of my sessions
 in the last 24 hours cost the most, and what did the tokens go on?" or "show
 the waterfall for my last errored trace and say which tool call failed" are
 answerable in chat. The
@@ -288,8 +289,8 @@ can send to Rius over OTLP.
   re-login's revoke of the previous key also call the sign-in host
   (`connect.console.rius-glassflow.com`, or
   `connect.staging.rius.glassflow.xyz` on staging), and the bundled MCP
-  server talks to `RIUS_MCP_URL` when you use it. Nothing else is
-  contacted.
+  server talks to `mcp.eu.console.rius-glassflow.com` when you use it.
+  Nothing else is contacted.
 - The API key is never logged. `/rius:status` and debug logs print it
   redacted (prefix plus an ellipsis).
 
