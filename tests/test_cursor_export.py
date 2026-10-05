@@ -1,6 +1,7 @@
 """exporter.run_cursor: rebuild the conversation from its spool, send only
 what changed since the last accepted export, close what is left open."""
 import os
+import sys
 
 import pytest
 
@@ -236,6 +237,7 @@ def test_the_default_service_is_cursor(tmp_path, sent):
     assert sent.batches[-1]["resource"]["service.name"] == "cursor"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 def test_the_subagent_parent_sidecar_is_private(tmp_path):
     old = os.umask(0o022)
     try:
