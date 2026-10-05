@@ -49,3 +49,27 @@ def test_bytes_field_omits_empty():
 def test_ld_always_emits_even_when_empty():
     # an empty submessage is presence, not a default
     assert proto.ld(15, b"") == b"\x7a\x00"
+
+
+def test_members_always_emit_the_default():
+    # a oneof member that is set is serialised even when it is the default
+    assert proto.int64_member(3, 0) == b"\x18\x00"
+    assert proto.double_member(4, 0.0) == b"\x21" + struct.pack("<d", 0.0)
+    assert proto.string_member(1, "") == b"\x0a\x00"
+
+
+def test_int64_member_twos_complement_and_range():
+    assert proto.int64_member(3, -1) == b"\x18" + b"\xff" * 9 + b"\x01"
+    with pytest.raises(ValueError):
+        proto.int64_member(3, 2 ** 63)
+    with pytest.raises(ValueError):
+        proto.int64_member(3, -2 ** 63 - 1)
+
+
+def test_varint_refuses_negative_instead_of_looping():
+    with pytest.raises(ValueError):
+        proto.varint(-1)
+
+
+def test_lone_surrogate_is_replaced():
+    assert proto.string_field(1, "a\ud800") == b"\x0a\x02a?"

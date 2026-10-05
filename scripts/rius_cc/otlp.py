@@ -8,6 +8,7 @@ opentelemetry-proto library to guarantee correctness.
 """
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 import urllib.request
@@ -20,21 +21,40 @@ RETRY_DELAY_S = 0.5
 
 
 def _any_value(value: Any) -> bytes:
-    # An AnyValue with no field set is how OTLP spells "no value". Falling
-    # through to str(value) would emit the literal string "None".
+    """AnyValue.value is a oneof, so the member is written even when it holds
+    0, 0.0 or "" -- an AnyValue with nothing set means "no value"."""
+    # Falling through to str(value) would emit the literal string "None".
     if value is None:
         return b""
     # bool MUST be checked before int -- bool is an int subclass in Python.
     if isinstance(value, bool):
         return proto.tag(2, proto.WIRE_VARINT) + proto.varint(1 if value else 0)
     if isinstance(value, int):
-        return proto.varint_field(3, value)
+        return _int_value(value)
     if isinstance(value, float):
-        return proto.double_field(4, value)
+        return proto.double_member(4, value)
     if isinstance(value, (list, tuple)):
         inner = b"".join(proto.ld(1, _any_value(v)) for v in value)
         return proto.ld(5, inner)
-    return proto.string_field(1, str(value))
+    if isinstance(value, (bytes, bytearray)):
+        return proto.ld(7, bytes(value))
+    if isinstance(value, dict):
+        return proto.string_member(1, _json_text(value))
+    return proto.string_member(1, str(value))
+
+
+def _int_value(value: int) -> bytes:
+    # Beyond int64 there is no OTLP int that holds it; the digits survive as text.
+    if proto.INT64_MIN <= value <= proto.INT64_MAX:
+        return proto.int64_member(3, value)
+    return proto.string_member(1, str(value))
+
+
+def _json_text(value: dict) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _attributes(field: int, attrs: Dict[str, Any]) -> bytes:
