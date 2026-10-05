@@ -111,6 +111,8 @@ rius_pin_file="$rius_home/.claude/rius/python"
 rius_pinned=
 if [ -n "$rius_home" ] && [ -r "$rius_pin_file" ]; then
     { IFS= read -r rius_pinned <"$rius_pin_file"; } 2>/dev/null
+    # A file saved on Windows ends its line in CR and may use backslashes.
+    rius_pinned=$(printf '%s' "$rius_pinned" | tr -d '\r' | tr '\\' /)
 fi
 
 rius_py=

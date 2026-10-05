@@ -121,6 +121,14 @@ def test_a_pin_inside_the_project_is_ignored(world):
     assert _is(_resolve(world, []), fallback)
 
 
+def test_a_pin_saved_with_crlf_and_backslashes_still_works(world, tmp_path):
+    home, _project, _fallback = world
+    pinned = _python_in(tmp_path / "opt" / "python" / "bin")
+    (home / ".claude" / "rius" / "python").write_bytes(
+        str(pinned).replace("/", "\\").encode() + b"\r\n")
+    assert _resolve(world, []).endswith("/opt/python/bin/python3")
+
+
 def test_a_relative_or_missing_pin_falls_back_to_path(world):
     home, _project, fallback = world
     _pin(home, "python3")
