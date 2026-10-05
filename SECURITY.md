@@ -32,6 +32,10 @@ credit you in the release notes if you'd like.
   lets a project's environment turn tracing on, raise content capture, or
   choose the key or the server it is sent to.
 
+Trusting a repo in Claude Code means trusting its settings. Issues that need
+a trusted malicious repo are out of scope unless they bypass a protection
+this repository documents.
+
 Issues in the Rius service itself (the console, ingest or the MCP server)
 are welcome through the same channels.
 

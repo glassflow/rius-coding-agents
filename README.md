@@ -97,7 +97,10 @@ the console isn't what you pay on a Pro or Max subscription.
 Nothing else is contacted. Everything goes over https, redirects are never
 followed, and the key is only sent to the Rius host it was issued for. The
 key is stored in `~/.claude/rius/credentials.json`, readable only by you,
-and is never logged. The plugin is Python standard library only.
+and is never logged. The plugin is Python standard library only. It honours
+your environment's proxy and certificate settings, so a repo you mark as
+trusted can change how that traffic is routed. Only trust repos you'd let
+run code.
 
 Data is stored in the EU and kept as described in your plan; see
 [pricing](https://www.glassflow.ai/pricing) and the
@@ -186,8 +189,10 @@ workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
 server, and troubleshooting.
 
 Runs on macOS, Linux and Windows (through Git Bash) with any Python 3.9+ on
-`PATH`. The plugin never runs a Python from inside the project folder, or from
-a relative `PATH` entry, because a repository can set `PATH` for every hook. To
+`PATH`. The plugin never runs a Python interpreter from inside the project
+folder, or from a relative `PATH` entry, because a repository can set `PATH`
+for every hook. Shell tools such as `ps` come from your `PATH`, the same as
+for Claude Code itself. To
 choose the interpreter yourself, put its absolute path on the first line of
 `~/.claude/rius/python` (for example `/opt/homebrew/bin/python3`, or
 `C:/Python312/python.exe` on Windows). [Installing and updating](docs/install.md) covers the upgrade from the
