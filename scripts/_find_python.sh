@@ -63,7 +63,13 @@ rius_real_path() {
 
 rius_in_project() {
     [ -n "$rius_project" ] || return 1
-    case "$1" in "$rius_project"|"$rius_project"/*) return 0 ;; esac
+    rius_checked=$1
+    # Git Bash spells the project /c/...; a pin may say C:/...
+    case "$rius_checked" in
+        [A-Za-z]:/*) rius_checked=$(cygpath -u "$rius_checked" 2>/dev/null) \
+                         || rius_checked=$1 ;;
+    esac
+    case "$rius_checked" in "$rius_project"|"$rius_project"/*) return 0 ;; esac
     return 1
 }
 
