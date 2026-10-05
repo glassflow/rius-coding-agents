@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, login, platform_compat, state  # noqa: E402
+from rius_cc import config, login, notice, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -208,6 +208,8 @@ def _print_status(session_id, cwd, home, inferred=False):
     stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
     print("Rius tracing: %s" % ("on" if cfg.enabled and not stopped else "off"))
     print("Reason: %s" % cfg.reason)
+    if notice.is_refused(home, cfg):
+        print(notice.REFUSED)
     if stopped:
         print(STOPPED_NOTE)
     print(_cwd_line(typed_cwd))

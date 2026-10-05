@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, continuation, log as rius_log, otlp,
+from rius_cc import (config, continuation, log as rius_log, notice, otlp,
                      platform_compat, spans, state, subagents, transcript)
 
 
@@ -48,6 +48,9 @@ def _export_error_reason(status: int) -> str:
     if status == 404:
         return ("no OTLP receiver at that URL (HTTP 404) -- RIUS_ENDPOINT "
                 "must be a BASE url; /v1/traces is appended")
+    if status == notice.REFUSED_STATUS:
+        return ("the workspace is not accepting data (HTTP 402: trial ended, "
+                "billing locked or workspace paused) -- open the console")
     if status == 429:
         return "rate limited (HTTP 429)"
     if 400 <= status < 500:
@@ -115,6 +118,7 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     """
     reason = _export_error_reason(status)
     permanent = _is_permanent(status)
+    notice.record_refusal(home, cfg, status)
 
     if permanent:
         # Dropping the batch: keep the built state, whose offset now moves
@@ -185,6 +189,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
         st["spans_exported"] = st.get("spans_exported", 0) + len(out)
         st["consecutive_export_failures"] = 0
         st.pop("last_export_error", None)
+        notice.clear_refusal(home)
 
     st["offset"] = new_offset
     state.save(session_id, home, st)

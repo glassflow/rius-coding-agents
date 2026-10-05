@@ -9,9 +9,10 @@
 """Claude Code hook entry point. Runs in the session's critical path.
 
 Does as little as possible: resolve config, and if enabled, hand off to a
-DETACHED exporter and exit. Never writes to stdout -- stdout is a control
-channel for hooks. Never exits non-zero -- instrumentation that can break the
-session it observes is worse than no instrumentation.
+DETACHED exporter and exit. stdout is a control channel for hooks: the only
+thing ever written there is SessionStart's one-line notice for the user, as
+hook JSON (rius_cc.notice). Never exits non-zero -- instrumentation that can
+break the session it observes is worse than no instrumentation.
 """
 import json
 import os
@@ -119,6 +120,8 @@ def main() -> None:
                                   home)
             except Exception:
                 pass
+        if event == "SessionStart":
+            _print_notice(session_id, cfg, home)
         # A session disabled after its trace started still needs the
         # exporter: it records the stop, and on SessionEnd closes the trace.
         # So does a conversation that brought its stop with it.
@@ -192,6 +195,17 @@ def main() -> None:
                 pass
     except BaseException:
         pass
+
+
+def _print_notice(session_id: str, cfg, home: str) -> None:
+    try:
+        from rius_cc import notice
+        output = notice.for_session_start(session_id, cfg, home)
+    except Exception:
+        return
+    if output:
+        sys.stdout.write(output + "\n")
+        sys.stdout.flush()
 
 
 def _claude_code_pid() -> int:
