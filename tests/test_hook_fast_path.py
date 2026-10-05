@@ -107,8 +107,11 @@ def _with_no_home_at_all(tmp_path):
     return {"HOME": "", "USERPROFILE": ""}
 
 
-@pytest.mark.parametrize("setup", [_with_key, _with_credentials,
-                                   _with_an_open_trace, _with_no_home_at_all])
+@pytest.mark.parametrize("setup", [
+    _with_key, _with_credentials, _with_an_open_trace,
+    pytest.param(_with_no_home_at_all, marks=posix_only(
+        "Git Bash sets HOME itself when the environment has none")),
+])
 @pytest.mark.parametrize("event", ("SessionStart", "PreToolUse", "SessionEnd"))
 def test_anything_hook_py_could_act_on_starts_python(tmp_path, setup, event):
     ran, _ = _hook(tmp_path, event, **setup(tmp_path))
