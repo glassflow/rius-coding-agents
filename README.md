@@ -105,17 +105,6 @@ If `/rius:status` doesn't say `on`, the
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
 server, and troubleshooting.
 
-To update later, refresh the marketplace, because Claude Code caches it.
-Run these one at a time:
-
-```
-/plugin marketplace update rius-coding-agents
-```
-
-```
-/reload-plugins
-```
-
 Runs on macOS, Linux and Windows (through Git Bash) with any Python 3.9+ on
 `PATH`. The plugin never runs a Python from inside the project folder, or from
 a relative `PATH` entry, because a repository can set `PATH` for every hook. To
@@ -124,6 +113,22 @@ choose the interpreter yourself, put its absolute path on the first line of
 `C:/Python312/python.exe` on Windows). [Installing and updating](docs/install.md) covers the upgrade from the
 old `rius-claude-code` name, working from a local checkout, and platform
 details.
+
+## Updating
+
+Claude Code does not update plugins from this marketplace by itself:
+auto-update is off by default for marketplaces outside Anthropic's own. To
+get a new version, refresh the marketplace and update the plugin from a
+terminal:
+
+```
+claude plugin marketplace update rius-coding-agents && claude plugin update rius@rius-coding-agents
+```
+
+Or inside Claude Code, run `/plugin`, open the **Marketplaces** tab, pick
+`rius-coding-agents` and choose **Update marketplace**. Then restart Claude
+Code, or run `/reload-plugins`. On that same screen you can choose **Enable
+auto-update**, so Claude Code keeps the plugin updated from then on.
 
 ## What you see in Rius
 

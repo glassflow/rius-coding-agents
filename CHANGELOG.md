@@ -4,16 +4,37 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## Unreleased
+## 0.5.0 (2026-10-05)
+
+Hardening for Anthropic's plugin directory: safer defaults, sign-ins that
+can't be redirected, and no slowdown when Rius is off.
+
+### Upgrading from 0.4.x
+
+Update with `claude plugin marketplace update rius-coding-agents && claude
+plugin update rius@rius-coding-agents` (see [Updating](README.md#updating)),
+then restart Claude Code or run `/reload-plugins`.
+
+- **Querying traces needs one OAuth sign-in.** Run `/mcp`, pick `rius` and
+  sign in. The `/rius:login` key no longer reaches the MCP server.
+- **`RIUS_API_KEY`, `RIUS_ENDPOINT` and `RIUS_CLAUDE_ENABLED=true` in the
+  environment are ignored.** Sign in with `/rius:login`, or store a console
+  key with `rius_ctl.sh use-key` (see [API keys](docs/api-keys.md)). Use
+  `/rius:enable-here` to turn a folder on.
+- **Folders you enabled before keep sending content** until you pick:
+  `/rius:status` asks. New folders send structure only unless you run
+  `/rius:enable-content-here`.
+- **A plain `http://` endpoint that isn't on this machine is refused.**
+
+### Changes
 
 - Cursor and Codex can run Claude Code plugin hooks: Cursor does so by
   default through its third-party compatibility setting, and Codex installs
   this plugin from the same marketplace. Their sessions no longer show up
   as empty "claude-code session" traces with a heartbeat. The hook now
   ignores a payload that carries Cursor's `cursor_version` or
-  `conversation_id`, that runs with `CURSOR_VERSION` set, or whose
-  transcript is a Codex `rollout-*.jsonl` or lies under `CODEX_HOME`
-  (`~/.codex` by default).
+  `conversation_id`, or whose transcript is a Codex `rollout-*.jsonl` or
+  lies under `CODEX_HOME` (`~/.codex` by default). (#24)
 - The bundled Rius MCP server now signs in with Claude Code's own MCP OAuth:
   run `/mcp`, pick `rius` and sign in with your Rius account. It no longer
   uses the `/rius:login` key, which from now on is only for sending traces.
@@ -28,7 +49,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   command that registers the staging MCP server instead of pointing you at
   production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
 - New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
-  files that have one keep working.
+  files that have one keep working. (#35)
 - Private content is off by default, and secrets are removed.
   `/rius:enable-here` now sends structure only: models, tokens, cost,
   timing, tool names and error types, but no prompts, replies, file
@@ -79,7 +100,33 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 - When the backend refuses data because the trial ended or the workspace is
   locked or paused (HTTP 402), the plugin used to drop it without a word.
   Now the next session and `/rius:status` say so. The notice clears after
-  the next successful export.
+  the next successful export. (#33)
+- Zero values show up correctly in traces: attributes holding 0, 0.0 or
+  an empty string keep their value and type, so a filter for `= 0` finds
+  them. Unknown resource values (no git branch, no Claude Code version) are
+  left out instead of sent empty. Ints outside int64, lone surrogates,
+  dicts and bytes are encoded instead of wrapping or crashing. (#29)
+- The key is only sent over https (plain http only to this machine), and
+  redirects are never followed. Everything under `~/.claude/rius` is
+  owner-only (0700 folders, 0600 files), a path-shaped session id is
+  ignored, `/rius:enable-here` refuses your home folder and its parents, and
+  the temporary hook payload never lingers. (#30)
+- The plugin never slows a session down: with no stored key and nothing to
+  report, `hook.sh` exits before starting Python. Every hook declares a
+  timeout (SessionEnd 5 s). Python runs isolated (`-I`), never from inside
+  the project folder or a relative `PATH` entry, and never as the macOS
+  Command Line Tools stub. An absolute path in `~/.claude/rius/python` pins
+  the interpreter. (#36)
+- Only you can run `/rius:*` commands: every command sets
+  `disable-model-invocation`, each action accepts only its own flags and
+  values, typed text reaches the script as one quoted word, and each
+  command's permission grant covers only its own subcommand. (#32)
+- `/rius:login` no longer hangs over SSH or on a machine with no display:
+  it opens a browser only on a desktop session, and never a console
+  browser. The printed link and code always work. (#34)
+- Internal: paths and names come from an agent profile, in preparation for
+  Codex and Cursor. Claude Code's behaviour and wire bytes are unchanged.
+  (#26)
 
 ## 0.4.5 (2026-10-01)
 

@@ -420,12 +420,31 @@ def test_bare_invocation_means_status(tmp_path):
     assert "cwd: /x/y" in r.stdout
 
 
-def test_manifests_name_the_plugin_rius_at_0_4_6():
+def _manifests():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    return plugin, market
+
+
+def test_manifests_name_the_plugin_rius_at_0_5_0():
+    plugin, market = _manifests()
     listed = {p["name"]: p["version"] for p in market["plugins"]}
-    assert (plugin["name"], plugin["version"]) == ("rius", "0.4.6")
-    assert listed == {"rius": "0.4.6"}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.5.0")
+    assert listed == {"rius": "0.5.0"}
+
+
+def test_marketplace_lists_the_plugin_at_its_own_version():
+    """`claude plugin update` compares against plugin.json; a marketplace
+    entry at another version makes it answer "already at latest"."""
+    plugin, market = _manifests()
+    entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
+    assert entry["version"] == plugin["version"]
+
+
+def test_marketplace_entry_declares_no_headers_helper():
+    _, market = _manifests()
+    for entry in market["plugins"]:
+        assert "headersHelper" not in json.dumps(entry), entry
 
 
 def test_pyproject_version_matches_the_manifests():
