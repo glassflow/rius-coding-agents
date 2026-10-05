@@ -5,6 +5,7 @@ import os
 
 import rius_ctl
 from rius_cc import cursor_install
+from tests.platforms import posix_only
 
 ROOT = cursor_install.plugin_root()
 EVENTS = set(json.load(open(os.path.join(ROOT, "cursor", "hooks.json")))["hooks"])
@@ -37,7 +38,7 @@ def test_commands_name_the_real_plugin_root(tmp_path):
     cursor_install.install(str(path), ROOT)
     for entry in _rius(_read(path)):
         assert "${" not in entry["command"]
-        assert os.path.join(ROOT, "scripts", "hook.sh") in entry["command"]
+        assert '"%s/scripts/hook.sh"' % ROOT in entry["command"]
 
 
 def test_other_hooks_are_kept(tmp_path):
@@ -92,6 +93,7 @@ def test_invalid_json_is_left_alone(tmp_path):
     assert path.read_text() == "{not json"
 
 
+@posix_only("Windows has no file permission bits")
 def test_the_file_mode_is_kept(tmp_path):
     path = tmp_path / "hooks.json"
     _write(path, {"hooks": {}})
