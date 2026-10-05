@@ -21,7 +21,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
     a key whose ingest or MCP server is not one. If you used
     `RIUS_API_KEY`, run `/rius:login`.
   - `/rius:status` prints one line for each setting that is ignored, and
-    the session's start logs it in `~/.claude/rius/log/`.
+    the session's start logs it in `~/.claude/rius/log/`. (#37)
 
 ## 0.4.5 (2026-10-01)
 
