@@ -68,7 +68,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" SessionEnd",
             "shell": "bash",
-            "timeout": 1.5
+            "timeout": 5
           }
         ]
       }

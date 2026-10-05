@@ -9,8 +9,8 @@
 """Claude Code hook entry point. Runs in the session's critical path.
 
 Does as little as possible: resolve config, and if enabled, hand off to a
-DETACHED exporter and exit. Never writes to stdout -- stdout is a control
-channel for hooks. Never exits non-zero -- instrumentation that can break the
+DETACHED exporter and exit. stdout carries at most one hook JSON object --
+it is a control channel for hooks. Never exits non-zero -- instrumentation that can break the
 session it observes is worse than no instrumentation.
 """
 import json

@@ -123,6 +123,13 @@ def test_session_start_runs_until_the_install_notice_was_shown(tmp_path):
     assert _hook(tmp_path, "SessionStart")[0]
 
 
+def test_session_start_runs_for_a_session_turned_on_before_sign_in(tmp_path):
+    sessions = _home(tmp_path) / "sessions"
+    sessions.mkdir()
+    (sessions / "s1").write_text("on")
+    assert _hook(tmp_path, "SessionStart")[0]
+
+
 def test_session_start_runs_for_folders_enabled_before_sign_in(tmp_path):
     (_home(tmp_path) / "config.json").write_text('{"enabled_paths": ["/x"]}')
     assert _hook(tmp_path, "SessionStart")[0]
@@ -145,12 +152,13 @@ def test_every_hook_declares_a_timeout():
             event, timeout)
 
 
-def test_session_end_stays_inside_its_shared_budget():
-    """A SessionEnd timeout above 1.5 s raises the budget Claude Code waits
-    for at exit, so a larger one would slow down quitting."""
+def test_session_end_allows_a_cold_interpreter_start():
+    """A SessionEnd hook that times out never closes the trace. A cold
+    Python start on Windows can take over the default 1.5 s budget, and the
+    off path skips Python entirely, so 5 s only matters when there is work."""
     ends = [entry["timeout"] for event, entry in _hook_entries()
             if event == "SessionEnd"]
-    assert ends and all(t <= 1.5 for t in ends), ends
+    assert ends == [5], ends
 
 
 # --- the macOS Command Line Tools stub ---------------------------------------

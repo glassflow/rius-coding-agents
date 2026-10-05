@@ -8,7 +8,8 @@
 # hooks are required to exit 0 and write nothing to stdout, nothing said so.
 #
 # Rules this script inherits from hook.py and must not break:
-#   * never write to stdout -- stdout is a control channel for hooks;
+#   * stdout carries at most one hook JSON object -- it is a control
+#     channel for hooks;
 #   * never exit non-zero -- Claude Code treats that as a hook failure;
 #   * pass stdin through untouched -- the hook payload arrives on it.
 #
@@ -46,10 +47,14 @@ rius_hook_has_work() {
             [ -e "$rius_open" ] && return 0
         done
         # SessionStart may owe a notice: the once-ever install hint, or
-        # "run /rius:login" for folders enabled before signing in.
+        # "run /rius:login" for folders or sessions turned on before signing
+        # in (path rules, or a /rius:on override in sessions/).
         if [ "${1:-}" = "SessionStart" ]; then
             [ -e "$rius_dir/install-notice-shown" ] || return 0
             [ -e "$rius_dir/config.json" ] && return 0
+            for rius_override in "$rius_dir"/sessions/*; do
+                [ -e "$rius_override" ] && return 0
+            done
         fi
     done
     return 1
