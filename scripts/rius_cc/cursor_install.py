@@ -77,6 +77,12 @@ def remove(doc: Dict[str, Any]) -> Dict[str, Any]:
     return _without_rius(doc)
 
 
+def _is_hooks_doc(doc: Any) -> bool:
+    if not isinstance(doc, dict) or not isinstance(doc.get("hooks", {}), dict):
+        return False
+    return all(isinstance(v, list) for v in (doc.get("hooks") or {}).values())
+
+
 def _load(path: str) -> Dict[str, Any]:
     try:
         with open(path) as fh:
@@ -88,7 +94,7 @@ def _load(path: str) -> Dict[str, Any]:
     except ValueError as exc:
         raise HooksFileError("%s is not valid JSON (%s); left unchanged"
                              % (path, exc))
-    if not isinstance(doc, dict) or not isinstance(doc.get("hooks", {}), dict):
+    if not _is_hooks_doc(doc):
         raise HooksFileError("%s does not look like a Cursor hooks.json; "
                              "left unchanged" % path)
     return doc

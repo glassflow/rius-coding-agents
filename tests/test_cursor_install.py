@@ -93,6 +93,22 @@ def test_invalid_json_is_left_alone(tmp_path):
     assert path.read_text() == "{not json"
 
 
+def test_an_event_that_is_not_a_list_is_left_alone(tmp_path):
+    # Iterating a string entry would split it into characters on rewrite.
+    path = tmp_path / "hooks.json"
+    original = json.dumps({"version": 1, "hooks": {"stop": "./audit.sh"}})
+    path.write_text(original)
+    for change in (lambda: cursor_install.install(str(path), ROOT),
+                   lambda: cursor_install.uninstall(str(path))):
+        try:
+            change()
+        except cursor_install.HooksFileError:
+            pass
+        else:
+            raise AssertionError("a malformed hooks.json was rewritten")
+    assert path.read_text() == original
+
+
 @posix_only("Windows has no file permission bits")
 def test_the_file_mode_is_kept(tmp_path):
     path = tmp_path / "hooks.json"
