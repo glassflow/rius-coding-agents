@@ -191,7 +191,7 @@ def test_the_stub_is_skipped_without_the_command_line_tools(tmp_path):
 @posix_only("/usr/bin/python3 is the macOS stub's path")
 @_needs_usr_bin_python3
 def test_usr_bin_python3_is_used_once_the_command_line_tools_exist(tmp_path):
-    assert _resolve_python(tmp_path, xcode_select_exit=0) == "python3"
+    assert _resolve_python(tmp_path, xcode_select_exit=0) == "/usr/bin/python3"
 
 
 # --- the interpreter runs isolated from the environment ----------------------

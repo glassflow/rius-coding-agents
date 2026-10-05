@@ -443,6 +443,7 @@ Common causes, in the order they actually happen:
 | A local MCP dev server fails the TLS handshake | `https://` against a plain-HTTP local port | Use `http://` for local ports |
 | Auth fails on a self-hosted deployment with no obvious reason | The Auth0 audience or the email-claim key does not match the configured string exactly | Both are exact-string matches; compare them character for character with the deployment's configuration |
 | Nothing at all happens, and `/rius:status` prints nothing useful | No Python interpreter was found | Check `~/.claude/rius/log/bootstrap.log` |
+| `bootstrap.log` says no Python was found, but one is on `PATH` | It lives inside the project folder or comes from a relative `PATH` entry, and the plugin never runs those | Put the absolute path of the Python to use on the first line of `~/.claude/rius/python` |
 
 Logs live in `~/.claude/rius/log/`:
 
