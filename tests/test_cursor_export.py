@@ -234,3 +234,14 @@ def test_the_default_service_is_cursor(tmp_path, sent):
     _spool_until(tmp_path, "docs_session", 0)
     _run(tmp_path, "sessionStart")
     assert sent.batches[-1]["resource"]["service.name"] == "cursor"
+
+
+def test_the_subagent_parent_sidecar_is_private(tmp_path):
+    old = os.umask(0o022)
+    try:
+        cursor_export.link_subagent(str(tmp_path / "spool"), "sub-1", "conv-1")
+    finally:
+        os.umask(old)
+    path = next((tmp_path / "spool").iterdir())
+    assert (path.stat().st_mode & 0o777) == 0o600
+    assert cursor_export.root_conversation(str(tmp_path / "spool"), "sub-1") == "conv-1"

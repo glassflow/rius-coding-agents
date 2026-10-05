@@ -50,8 +50,12 @@ def _sidecar(sdir: str, conversation_id: str, suffix: str) -> str:
 
 def link_subagent(sdir: str, subagent_id: str, parent_id: str) -> None:
     os.makedirs(sdir, mode=0o700, exist_ok=True)
-    with open(_sidecar(sdir, subagent_id, PARENT_SUFFIX), "w") as fh:
-        fh.write(parent_id)
+    fd = os.open(_sidecar(sdir, subagent_id, PARENT_SUFFIX),
+                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, parent_id.encode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def root_conversation(sdir: str, conversation_id: str) -> str:
