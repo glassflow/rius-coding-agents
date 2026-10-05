@@ -19,6 +19,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   keeps sending content, and `/rius:status` asks you to pick. A session
   turned on with `/rius:on` in a folder no rule enables sends structure
   only. A failed tool's withheld detail now reads `content capture off`.
+  (#38)
 - A repo you clone can no longer turn tracing on, or redirect your traces
   or your key. Claude Code hands hooks the `env` block of a project's
   committed `.claude/settings.json`, so the environment may now only turn
