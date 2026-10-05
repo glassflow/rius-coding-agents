@@ -39,18 +39,16 @@ STALE_AFTER_S = 12 * 60 * 60
 def _export_error_reason(status: int) -> str:
     """Short, actionable, and free of anything secret."""
     if not status:
-        return ("could not reach the endpoint at all (DNS, TLS, network, or a "
-                "wrong or non-https RIUS_ENDPOINT)")
+        return "could not reach the endpoint at all (DNS, TLS or network)"
     if 300 <= status < 400:
         return ("redirected (HTTP %d); redirects are not followed, so the key "
-                "is never sent on -- set RIUS_ENDPOINT to the final URL" % status)
+                "is never sent on -- run /rius:login again" % status)
     if status in (401, 403):
-        return ("rejected the API key (HTTP %d) -- check RIUS_API_KEY or run "
-                "/rius:login; a key minted in the last ~30s is not live yet"
-                % status)
+        return ("rejected the API key (HTTP %d) -- run /rius:login again; a "
+                "key minted in the last ~30s is not live yet" % status)
     if status == 404:
-        return ("no OTLP receiver at that URL (HTTP 404) -- RIUS_ENDPOINT "
-                "must be a BASE url; /v1/traces is appended")
+        return ("no OTLP receiver at that URL (HTTP 404) -- run /rius:login "
+                "again")
     if status == 429:
         return "rate limited (HTTP 429)"
     if 400 <= status < 500:
@@ -319,8 +317,8 @@ def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
             state.sync_open_marker(session_id, home, st)
             return
         # Sent with any other key, the closing spans would land in that
-        # key's workspace, or none: a project's own RIUS_API_KEY can point
-        # this session and that one at different tenants.
+        # key's workspace, or none: a /rius:login since that session started
+        # can point this session and that one at different tenants.
         if st.get("key_fingerprint") != fingerprint:
             return
         last_seen_ns = _last_seen_ns(st)

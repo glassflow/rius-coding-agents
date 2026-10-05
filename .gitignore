@@ -20,3 +20,6 @@ htmlcov/
 
 # agent scratch: reports, research, drafts
 .superpowers/
+
+# Created by the test suite only; see tests/conftest.py.
+scripts/rius_cc/_tests_trust_env_home.py

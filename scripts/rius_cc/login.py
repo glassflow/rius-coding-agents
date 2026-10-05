@@ -23,6 +23,7 @@ import socket
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
@@ -45,12 +46,24 @@ ENVIRONMENTS = {
     "production": {
         "link_base": "https://connect.console.rius-glassflow.com",
         "console_url": "https://console.rius-glassflow.com",
+        "ingest_url": "https://ingest.eu.console.rius-glassflow.com",
+        "hosts": ("ingest.eu.console.rius-glassflow.com",
+                  "mcp.eu.console.rius-glassflow.com",
+                  "connect.console.rius-glassflow.com"),
     },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
+        "ingest_url": "https://ingest.eu.staging.rius.glassflow.xyz",
+        "hosts": ("ingest.eu.staging.rius.glassflow.xyz",
+                  "ingest.staging.rius.glassflow.xyz",
+                  "mcp.eu.staging.rius.glassflow.xyz",
+                  "mcp.staging.rius.glassflow.xyz",
+                  "connect.staging.rius.glassflow.xyz"),
     },
 }
+# Plain http is only ever accepted for a server on this machine.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 DEFAULT_ENVIRONMENT = "production"
 ENVIRONMENT_VAR = "RIUS_ENV"
 
@@ -116,6 +129,26 @@ def post_json(url: str, payload: dict, bearer: Optional[str] = None):
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                  method="POST", headers=headers)
     return _send(req)
+
+
+def is_rius_url(url, env_name: Optional[str]) -> bool:
+    """True for an https URL on one of the Rius hosts of `env_name`
+    (production when unknown), or an http(s) URL on this machine. Nothing
+    else is ever handed the key."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    if parts.username is not None or parts.password is not None:
+        return False
+    if host in _LOCAL_HOSTS:
+        return parts.scheme in ("http", "https")
+    hosts = ENVIRONMENTS.get(env_name or "",
+                             ENVIRONMENTS[DEFAULT_ENVIRONMENT])["hosts"]
+    return parts.scheme == "https" and host in hosts
 
 
 def _is_success(status: int) -> bool:
@@ -307,6 +340,7 @@ def poll_for_key(pending: dict, post: Callable = post_json,
         status, body = _poll_once(url, pending["device_code"], post)
         if _is_success(status) and body.get("api_key"):
             _require_credentials(body)
+            _require_rius_urls(body, pending["env"])
             return body
         if status == 428:
             failures = 0
@@ -329,9 +363,39 @@ def _require_credentials(body: dict) -> None:
                          "again." % ", ".join(missing))
 
 
+def _require_rius_urls(body: dict, env_name: str) -> None:
+    urls = [body["endpoint"]] + ([body["mcp_url"]] if body.get("mcp_url") else [])
+    for url in urls:
+        if not is_rius_url(url, env_name):
+            raise LoginError("Rius issued a key for a server that is not a "
+                             "Rius server (%s), so it was not saved. Run "
+                             "`/rius:login` again." % url)
+
+
 def _credentials(env_name: str, body: dict) -> dict:
     creds = {field: body.get(field) for field in _CREDENTIAL_FIELDS}
     creds["env"] = env_name
+    return creds
+
+
+USE_KEY_SOURCE = "rius_ctl.sh use-key"
+
+
+def use_key(home: str, api_key: str, env_name: str,
+            post: Callable = post_json) -> dict:
+    """Store a key minted in the console, as `/rius:login` would store its
+    own. The endpoint is the environment's built-in one, never an input."""
+    _require_known(env_name)
+    if not api_key or any(c.isspace() for c in api_key):
+        raise LoginError("No key read. Pipe the key in on stdin, e.g. "
+                         "`pbpaste | rius_ctl.sh use-key`.")
+    environment = ENVIRONMENTS[env_name]
+    creds = {"api_key": api_key, "endpoint": environment["ingest_url"],
+             "env": env_name, "source": USE_KEY_SOURCE}
+    previous = read_credentials(home)
+    _write_private(credentials_path(home), creds)
+    if previous and previous["api_key"] != api_key:
+        revoke(previous, post=post)
     return creds
 
 

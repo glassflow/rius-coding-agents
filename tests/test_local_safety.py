@@ -143,7 +143,7 @@ def test_login_requests_do_not_follow_a_redirect():
 
 def test_a_redirect_is_reported_as_a_redirect():
     reason = exporter._export_error_reason(302)
-    assert "redirect" in reason and "RIUS_ENDPOINT" in reason
+    assert "redirect" in reason and "not followed" in reason
 
 
 # --- owner-only files ---------------------------------------------------------

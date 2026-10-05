@@ -13,6 +13,7 @@ import exporter
 import hook as hook_mod
 import rius_ctl
 from rius_cc import agent, config, log, login, spans, state
+from tests import signed_in
 from tests.platforms import BASH, TOOLS_WITHOUT_PYTHON, posix_only
 from tests.test_hook import _fakebin
 
@@ -100,24 +101,22 @@ def test_every_path_moves_to_the_agent_home(codex, tmp_path):
 
 
 def test_config_uses_the_agent_env_names_and_service(codex, tmp_path):
-    env = {"RIUS_API_KEY": "glassflow_k", "RIUS_CODEX_ENABLED": "true",
-           "RIUS_CLAUDE_ENABLED": "false", "RIUS_CODEX_DEBUG": "1"}
-    cfg = config.resolve("s1", "/tmp/p", env, str(tmp_path))
-    assert cfg.enabled and cfg.reason == "on: RIUS_CODEX_ENABLED"
-    assert cfg.service_name == "codex" and cfg.debug
-
-
-def test_env_key_still_beats_the_agent_credentials_file(codex, tmp_path):
     home = str(tmp_path)
-    login._write_private(login.credentials_path(home), {
-        "api_key": "ri_stored", "endpoint": "https://stored", "env": "staging",
-        "workspace_name": "w"})
-    stored = config.resolve("s", "/tmp", {}, home)
-    assert (stored.api_key, stored.key_source) == ("ri_stored", "/rius:login")
-    env_key = config.resolve("s", "/tmp", {"RIUS_API_KEY": "glassflow_env"},
-                             home)
-    assert (env_key.api_key, env_key.key_source) == ("glassflow_env",
-                                                     "RIUS_API_KEY")
+    signed_in.sign_in(home)
+    config.write_path_rules(home, {"enabled_paths": ["/tmp"]})
+    on = config.resolve("s1", "/tmp/p", {"RIUS_CLAUDE_ENABLED": "false",
+                                         "RIUS_CODEX_DEBUG": "1"}, home)
+    assert on.enabled and on.service_name == "codex" and on.debug
+    off = config.resolve("s1", "/tmp/p", {"RIUS_CODEX_ENABLED": "false"}, home)
+    assert not off.enabled and off.reason == "off: RIUS_CODEX_ENABLED"
+
+
+def test_env_key_is_ignored_for_every_agent(codex, tmp_path):
+    home = str(tmp_path)
+    signed_in.sign_in(home, api_key="ri_stored")
+    cfg = config.resolve("s", "/tmp", {"RIUS_API_KEY": "glassflow_env"}, home)
+    assert (cfg.api_key, cfg.key_source) == ("ri_stored", "/rius:login")
+    assert str(codex) in login.credentials_path(home)
 
 
 def test_codex_resource_attributes_use_its_prefix(codex, tmp_path,
@@ -127,10 +126,11 @@ def test_codex_resource_attributes_use_its_prefix(codex, tmp_path,
                         lambda attrs, out: sent.append(attrs) or b"x")
     monkeypatch.setattr(exporter.otlp, "export", lambda *a, **k: 200)
     home = str(tmp_path / "home")
+    signed_in.sign_in(home)
     config.write_path_rules(home, {"enabled_paths": ["/tmp"]})
     exporter.run("Stop", {"session_id": "s1", "cwd": "/tmp/proj",
                           "transcript_path": str(fixtures_dir / "simple.jsonl")},
-                 {"RIUS_API_KEY": "glassflow_k"}, home)
+                 {}, home)
     assert sent and sent[0]["service.name"] == "codex"
     assert "codex.cwd" in sent[0] and "cc.cwd" not in sent[0]
 
@@ -161,12 +161,15 @@ def _hook_in_process(monkeypatch, argv, payload, env):
 
 def test_hook_hands_the_agent_to_both_children(monkeypatch, tmp_path):
     home, codex_home = tmp_path / "home", tmp_path / "codex"
+    project = tmp_path / "proj"
+    with agent.using(agent.select("codex", {"CODEX_HOME": str(codex_home)})):
+        signed_in.sign_in(str(home))
+        config.write_path_rules(str(home), {"enabled_paths": [str(project)]})
     env = {"HOME": str(home), "CODEX_HOME": str(codex_home),
-           "RIUS_API_KEY": "glassflow_k", "RIUS_CODEX_ENABLED": "true",
            "PATH": os.environ.get("PATH", "")}
     calls = _hook_in_process(
         monkeypatch, ["--agent", "codex", "SessionStart"],
-        {"session_id": "s1", "cwd": str(tmp_path), "transcript_path": "/x"},
+        {"session_id": "s1", "cwd": str(project), "transcript_path": "/x"},
         env)
     assert len(calls) == 2
     assert all(cmd[-2:] == ["--agent", "codex"] for cmd in calls)

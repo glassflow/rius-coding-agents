@@ -28,12 +28,15 @@ LINK_RESPONSE = {
     "interval": 5, "expires_in": 900,
 }
 TOKEN_RESPONSE = {
-    "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console",
+    "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console.rius-glassflow.com",
     "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
     "workspace_id": "22222222-2222-2222-2222-222222222222",
     "workspace_name": "eng-shared", "org_name": "Acme",
     "email": "x@acme.com", "expires_at": "2026-12-26T00:00:00Z",
 }
+STAGING_TOKEN_RESPONSE = dict(
+    TOKEN_RESPONSE, endpoint="https://ingest.eu.staging.rius.glassflow.xyz",
+    mcp_url="https://mcp.eu.staging.rius.glassflow.xyz/mcp")
 PENDING = (428, {"status": "pending"})
 
 
@@ -81,7 +84,7 @@ def _is_private(path):
 
 
 def _store(home, **overrides):
-    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.stored",
+    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.eu.console.rius-glassflow.com",
              "env": "production", "workspace_id": "33333333-3333-3333-3333-333333333333",
              "workspace_name": "personal", "org_name": "Me",
              "email": "x@acme.com", "expires_at": "2026-12-01T00:00:00Z"}
@@ -141,7 +144,7 @@ def test_pending_then_success_stores_private_credentials(tmp_path):
     post = scripted(PENDING, (200, TOKEN_RESPONSE))
     creds = _wait(home, clock, post)
     assert creds == {
-        "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console",
+        "api_key": "ri_supersecretkey", "endpoint": "https://ingest.eu.console.rius-glassflow.com",
         "env": "production",
         "workspace_id": "22222222-2222-2222-2222-222222222222",
         "workspace_name": "eng-shared", "org_name": "Acme",
@@ -203,6 +206,20 @@ def test_a_key_without_its_destination_is_refused(tmp_path, field):
     del body[field]
     with pytest.raises(login.LoginError, match=field):
         _wait(home, clock, scripted((200, body)))
+    assert not os.path.exists(login.credentials_path(home))
+
+
+@pytest.mark.parametrize("field, url", [
+    ("endpoint", "https://collector.attacker.example"),
+    ("endpoint", "http://ingest.eu.console.rius-glassflow.com"),
+    ("endpoint", "https://ingest.eu.staging.rius.glassflow.xyz"),
+    ("mcp_url", "https://mcp.attacker.example/mcp"),
+])
+def test_a_key_for_a_server_that_is_not_rius_is_not_saved(tmp_path, field, url):
+    home, clock = str(tmp_path), Clock()
+    _start(home, clock)
+    with pytest.raises(login.LoginError, match="not a Rius server"):
+        _wait(home, clock, scripted((200, dict(TOKEN_RESPONSE, **{field: url}))))
     assert not os.path.exists(login.credentials_path(home))
 
 
@@ -454,20 +471,22 @@ def test_the_same_key_coming_back_is_not_revoked(tmp_path):
 def test_stored_credential_is_used_with_its_endpoint(tmp_path):
     home = str(tmp_path)
     _store(home)
-    c = config.resolve("s1", "/x", {"RIUS_CLAUDE_ENABLED": "true"}, home)
+    config.set_session_override("s1", home, True)
+    c = config.resolve("s1", "/x", {}, home)
     assert c.enabled is True
     assert c.api_key == "ri_stored"
-    assert c.endpoint == "https://ingest.stored"
+    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
     assert c.key_source == "/rius:login"
 
 
-def test_env_key_beats_the_stored_credential_and_its_endpoint(tmp_path):
+def test_an_env_key_never_replaces_the_stored_credential(tmp_path):
     home = str(tmp_path)
     _store(home)
     c = config.resolve("s1", "/x", {"RIUS_API_KEY": "ri_env"}, home)
-    assert c.api_key == "ri_env"
-    assert c.endpoint == config.DEFAULT_ENDPOINT
-    assert c.key_source == "RIUS_API_KEY"
+    assert c.api_key == "ri_stored"
+    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
+    assert c.key_source == "/rius:login"
+    assert config.IGNORED_API_KEY in c.ignored_env
 
 
 def test_corrupt_credentials_file_is_ignored(tmp_path):
@@ -759,7 +778,7 @@ def test_a_staging_link_is_polled_on_staging(tmp_path):
     home, clock = str(tmp_path), Clock()
     login.start(home, env_name="staging", post=scripted((201, LINK_RESPONSE)),
                 now=clock.now)
-    post = scripted((200, TOKEN_RESPONSE))
+    post = scripted((200, STAGING_TOKEN_RESPONSE))
     creds = _wait(home, clock, post)
     assert post.calls[0][0] == STAGING_LINK_BASE + "/v1/agent-links/token"
     assert creds["env"] == "staging"
@@ -837,7 +856,7 @@ def test_login_wait_on_staging_points_mcp_at_a_staging_server(
         tmp_path, server, capsys):
     home = str(tmp_path)
     _park(home, env="staging")
-    server((200, TOKEN_RESPONSE))
+    server((200, STAGING_TOKEN_RESPONSE))
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
     assert STAGING_QUERYING in out
@@ -881,16 +900,16 @@ def test_old_credentials_with_an_mcp_url_still_trace(tmp_path):
     assert QUERYING in r.stdout
 
 
-def test_login_wait_under_an_env_key_says_the_env_key_still_traces(
+def test_login_wait_under_an_env_key_does_not_mention_it(
         tmp_path, server, capsys, monkeypatch):
+    # The environment's key is ignored (#37), so the new key is what traces.
     home = str(tmp_path)
     _park(home)
     server((200, TOKEN_RESPONSE))
     monkeypatch.setenv("RIUS_API_KEY", "ri_env")
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
-    assert ("NOTE: RIUS_API_KEY is set in your environment and still wins "
-            "over this key for tracing. Unset it to trace with the new one.") in out
+    assert "still wins" not in out
     assert QUERYING in out
 
 
@@ -903,10 +922,11 @@ def test_status_names_the_tracing_workspace_and_the_mcp_sign_in(tmp_path):
     assert "MCP key" not in r.stdout and "RIUS_MCP_URL" not in r.stdout
 
 
-def test_status_under_an_env_key_says_where_the_tracing_key_comes_from(tmp_path):
+def test_status_under_an_env_key_alone_says_to_sign_in(tmp_path):
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path),
              {"RIUS_API_KEY": "ri_env"})
-    assert "Tracing: using the key from RIUS_API_KEY" in r.stdout
+    assert "Tracing: not signed in; run /rius:login" in r.stdout
+    assert config.IGNORED_API_KEY in r.stdout
     assert QUERYING in r.stdout
 
 

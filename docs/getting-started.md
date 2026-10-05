@@ -1,7 +1,7 @@
 # Getting started
 
 Zero to a first trace: get a Rius workspace and an API key, install the
-plugin, point it at an endpoint, enable one folder, and confirm spans are
+plugin, sign in, enable one folder, and confirm spans are
 arriving. Every step below is something you do once.
 
 Read [What gets sent](../README.md#what-gets-sent----read-this-before-enabling-anything)
@@ -14,7 +14,7 @@ the output of commands it runs.
 - [2. Mint an API key](#2-mint-an-api-key)
 - [3. Pick an endpoint](#3-pick-an-endpoint)
 - [4. Install the plugin](#4-install-the-plugin)
-- [5. Put the key where Claude Code will find it](#5-put-the-key-where-claude-code-will-find-it)
+- [5. Sign in](#5-sign-in)
 - [6. Enable the folder](#6-enable-the-folder)
 - [7. Watch the first trace](#7-watch-the-first-trace)
 - [Exploring your traces from Claude Code](#exploring-your-traces-from-claude-code)
@@ -63,9 +63,9 @@ region's ingest endpoint, and expires after 90 days. It never goes into
 Claude Code's settings. Signing in again replaces the key and revokes the old
 one.
 
-- `RIUS_API_KEY` in the environment still wins over the stored key for
-  tracing, so an existing setup keeps working unchanged. `/rius:status` says
-  which one is in use (`Key from:`).
+- This is the only key the plugin traces with. `RIUS_API_KEY` and
+  `RIUS_ENDPOINT` in the environment are ignored, and `/rius:status` says so
+  when either is set. See [5. Sign in](#5-sign-in) for why.
 - `/rius:logout` revokes the key on the server, then deletes it locally. If
   the server cannot be reached it still signs out, and says the key stays
   valid until it expires.
@@ -137,6 +137,10 @@ admins and requires a region to be chosen for it.
 
 ## 2. Mint an API key
 
+The plugin itself only uses a key stored in `~/.claude/rius/` (see
+[5. Sign in](#5-sign-in)). To use one you mint here, store it with
+`rius_ctl.sh use-key` ([API keys](api-keys.md#where-the-api-key-goes)).
+
 In the console: workspace settings, then API keys, then create a key.
 
 A key looks like `ri_<id>.<signature>`. Older keys issued with a `gf_`
@@ -175,18 +179,20 @@ There is no rotate or revoke tool on the MCP server either. Rotation is
 
 ## 3. Pick an endpoint
 
-`RIUS_ENDPOINT` is a base URL with no path. The plugin appends `/v1/traces`
-and `/v1/heartbeat` itself.
+You do not pick it by hand: `/rius:login` stores the ingest endpoint of the
+environment you sign in to, and the plugin sends the key nowhere else. It
+must be an `https` host under that environment's Rius domain (or this
+machine, for development); `/rius:login` refuses any other. The plugin
+appends `/v1/traces` and `/v1/heartbeat` itself.
 
-| Environment | Ingest endpoint (`RIUS_ENDPOINT`) | MCP server | Console |
+| Environment | Ingest endpoint | MCP server | Console |
 |---|---|---|---|
 | Production (default) | `https://ingest.eu.console.rius-glassflow.com` | `https://mcp.eu.console.rius-glassflow.com/mcp` | `https://console.rius-glassflow.com` |
 | Staging | `https://ingest.eu.staging.rius.glassflow.xyz` | `https://mcp.eu.staging.rius.glassflow.xyz/mcp` | `https://staging.rius.glassflow.xyz` |
 
-The production hosts are the plugin's built-in defaults, so on production
-you do not need to set `RIUS_ENDPOINT` at all. A key from `/rius:login`
-carries its own ingest endpoint, so it needs no setting on staging either.
-For the staging MCP server, see
+The production hosts are the plugin's built-in defaults. A key from
+`/rius:login` carries its own ingest endpoint, so staging needs no setting
+either. For the staging MCP server, see
 [Signing in to staging](#signing-in-to-staging).
 
 Staging and production are separate deployments with separate stores, so
@@ -248,42 +254,28 @@ The marketplace is named `rius-coding-agents` and the plugin
 in a local directory install that the marketplace has already re-read. There
 is no file watcher; nothing reloads by itself.
 
-## 5. Put the key where Claude Code will find it
+## 5. Sign in
 
-Everything is configured with environment variables, read from the
-environment Claude Code hands to hook processes. That includes `env` values
-from `~/.claude/settings.json` and from a project's
-`.claude/settings.json` or `.claude/settings.local.json`.
+The plugin takes its key only from `/rius:login`:
 
-Prefer the project-scoped `.claude/settings.local.json`:
-
-```json
-{
-  "env": {
-    "RIUS_API_KEY": "ri_xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxx"
-  }
-}
+```
+/rius:login
 ```
 
-Three reasons to keep the credential there rather than in the global
-`~/.claude/settings.json`:
+It stores the key in `~/.claude/rius/credentials.json` (mode 0600), with
+the ingest endpoint of the environment you signed in to, and never sends
+that key anywhere else. A key in the environment is not used: Claude Code
+hands hooks the `env` block of a project's committed `.claude/settings.json`,
+so a repo you clone could otherwise send your sessions to its own
+workspace, or your key to its own server. `RIUS_API_KEY` and
+`RIUS_ENDPOINT` are ignored, and `/rius:status` says so when either is set.
 
-- `settings.local.json` is the per-project file that is conventionally
-  gitignored, so the key does not follow the repo into a commit. Check that
-  your repo does ignore it before writing a key into it.
-- A key is scoped to one workspace. Projects that report into different
-  workspaces need different keys, which a single global value cannot
-  express.
-- A key in the global file applies to every folder on the machine. Tracing
-  is off by default per folder, so this is not an immediate leak, but it
-  makes the blast radius of a later `/rius:enable-here` larger than it needs
-  to be.
-
-If you would rather not have the key in a settings file at all, export
-`RIUS_API_KEY` in the shell that launches Claude Code, or use `/rius:login`,
-which stores its key in `~/.claude/rius/credentials.json` (mode 0600).
-`RIUS_API_KEY` wins for tracing when both are present. Neither key reaches
-the bundled MCP server, which signs in with OAuth.
+To trace with a key you minted in the console instead, store it with
+`rius_ctl.sh use-key` (see [API keys](api-keys.md#where-the-api-key-goes)).
+No key reaches the bundled MCP server, which signs in with OAuth. A
+hand-minted key is what you use to register the MCP server yourself (see
+[Exploring your traces](#exploring-your-traces-from-claude-code)) or for the
+Rius SDKs.
 
 The full list of variables is in the README's
 [Settings](../README.md#settings) table.
@@ -340,8 +332,8 @@ account. That is Claude Code's own MCP OAuth, separate from `/rius:login`,
 and Claude Code keeps the token. It reaches every workspace your account
 can, so name the workspace in your question when you have more than one.
 
-To use the MCP server without the plugin, or headless with a key, register
-it yourself -- **as an HTTP URL server,
+To use the MCP server without the plugin, or with a key you minted by hand,
+register it yourself -- **as an HTTP URL server,
 not a stdio command server**. That is the single most common setup mistake,
 and it fails in a way that reads as an auth problem. The examples name it
 `glassflow`, so it does not share a name with the plugin's bundled `rius`;
@@ -400,9 +392,10 @@ decided, verbatim:
 | `Reason` line | What it means |
 |---|---|
 | `off: no path rule matches <cwd>, and the default is off` | The folder was never enabled. Run `/rius:enable-here`. |
-| ``off: no API key: run `/rius:login` (or set RIUS_API_KEY)`` | The folder is enabled, but there is no key: no `/rius:login` key stored, and no `RIUS_API_KEY` reached the hook process. |
-| ``<reason>; also no API key: run `/rius:login` (or set RIUS_API_KEY)`` | Tracing is off for `<reason>`, and it would stay off without a key even once that is fixed. |
-| `off: RIUS_CLAUDE_ENABLED` | An environment variable is turning it off, above the path rules. |
+| ``off: no API key: run `/rius:login` `` | The folder is enabled, but no `/rius:login` key is stored. |
+| ``<reason>; also no API key: run `/rius:login` `` | Tracing is off for `<reason>`, and it would stay off without a key even once that is fixed. |
+| ``off: no API key: the stored key's server <url> is not a Rius server, so it is never sent there; run `/rius:login` `` | `credentials.json` names a server that is not an `https` Rius host, so its key is not used. Sign in again. |
+| `off: RIUS_CLAUDE_ENABLED` | `RIUS_CLAUDE_ENABLED=false` in the environment is turning it off, above the path rules. |
 | `off: session override` | A `/rius:off` override is in force for this session. `/rius:on` flips it; a new session starts without it. |
 | `on: path rule '<rule>' enables <cwd>` | Working as intended, unless a `Stopped:` line follows (see below). |
 
@@ -416,9 +409,13 @@ Then read the rest of the output:
 - **`Spans exported this session`** is the count that matters. 0 with
   tracing on means nothing has reached the endpoint yet.
 - **`Last export error`** appears whenever an export failed, with the
-  reason and a timestamp. It distinguishes a rejected key (HTTP 401/403), a
-  wrong base URL (404, "RIUS_ENDPOINT must be a BASE url"), an unreachable
-  host, and a rate limit.
+  reason and a timestamp. It distinguishes a rejected key (HTTP 401/403), no
+  receiver at the stored endpoint (404), an unreachable host, and a rate
+  limit.
+- **`... is set but ignored`** lines name each environment setting that
+  asked for something only you can grant, such as `RIUS_API_KEY` or
+  `RIUS_CLAUDE_ENABLED=true`. They change nothing; they say why a setting
+  has no effect.
 - **`Platform`** names the code path that is live, which is the quickest way
   to tell whether a Windows machine is running the Windows implementation.
 

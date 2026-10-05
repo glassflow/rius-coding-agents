@@ -49,6 +49,10 @@ CI enforces most of these, and a PR that breaks one won't merge.
 - **Default off, content optional.** Nothing is sent for a folder that
   isn't enabled, and `RIUS_CAPTURE_CONTENT=false` has to drop every content
   field, including in error paths.
+- **The environment only turns things off.** A cloned repo's
+  `.claude/settings.json` reaches every hook, so nothing read from the
+  environment may enable tracing, raise capture, or pick the key or its
+  server.
 - **No keys in logs, state files or commits.** The CI secret scan checks
   tracked files and history.
 

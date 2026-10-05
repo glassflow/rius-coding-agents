@@ -13,9 +13,10 @@ import pytest
 
 import exporter
 from rius_cc import config
+from tests import signed_in
 
 GOLDEN = pathlib.Path(__file__).parent / "fixtures" / "golden"
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 EVENTS = ("SessionStart", "PostToolUse", "Stop", "SessionEnd")
 NOW_NS = 1790000000000000000
 CASES = {
@@ -32,6 +33,7 @@ CASES = {
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    signed_in.sign_in(str(h))
     with open(config.path_rules_path(str(h)), "w") as fh:
         json.dump({"enabled_paths": ["/tmp"]}, fh)
     return str(h)

@@ -14,11 +14,12 @@ import pathlib
 import pytest
 
 import exporter
-from rius_cc import config, spans, state
+from rius_cc import config, login, spans, state
+from tests.signed_in import sign_in
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 SID = "22222222-2222-2222-2222-222222222222"
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 CONTENT_KEYS = ("input.value", "output.value")
 LATER_PROMPT = {
     "parentUuid": "u2", "isSidechain": False, "type": "user", "uuid": "u9",
@@ -33,6 +34,7 @@ LATER_PROMPT = {
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     _rules(str(h), enabled=["/tmp"])
     return str(h)
 
@@ -170,7 +172,8 @@ def test_without_a_key_nothing_is_sent_and_nothing_breaks(home, sent, tmp_path):
     _run("PostToolUse", path, home)
     _disable(home)
     before = len(sent)
-    assert _run("SessionEnd", path, home, env={}) == 0
+    login.clear_credentials(home)
+    assert _run("SessionEnd", path, home) == 0
     assert len(sent) == before
 
 

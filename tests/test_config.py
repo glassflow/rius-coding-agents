@@ -3,14 +3,21 @@ import os
 
 from rius_cc import config
 from tests.platforms import posix_only
+from tests.signed_in import TEST_ENDPOINT, sign_in
 
 
-def _home(tmp_path):
+def _signed_out_home(tmp_path):
     os.makedirs(str(tmp_path / ".claude" / "rius"), exist_ok=True)
     return str(tmp_path)
 
 
-BASE_ENV = {"RIUS_API_KEY": "glassflow_secret"}
+def _home(tmp_path):
+    home = _signed_out_home(tmp_path)
+    sign_in(home, api_key="glassflow_secret")
+    return home
+
+
+BASE_ENV = {}
 
 
 def test_default_is_off(tmp_path):
@@ -20,11 +27,11 @@ def test_default_is_off(tmp_path):
 
 
 def test_missing_api_key_disables_even_when_enabled(tmp_path):
-    home = _home(tmp_path)
+    home = _signed_out_home(tmp_path)
     config.set_session_override("s1", home, True)
     c = config.resolve("s1", "/x/y", {}, home)
     assert c.enabled is False
-    assert "RIUS_API_KEY" in c.reason
+    assert "/rius:login" in c.reason
 
 
 def test_session_override_beats_everything(tmp_path):
@@ -45,10 +52,11 @@ def test_session_override_can_disable(tmp_path):
 
 def test_clearing_session_override_falls_through(tmp_path):
     home = _home(tmp_path)
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"disabled_paths": ["/x"]}, fh)
     config.set_session_override("s1", home, True)
     config.set_session_override("s1", home, None)
-    env = dict(BASE_ENV, RIUS_CLAUDE_ENABLED="true")
-    assert config.resolve("s1", "/x/y", env, home).enabled is True
+    assert config.resolve("s1", "/x/y", BASE_ENV, home).enabled is False
 
 
 def test_env_beats_path_rules(tmp_path):
@@ -126,15 +134,13 @@ def test_corrupt_path_rules_do_not_raise(tmp_path):
 def test_defaults_and_overrides(tmp_path):
     home = _home(tmp_path)
     c = config.resolve("s1", "/x", BASE_ENV, home)
-    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
+    assert c.endpoint == TEST_ENDPOINT
     assert c.service_name == "claude-code"
     assert c.capture_content is True
     assert c.max_attr_bytes == 32768
-    env = dict(BASE_ENV, RIUS_ENDPOINT="https://ingest.staging.rius.glassflow.xyz",
-               RIUS_SERVICE_NAME="cc-dev", RIUS_CAPTURE_CONTENT="false",
-               RIUS_CLAUDE_MAX_ATTR_BYTES="100")
+    env = dict(BASE_ENV, RIUS_SERVICE_NAME="cc-dev",
+               RIUS_CAPTURE_CONTENT="false", RIUS_CLAUDE_MAX_ATTR_BYTES="100")
     c = config.resolve("s1", "/x", env, home)
-    assert c.endpoint == "https://ingest.staging.rius.glassflow.xyz"
     assert c.service_name == "cc-dev"
     assert c.capture_content is False
     assert c.max_attr_bytes == 100
@@ -158,10 +164,15 @@ def test_redact_no_underscore():
 
 
 def test_missing_api_key_mentioned_even_when_default_off(tmp_path):
-    home = _home(tmp_path)
+    home = _signed_out_home(tmp_path)
     c = config.resolve("s1", "/x/y", {}, home)
     assert c.enabled is False
-    assert "RIUS_API_KEY" in c.reason
+    assert "/rius:login" in c.reason
+
+
+def test_without_a_login_the_endpoint_is_the_default(tmp_path):
+    c = config.resolve("s1", "/x", {}, _signed_out_home(tmp_path))
+    assert c.endpoint == config.DEFAULT_ENDPOINT
 
 
 # --- Windows path rules -----------------------------------------------------

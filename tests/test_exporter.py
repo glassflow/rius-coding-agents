@@ -4,12 +4,14 @@ import pytest
 
 import exporter
 from rius_cc import config, state
+from tests.signed_in import TEST_ENDPOINT, sign_in
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     with open(config.path_rules_path(str(h)), "w") as fh:
         json.dump({"enabled_paths": ["/tmp"]}, fh)
     return str(h)
@@ -28,7 +30,7 @@ def _payload(fixtures_dir, name, session_id, event, cwd="/tmp/proj"):
             "cwd": cwd, "hook_event_name": event}
 
 
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 
 
 def test_exports_spans_and_advances_offset(home, captured, fixtures_dir):
@@ -36,7 +38,7 @@ def test_exports_spans_and_advances_offset(home, captured, fixtures_dir):
     n = exporter.run("PostToolUse", _payload(fixtures_dir, "simple.jsonl", sid, "PostToolUse"), ENV, home)
     assert n > 0
     assert len(captured) == 1
-    assert captured[0][0] == "https://ingest.test"
+    assert captured[0][0] == TEST_ENDPOINT
     assert state.load(sid, home)["offset"] > 0
 
 
@@ -232,7 +234,7 @@ def test_permanent_4xx_advances_the_offset_and_records_why(home, monkeypatch, fi
     assert st["spans_exported"] == 0
     err = st["last_export_error"]
     assert err["status"] == 403
-    assert "RIUS_API_KEY" in err["reason"]
+    assert "/rius:login" in err["reason"]
     assert err["at"]
 
     # and the next batch is genuinely a NEW batch, not the same one again
@@ -292,7 +294,7 @@ def test_a_transport_failure_is_transient_and_named(home, monkeypatch, fixtures_
                  ENV, home)
     st = state.load(sid, home)
     assert st["offset"] == 0
-    assert "RIUS_ENDPOINT" in st["last_export_error"]["reason"]
+    assert "network" in st["last_export_error"]["reason"]
 
 
 def test_skipped_lines_are_logged_once_even_across_export_failures(home, monkeypatch, tmp_path):

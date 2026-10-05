@@ -4,6 +4,11 @@ Default is OFF. Nothing is traced unless a folder is explicitly opted in
 by some layer of the resolution ladder (see `resolve`). This module never
 raises on a corrupt or missing config file -- it falls back to the safe
 default instead.
+
+The environment can only turn things OFF. It includes the env block of a
+project's committed .claude/settings.json, so anything it could turn on, a
+cloned repo could too: it cannot enable tracing, raise capture, or choose
+the key or the server the key goes to.
 """
 from __future__ import annotations
 
@@ -27,7 +32,16 @@ _GLOB_RE = re.compile(r"[*?\[]")
 
 STORED_KEY_SOURCE = "/rius:login"
 
-_NO_KEY = "no API key: run `/rius:login` (or set RIUS_API_KEY)"
+_NO_KEY = "no API key: run `/rius:login`"
+_UNTRUSTED_ENDPOINT = ("no API key: the stored key's server %s is not a Rius "
+                       "server, so it is never sent there; run `/rius:login`")
+
+IGNORED_API_KEY = ("RIUS_API_KEY is set but ignored; run /rius:login, or store "
+                   "a console key with `rius_ctl.sh use-key`")
+IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
+                    "server your /rius:login key came from")
+IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
+                  "/rius:enable-here to trace a folder")
 
 _TRUE_VALUES = {"true", "1"}
 _FALSE_VALUES = {"false", "0"}
@@ -36,7 +50,7 @@ _FALSE_VALUES = {"false", "0"}
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
                  capture_content, max_attr_bytes, debug, key_source=None,
-                 workspace_name=None):
+                 workspace_name=None, ignored_env=()):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
@@ -47,6 +61,9 @@ class Config:
         self.capture_content = capture_content
         self.max_attr_bytes = max_attr_bytes
         self.debug = debug
+        # One line per environment setting that asked for something only
+        # the user's own config may grant.
+        self.ignored_env = list(ignored_env)
 
 
 def _rius_dir(home: str) -> str:
@@ -287,13 +304,23 @@ def _path_rules_decision(cwd: str, home: str):
 
 
 def _max_attr_bytes(env: Mapping[str, str]) -> int:
-    raw = env.get(agent.active().env_var("MAX_ATTR_BYTES"))
-    if raw is None:
-        return DEFAULT_MAX_ATTR_BYTES
+    """The environment may only lower the cap: raising it sends more."""
     try:
-        return int(raw)
+        wanted = int(env.get(agent.active().env_var("MAX_ATTR_BYTES"), ""))
     except (TypeError, ValueError):
         return DEFAULT_MAX_ATTR_BYTES
+    return wanted if 0 < wanted < DEFAULT_MAX_ATTR_BYTES else DEFAULT_MAX_ATTR_BYTES
+
+
+_SERVICE_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def _service_name(env: Mapping[str, str]) -> str:
+    """Only relabels, but still never more than a short plain name."""
+    wanted = env.get("RIUS_SERVICE_NAME", "")
+    if _SERVICE_NAME_RE.fullmatch(wanted):
+        return wanted
+    return agent.active().service_name
 
 
 def redact(api_key: Optional[str]) -> str:
@@ -319,59 +346,67 @@ def key_fingerprint(api_key: Optional[str], endpoint: str) -> str:
     return digest.hexdigest()[:16]
 
 
-def _credential(env: Mapping[str, str], home: str):
-    """(api_key, endpoint, source, workspace_name).
+def _credential(home: str):
+    """(api_key, endpoint, source, workspace_name, problem).
 
-    RIUS_API_KEY wins over the file `/rius:login` writes: existing installs
-    are configured that way. The stored endpoint travels with the stored key
-    and only with it -- a key minted on one environment is meaningless
-    against another's ingest."""
-    if env.get("RIUS_API_KEY"):
-        return (env["RIUS_API_KEY"], env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT),
-                "RIUS_API_KEY", None)
+    Only the key `/rius:login` stored, and only ever to the endpoint stored
+    with it: a key minted on one environment is meaningless against
+    another's ingest, and anywhere else it is a leak."""
     creds = login.read_credentials(home)
-    if creds:
-        endpoint = env.get("RIUS_ENDPOINT") or creds.get("endpoint") or DEFAULT_ENDPOINT
-        return (creds["api_key"], endpoint, STORED_KEY_SOURCE,
-                creds.get("workspace_name"))
-    return None, env.get("RIUS_ENDPOINT", DEFAULT_ENDPOINT), None, None
+    if not creds:
+        return None, DEFAULT_ENDPOINT, None, None, _NO_KEY
+    endpoint = creds.get("endpoint")
+    if not login.is_rius_url(endpoint, creds.get("env")):
+        return None, DEFAULT_ENDPOINT, None, None, _UNTRUSTED_ENDPOINT % endpoint
+    source = (login.USE_KEY_SOURCE if creds.get("source") == login.USE_KEY_SOURCE
+              else STORED_KEY_SOURCE)
+    return (creds["api_key"], endpoint, source, creds.get("workspace_name"), None)
+
+
+def _ignored_env(env: Mapping[str, str]) -> list:
+    notes = []
+    if env.get("RIUS_API_KEY"):
+        notes.append(IGNORED_API_KEY)
+    if env.get("RIUS_ENDPOINT"):
+        notes.append(IGNORED_ENDPOINT)
+    if _parse_bool_env(env.get(agent.active().env_var("ENABLED"))) is True:
+        notes.append(IGNORED_ENABLE)
+    return notes
+
+
+def _enabled(session_id: str, cwd: str, env: Mapping[str, str], home: str):
+    """(enabled, reason). A session's own /rius:on or /rius:off decides it;
+    otherwise any disable wins, and only a path rule enables."""
+    session_override = _read_session_override(session_id, home)
+    if session_override is not None:
+        return session_override, ("on: session override" if session_override
+                                  else "off: session override")
+    enabled_var = agent.active().env_var("ENABLED")
+    if _parse_bool_env(env.get(enabled_var)) is False:
+        return False, "off: " + enabled_var
+    path_decision, path_reason = _path_rules_decision(cwd, home)
+    if path_decision is not None:
+        return path_decision, path_reason
+    return False, "off: no path rule matches %s, and the default is off" % cwd
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
-    api_key, endpoint, key_source, workspace_name = _credential(env, home)
+    api_key, endpoint, key_source, workspace_name, no_key = _credential(home)
     profile = agent.active()
-    service_name = env.get("RIUS_SERVICE_NAME", profile.service_name)
-    capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
-    if capture_content is None:
-        capture_content = True
+    ignored_env = _ignored_env(env)
+    service_name = _service_name(env)
+    # The environment may only lower capture.
+    capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT")) is not False
     max_attr_bytes = _max_attr_bytes(env)
     debug = bool(_parse_bool_env(env.get(profile.env_var("DEBUG"))))
 
-    enabled = False
-    reason = "off: no path rule matches %s, and the default is off" % cwd
-
-    session_override = _read_session_override(session_id, home)
-    if session_override is not None:
-        enabled = session_override
-        reason = "on: session override" if enabled else "off: session override"
-    else:
-        enabled_var = profile.env_var("ENABLED")
-        env_decision = _parse_bool_env(env.get(enabled_var))
-        if env_decision is not None:
-            enabled = env_decision
-            reason = ("on: " if enabled else "off: ") + enabled_var
-        else:
-            path_decision, path_reason = _path_rules_decision(cwd, home)
-            if path_decision is not None:
-                enabled = path_decision
-                reason = path_reason
-
+    enabled, reason = _enabled(session_id, cwd, env, home)
     if not api_key:
         if enabled:
             enabled = False
-            reason = "off: " + _NO_KEY
+            reason = "off: " + no_key
         else:
-            reason = reason + "; also " + _NO_KEY
+            reason = reason + "; also " + no_key
 
     return Config(
         enabled=enabled,
@@ -384,4 +419,5 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         debug=debug,
         key_source=key_source,
         workspace_name=workspace_name,
+        ignored_env=ignored_env,
     )

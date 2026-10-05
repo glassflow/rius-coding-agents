@@ -29,6 +29,30 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   production, and `/rius:status` says when `RIUS_MCP_URL` is still set.
 - New sign-ins no longer store an `mcp_url` in `credentials.json`. Older
   files that have one keep working.
+- A repo you clone can no longer turn tracing on, or redirect your traces
+  or your key. Claude Code hands hooks the `env` block of a project's
+  committed `.claude/settings.json`, so the environment may now only turn
+  things off:
+  - `RIUS_CLAUDE_ENABLED=false` still turns tracing off. `=true` is
+    ignored: only `/rius:enable-here` or `/rius:on` turn tracing on, and a
+    `/rius:disable-here` folder stays off unless you run `/rius:on` in that
+    session.
+  - `RIUS_CAPTURE_CONTENT` can only lower capture.
+  - `RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored. The plugin traces only
+    with the `/rius:login` key, and sends it only to the server stored with
+    it, which must be `https` on one of the hosts Rius runs for that
+    environment. `/rius:login` refuses to store
+    a key whose ingest or MCP server is not one. If you used
+    `RIUS_API_KEY`, run `/rius:login`, or store a console key with
+    `rius_ctl.sh use-key [--env staging]`, which reads it from stdin and
+    takes the endpoint from the environment you name.
+  - The plugin finds your home folder from the operating system, not
+    `HOME` or `USERPROFILE`, which a repo could point at a folder it ships
+    with its own key and path rules.
+  - `RIUS_CLAUDE_MAX_ATTR_BYTES` can only lower the cap, and
+    `RIUS_SERVICE_NAME` must be a short plain name.
+  - `/rius:status` prints one line for each setting that is ignored, and
+    the session's start logs it in `~/.claude/rius/log/`. (#37)
 
 ## 0.4.5 (2026-10-01)
 

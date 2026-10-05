@@ -105,7 +105,7 @@ def main() -> None:
         if not isinstance(payload, dict) or not payload.get("session_id"):
             return
 
-        from rius_cc import (config, continuation, foreign_agent,
+        from rius_cc import (config, continuation, foreign_agent, log,
                              platform_compat, state)
 
         session_id = payload.get("session_id", "")
@@ -117,6 +117,10 @@ def main() -> None:
             return
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
+        if event == "SessionStart":
+            for note in cfg.ignored_env:
+                log.write(home, cfg, "session %s: %s" % (session_id, note),
+                          force=True)
         if event == "SessionStart" and cfg.api_key:
             # A conversation Claude Code moved to this new id is taken over
             # HERE, before anything is spawned: the old id's pinger is told
