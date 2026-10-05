@@ -128,14 +128,15 @@ fi
 # land under a different root than the plugin's own logs. It is a last-
 # resort message written when nothing else can run; a second location for
 # it is a far smaller problem than no message at all.
-# Same for the per-agent homes in rius_cc/agent.py.
+# Codex and Cursor, new here, take the OS home that _os_home.sh found,
+# like rius_cc/agent.py.
 event=$1
 agent_home="${HOME:-$USERPROFILE}/.claude"
 if [ "$1" = "--agent" ]; then
     event=$3
     case "$2" in
-        codex)  agent_home="${HOME:-$USERPROFILE}/.codex" ;;
-        cursor) agent_home="${HOME:-$USERPROFILE}/.cursor" ;;
+        codex)  agent_home="${rius_os_home:-${HOME:-$USERPROFILE}}/.codex" ;;
+        cursor) agent_home="${rius_os_home:-${HOME:-$USERPROFILE}}/.cursor" ;;
     esac
 fi
 log_dir="$agent_home/rius/log"
