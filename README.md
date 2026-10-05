@@ -115,7 +115,11 @@ Run these one at a time:
 ```
 
 Runs on macOS, Linux and Windows (through Git Bash) with any Python 3.9+ on
-`PATH`. [Installing and updating](docs/install.md) covers the upgrade from the
+`PATH`. The plugin never runs a Python from inside the project folder, or from
+a relative `PATH` entry, because a repository can set `PATH` for every hook. To
+choose the interpreter yourself, put its absolute path on the first line of
+`~/.claude/rius/python` (for example `/opt/homebrew/bin/python3`, or
+`C:/Python312/python.exe` on Windows). [Installing and updating](docs/install.md) covers the upgrade from the
 old `rius-claude-code` name, working from a local checkout, and platform
 details.
 

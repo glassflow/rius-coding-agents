@@ -625,7 +625,7 @@ def test_launcher_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_pat
     directory with no _find_python.sh and assert the breadcrumb names the
     real fault, with exit 0 preserved."""
     home = tmp_path / "home"
-    home.mkdir()
+    sign_in(str(home))
     bare = tmp_path / "bare_scripts"
     bare.mkdir()
     import shutil
@@ -676,7 +676,7 @@ def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
     breadcrumb. Exiting 0 with nothing written is the failure mode this
     whole plugin exists to avoid."""
     home = tmp_path / "home"
-    home.mkdir()
+    sign_in(str(home))
     # A PATH with the shell's own utilities but no python of any name.
     if IS_WINDOWS:
         tools = TOOLS_WITHOUT_PYTHON
@@ -719,7 +719,7 @@ def _payload_in_disabled(tmp_path, sid):
 
 
 def _spawned(calls):
-    return [pathlib.Path(c["argv"][1]).name for c in calls]
+    return [pathlib.Path(c["argv"][2]).name for c in calls]
 
 
 def test_a_disabled_session_with_an_open_trace_still_reaches_the_exporter(
