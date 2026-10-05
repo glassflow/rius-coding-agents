@@ -27,7 +27,11 @@ tests. If a future version changes the hooks, Codex asks again.
 
 ## Sign in and enable a folder
 
-Ask Codex to run the skills (type `$` to pick one, or ask in plain words):
+Type `$` and pick a skill. Codex never runs them on its own: each sets
+`allow_implicit_invocation: false`, Codex's form of Claude Code's
+`disable-model-invocation`, so only you can start one. Codex skills have no
+per-skill tool allow-list, so Codex asks before running the command unless
+your sandbox already allows it.
 
 | Skill | What it does |
 |---|---|

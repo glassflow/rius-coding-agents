@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from . import codex_rollout, codex_spans
+from . import codex_rollout, codex_spans, state
 from .spans import Ctx, Span
 
 SUBAGENT_STOP = "SubagentStop"
@@ -33,6 +33,8 @@ def note_payload(st: dict, event: str,
     parent's rollout path, or None when it is not known yet."""
     path = payload.get("transcript_path") or ""
     agent_id = payload.get("agent_id")
+    if agent_id and not state.is_valid_session_id(agent_id):
+        return st.get("transcript_path") or None
     sub_path = ""
     if event == SUBAGENT_STOP:
         sub_path = payload.get("agent_transcript_path") or ""
@@ -83,6 +85,8 @@ def _spawned(st: dict) -> Dict[str, str]:
 def _build_subagents(st: dict, ctx: Ctx) -> List[Span]:
     out: List[Span] = []
     for agent_id, parent_span_id in _spawned(st).items():
+        if not state.is_valid_session_id(agent_id):
+            continue
         sub = st["codex_subs"].get(agent_id)
         if not sub or not sub.get("path"):
             path = _beside_parent(st, agent_id)

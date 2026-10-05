@@ -1,6 +1,7 @@
 ---
 name: rius-enable-content-here
 description: Trace this folder with Rius including prompts, file contents and command output, with secrets removed
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:

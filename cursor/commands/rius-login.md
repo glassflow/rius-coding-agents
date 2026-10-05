@@ -1,6 +1,7 @@
 ---
 name: rius-login
 description: Sign in to Rius in the browser and pick the workspace Cursor sends traces to
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:

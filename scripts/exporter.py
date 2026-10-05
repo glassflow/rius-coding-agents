@@ -659,7 +659,7 @@ def run_cursor(event: str, payload: dict, env: Mapping[str, str],
     cfg = None
     try:
         conversation_id = payload.get("conversation_id")
-        if not conversation_id:
+        if not state.is_valid_session_id(conversation_id):
             return 0
         cfg = config.resolve(conversation_id, payload.get("cwd") or "", env,
                              home)

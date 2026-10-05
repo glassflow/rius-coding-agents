@@ -241,3 +241,18 @@ def test_the_closing_spans_carry_no_content(codex_home, tmp_path, sent,
     for s in _spans(sent):
         assert "input.value" not in s.attributes
         assert "output.value" not in s.attributes
+
+
+def test_a_subagent_id_that_is_not_an_id_is_ignored(codex_home, tmp_path,
+                                                    sent, rollouts):
+    _run("SubagentStop", tmp_path, rollouts[PARENT], agent_id="../../x",
+         agent_transcript_path=str(rollouts[CHILD]))
+    assert "../../x" not in _state(tmp_path).get("codex_subs", {})
+
+
+def test_call_ids_with_underscores_still_make_tool_spans(codex_home, tmp_path,
+                                                        sent):
+    _run("Stop", tmp_path, FIXTURES / "mock_tools_mcp_resume.jsonl")
+    ids = {codex_spans.span_id_for(call)
+           for call in ("call_t3_5", "call_t3_6")}
+    assert ids <= set(_finished(sent))

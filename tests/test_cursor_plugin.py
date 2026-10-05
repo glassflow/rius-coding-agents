@@ -67,7 +67,8 @@ def test_the_eight_commands_exist():
 def test_commands_run_rius_ctl_as_cursor():
     for path in COMMANDS:
         text = path.read_text()
-        front = re.match(r"---\nname: (\S+)\ndescription: .+\n---\n", text)
+        front = re.match(r"---\nname: (\S+)\ndescription: .+\n"
+                         r"disable-model-invocation: true\n---\n", text)
         assert front and front.group(1) == path.stem, path
         assert "/scripts/rius_ctl.sh\" " in text and "--agent cursor" in text
 

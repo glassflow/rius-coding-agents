@@ -1,6 +1,7 @@
 ---
 name: rius-status
 description: Show whether Rius is tracing this folder, and why
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:

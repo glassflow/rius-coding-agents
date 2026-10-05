@@ -93,7 +93,11 @@ FLAG_VALUES = {
     "--cwd": ("a folder path", _is_folder),
     "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
     "--path": ("a hooks.json path", _is_folder),
+    "--agent": ("claude-code, codex or cursor",
+                lambda value: value in agent.PROFILES),
 }
+# Taken off before ACTION_FLAGS is consulted, so every action takes it.
+EVERY_ACTION_FLAGS = ("--agent",)
 ACTION_FLAGS = {
     "on": ("--session", "--cwd"),
     "off": ("--session", "--cwd"),
@@ -627,12 +631,24 @@ def _run_account_action(action, home, cwd, env_flag):
 
 def dispatch(argv, home):
     try:
-        profile, argv = agent.from_argv(argv)
-    except agent.UnknownAgent as exc:
-        print("Rius: %s." % exc)
+        profile, argv = _agent_and_rest(argv)
+    except ArgumentError as exc:
+        print("%s Nothing was changed." % exc)
         return
     with agent.using(profile), _localized_stdout(profile):
         _dispatch(argv, home)
+
+
+def _agent_and_rest(argv):
+    """`--agent` comes off first, wherever it sits before `--`, and every
+    action takes it (EVERY_ACTION_FLAGS)."""
+    try:
+        name, rest = agent.split_flag(argv)
+    except agent.UnknownAgent:
+        raise ArgumentError("Rius: `%s` needs a value: %s."
+                            % (agent.FLAG, FLAG_VALUES[agent.FLAG][0]))
+    _flag_value(agent.FLAG, [name])
+    return agent.select(name), rest
 
 
 @contextlib.contextmanager

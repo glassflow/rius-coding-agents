@@ -63,8 +63,9 @@ def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
     """Append the event; returns how many tools the conversation finished."""
     cursor_events.record(payload, sdir, cfg.capture_content,
                          cfg.max_attr_bytes)
-    if event == "subagentStart" and payload.get("subagent_id"):
-        cursor_export.link_subagent(sdir, str(payload["subagent_id"]),
+    subagent_id = str(payload.get("subagent_id") or "")
+    if event == "subagentStart" and state.is_valid_session_id(subagent_id):
+        cursor_export.link_subagent(sdir, subagent_id,
                                     cursor_events.spool_key(payload))
     if event in cursor_export.TOOL_DONE_EVENTS:
         return cursor_export.tick(sdir, cursor_events.spool_key(payload))
@@ -84,10 +85,14 @@ def handle(event: str, payload: Any, env: Mapping[str, str],
         return None
     payload.setdefault("hook_event_name", event)
     sdir = cursor_export.spool_dir(home)
+    # Conversation ids are UUIDs; tool call ids are not, and are never
+    # checked here.
     key = cursor_events.spool_key(payload)
-    if not key:
+    if not state.is_valid_session_id(key):
         return None
     root = cursor_export.root_conversation(sdir, key)
+    if not state.is_valid_session_id(root):
+        return None
     cwd = workspace_dir(payload, env)
     cfg = config.resolve(root, cwd, env, home)
     if not cfg.api_key:

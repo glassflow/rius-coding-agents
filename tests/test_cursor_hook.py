@@ -196,3 +196,34 @@ def test_the_spool_honours_capture_off(monkeypatch, capsys, tmp_path):
             cursor_export.spool_dir(str(tmp_path)), CID)
     text = open(spool).read()
     assert "invoice totals test" not in text and "pytest" not in text
+
+
+@pytest.mark.parametrize("bad", ["../../etc/x", "a b", "x" * 65, ""])
+def test_a_conversation_id_that_is_not_an_id_spools_nothing(
+        monkeypatch, capsys, tmp_path, bad):
+    start = dict(_session()[0], conversation_id=bad)
+    out, spawned = _run(monkeypatch, capsys, "sessionStart", start,
+                        _env(tmp_path))
+    assert spawned == [] and json.loads(out) is not None
+    assert not (tmp_path / ".cursor" / "rius" / "spool").exists()
+
+
+def test_tool_ids_with_underscores_are_spooled(monkeypatch, capsys, tmp_path):
+    post = {"conversation_id": CID, "hook_event_name": "postToolUse",
+            "generation_id": "g", "tool_name": "Read", "cwd": WORKSPACE,
+            "tool_use_id": "toolu_01_Ab_c"}
+    _run(monkeypatch, capsys, "postToolUse", post, _env(tmp_path))
+    assert [e.get("tool_use_id") for e in _spool_events(tmp_path)] == [
+        "toolu_01_Ab_c"]
+
+
+def test_a_subagent_id_that_is_not_an_id_is_not_linked(monkeypatch, capsys,
+                                                        tmp_path):
+    start = next(p for p in _session()
+                 if p["hook_event_name"] == "subagentStart")
+    _run(monkeypatch, capsys, "subagentStart",
+         dict(start, subagent_id="../escape"), _env(tmp_path))
+    with agent.using(agent.CURSOR):
+        sdir = cursor_export.spool_dir(str(tmp_path))
+    assert not [n for n in os.listdir(sdir)
+                if n.endswith(cursor_export.PARENT_SUFFIX)]

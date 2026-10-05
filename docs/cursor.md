@@ -105,8 +105,10 @@ See [API keys](api-keys.md).
 | `/rius-enable-content-here` | Trace this folder with content, secrets removed |
 | `/rius-on`, `/rius-off` | This chat only |
 
-The commands are prompts: the agent runs `scripts/rius_ctl.sh` through its
-Shell tool, so Cursor may ask you to approve the command. The plugin's
+The commands are prompts that only you start: Cursor never runs a command on
+its own, and each also sets `disable-model-invocation: true`. The agent runs
+`scripts/rius_ctl.sh` through its Shell tool; Cursor commands have no
+per-command tool allow-list, so Cursor may ask you to approve the command. The plugin's
 `sessionStart` hook tells the session where the plugin lives
 (`RIUS_PLUGIN_ROOT`) and which conversation it is (`RIUS_CURSOR_SESSION_ID`).
 Cursor's CLI hands those variables to later hooks but not always to the

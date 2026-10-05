@@ -333,8 +333,8 @@ Then, in Codex:
 
 1. Open `/hooks` and trust the five `rius` hooks. Codex runs no plugin hook
    until you do, so nothing is traced before this step.
-2. Ask Codex to run `$rius:rius-login`, then `$rius:rius-enable-here` in a
-   folder you want traced. Both need to write `~/.codex/rius`, so approve
+2. Type `$rius:rius-login`, then `$rius:rius-enable-here` in a folder you
+   want traced. Codex never runs these skills on its own. Both need to write `~/.codex/rius`, so approve
    the sandbox escalation Codex asks for.
 3. `$rius:rius-status` shows what is on, why, and whether the hooks are
    trusted.

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: on for this session"
+  short_description: "Trace this Codex session only"
+policy:
+  allow_implicit_invocation: false

@@ -233,7 +233,18 @@ def test_rius_ctl_writes_rules_in_the_agent_home(monkeypatch, tmp_path, capsys):
 
 def test_rius_ctl_refuses_an_unknown_agent(tmp_path, capsys):
     rius_ctl.dispatch(["status", "--agent", "vim"], str(tmp_path))
-    assert "unknown agent 'vim'" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "`--agent vim` is not accepted" in out and "Nothing was changed" in out
+
+
+def test_rius_ctl_needs_a_value_for_the_agent(tmp_path, capsys):
+    rius_ctl.dispatch(["status", "--agent"], str(tmp_path))
+    assert "`--agent` needs a value" in capsys.readouterr().out
+
+
+def test_the_agent_flag_is_in_the_argument_whitelist():
+    assert "--agent" in rius_ctl.FLAG_VALUES
+    assert rius_ctl.EVERY_ACTION_FLAGS == ("--agent",)
 
 
 @posix_only("the fallback breadcrumb is a POSIX-shell path")

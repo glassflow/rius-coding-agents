@@ -96,14 +96,18 @@ def test_no_browser_at_all_is_not_an_error(monkeypatch):
     rius_ctl._open_browser(URL, environ={"DISPLAY": ":0"}, system="linux")
 
 
-def test_login_over_ssh_prints_the_link_and_the_code(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("agent_flag", [[], ["--agent", "codex"],
+                                        ["--agent", "cursor"]])
+def test_login_over_ssh_prints_the_link_and_the_code(tmp_path, monkeypatch,
+                                                     capsys, agent_flag):
     monkeypatch.setattr(login, "_send", FakeServer((201, LINK_RESPONSE)))
     monkeypatch.setattr(rius_ctl.webbrowser, "get", lambda: pytest.fail(
         "looked for a browser over SSH"))
     for name in ("RIUS_API_KEY", "RIUS_ENV", "DISPLAY", "WAYLAND_DISPLAY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 5022 10.0.0.2 22")
-    rius_ctl.dispatch(["login", "--cwd", "/opt/proj"], str(tmp_path))
+    rius_ctl.dispatch(["login", "--cwd", "/opt/proj"] + agent_flag,
+                      str(tmp_path))
     out = capsys.readouterr().out
     assert "Open:  " + LINK_RESPONSE["connect_url"] in out
     assert "Code:  " + LINK_RESPONSE["user_code"] in out

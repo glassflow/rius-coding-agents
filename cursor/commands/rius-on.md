@@ -1,6 +1,7 @@
 ---
 name: rius-on
 description: Turn Rius tracing on for this chat only
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:

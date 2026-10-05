@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: status"
+  short_description: "Whether Rius traces this session, and why"
+policy:
+  allow_implicit_invocation: false

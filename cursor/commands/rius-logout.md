@@ -1,6 +1,7 @@
 ---
 name: rius-logout
 description: Sign out of Rius and revoke this machine's Cursor key
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:

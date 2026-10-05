@@ -109,6 +109,17 @@ def test_a_skill_names_itself_and_runs_rius_ctl_for_codex(name):
     assert "<plugin root>/codex/skills/%s/SKILL.md" % name in text
 
 
+@pytest.mark.parametrize("name", sorted(SKILL_NAMES))
+def test_codex_never_runs_a_skill_on_its_own(name):
+    """Codex's equivalent of disable-model-invocation: the skill is not in
+    the model's context, so only a typed `$rius:<name>` runs it."""
+    text = (SKILLS / name / "agents" / "openai.yaml").read_text()
+    assert re.search(r"^policy:\n  allow_implicit_invocation: false$", text,
+                     re.M)
+    for field in ("display_name", "short_description"):
+        assert re.search(r'^  %s: "\S' % field, text, re.M), field
+
+
 @pytest.mark.parametrize("name", ["rius-on", "rius-off", "rius-status"])
 def test_session_skills_pass_codex_thread_id(name):
     assert '--session "${CODEX_THREAD_ID:-}"' in _skill(name)

@@ -1,6 +1,7 @@
 ---
 name: rius-enable-here
 description: Trace this folder and everything under it with Rius
+disable-model-invocation: true
 ---
 
 Run this command with the Shell tool, exactly as written, from the workspace root:
