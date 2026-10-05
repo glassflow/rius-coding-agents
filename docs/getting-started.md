@@ -87,9 +87,9 @@ Production is the default. Staging is only reached when you ask for it:
 /rius:login --env staging
 ```
 
-or with `RIUS_ENV=staging` in the environment Claude Code runs in (`--env`
-wins over `RIUS_ENV`). An unknown name is refused rather than sent to
-production. The key stored afterwards remembers its environment, so its
+`RIUS_ENV` in the environment is ignored, because a repo's settings could
+set it; `/rius:status` says so when it is set. An unknown name is refused
+rather than sent to production. The key stored afterwards remembers its environment, so its
 ingest endpoint, `/rius:logout` and the revoke on the next sign-in all go
 to staging too.
 

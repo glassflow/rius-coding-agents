@@ -41,6 +41,8 @@ IGNORED_API_KEY = ("RIUS_API_KEY is set but ignored; run /rius:login, or store "
                    "a console key with `rius_ctl.sh use-key`")
 IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
                     "server your /rius:login key came from")
+IGNORED_ENV = ("RIUS_ENV is set but ignored; run /rius:login --env staging "
+               "to sign in to staging")
 IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
                   "/rius:enable-here to trace a folder")
 IGNORED_CAPTURE = ("RIUS_CAPTURE_CONTENT=true is set but ignored; run "
@@ -396,6 +398,8 @@ def _ignored_env(env: Mapping[str, str]) -> list:
         notes.append(IGNORED_API_KEY)
     if env.get("RIUS_ENDPOINT"):
         notes.append(IGNORED_ENDPOINT)
+    if env.get(login.ENVIRONMENT_VAR):
+        notes.append(IGNORED_ENV)
     if _parse_bool_env(env.get(agent.active().env_var("ENABLED"))) is True:
         notes.append(IGNORED_ENABLE)
     return notes

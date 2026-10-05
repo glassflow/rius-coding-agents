@@ -250,9 +250,10 @@ def _link_base(env_name: str) -> str:
     return ENVIRONMENTS[env_name]["link_base"]
 
 
-def choose_environment(flag: Optional[str], env) -> str:
-    """`--env` beats RIUS_ENV beats production."""
-    return flag or env.get(ENVIRONMENT_VAR) or DEFAULT_ENVIRONMENT
+def choose_environment(flag: Optional[str]) -> str:
+    """`--env`, else production. Never the environment: a repo's settings
+    could set it to send your sign-in elsewhere."""
+    return flag or DEFAULT_ENVIRONMENT
 
 
 def _require_known(env_name: str) -> None:

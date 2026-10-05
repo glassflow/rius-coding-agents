@@ -17,8 +17,9 @@ then restart Claude Code or run `/reload-plugins`.
 
 - **Querying traces needs one OAuth sign-in.** Run `/mcp`, pick `rius` and
   sign in. The `/rius:login` key no longer reaches the MCP server.
-- **`RIUS_API_KEY`, `RIUS_ENDPOINT` and `RIUS_CLAUDE_ENABLED=true` in the
-  environment are ignored.** Sign in with `/rius:login`, or store a console
+- **`RIUS_API_KEY`, `RIUS_ENDPOINT`, `RIUS_ENV` and `RIUS_CLAUDE_ENABLED=true`
+  in the environment are ignored.** For staging, run `/rius:login --env
+  staging`. Sign in with `/rius:login`, or store a console
   key with `rius_ctl.sh use-key` (see [API keys](docs/api-keys.md)). Use
   `/rius:enable-here` to turn a folder on.
 - **Folders you enabled before keep sending content** until you pick:

@@ -193,3 +193,8 @@ def test_the_env_can_only_lower_the_size_cap(home, raw, cap):
 def test_the_service_name_is_a_short_plain_label(home, raw, name):
     assert config.resolve("s1", "/repo", {"RIUS_SERVICE_NAME": raw},
                           home).service_name == name
+
+
+def test_rius_env_is_named_as_ignored(tmp_path):
+    cfg = config.resolve("s1", "/x", {"RIUS_ENV": "staging"}, str(tmp_path))
+    assert config.IGNORED_ENV in cfg.ignored_env

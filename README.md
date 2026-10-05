@@ -119,6 +119,26 @@ session start and `/rius:status` tell you so.
 4. `rm -rf ~/.claude/rius/` removes folder rules, logs and session state,
    which uninstalling leaves behind.
 
+## What runs on your machine
+
+- **Hooks.** Claude Code runs `scripts/hook.sh` on session start, each
+  prompt, each tool call, stop and session end. When you're signed out and
+  nothing is open, it exits without starting Python.
+- **An exporter per hook event** in a traced session: a detached Python
+  process that reads the transcript, sends the new spans and exits.
+- **One heartbeat process per traced session.** It pings every 15 seconds
+  and stops when the session ends, when Claude Code exits, or after 12
+  hours.
+- **A process lookup**, `ps` on macOS and Linux or the Windows process
+  APIs, used only to find Claude Code's own process so the heartbeat knows
+  when the session is gone.
+- **A browser window at `/rius:login`**, on a desktop session only. Over SSH
+  or with no display, you open the printed link yourself.
+
+Nothing runs at install. The plugin never updates itself, downloads code or
+installs packages: it is Python standard library only, and updates come only
+when you run `claude plugin update`.
+
 ## Quick start
 
 Install from a terminal:
@@ -329,7 +349,6 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. Letters, digits, `.`, `_` and `-` only, up to 64; anything else is ignored. |
 | `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
 | `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |

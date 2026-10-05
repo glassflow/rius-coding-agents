@@ -509,7 +509,7 @@ LOGIN_PENDING = "RIUS_LOGIN_PENDING: sign-in is not finished yet."
 def _login(home, cwd, env_flag=None):
     print(login.DISCLOSURE)
     print()
-    env_name = login.choose_environment(env_flag, os.environ)
+    env_name = login.choose_environment(env_flag)
     pending = login.start(home, env_name)
     if env_name != login.DEFAULT_ENVIRONMENT:
         print("Environment: %s (%s)"

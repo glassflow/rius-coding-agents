@@ -795,10 +795,10 @@ def test_a_staging_key_is_revoked_on_staging():
 @pytest.mark.parametrize("argv,env,expected", [
     ([], {}, LINK_BASE),
     (["--env", "staging"], {}, STAGING_LINK_BASE),
-    ([], {"RIUS_ENV": "staging"}, STAGING_LINK_BASE),
-    (["--env", "production"], {"RIUS_ENV": "staging"}, LINK_BASE),
+    ([], {"RIUS_ENV": "staging"}, LINK_BASE),
+    (["--env", "staging"], {"RIUS_ENV": "production"}, STAGING_LINK_BASE),
 ])
-def test_login_picks_its_environment_from_flag_then_env_then_default(
+def test_login_picks_its_environment_from_the_flag_never_the_env(
         tmp_path, server, monkeypatch, argv, env, expected):
     for name, value in env.items():
         monkeypatch.setenv(name, value)
