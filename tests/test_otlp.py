@@ -123,3 +123,13 @@ def test_a_success_does_not_sleep():
     with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(200)):
         otlp.export("https://ingest.example.com", "key", b"body", sleep=slept.append)
     assert slept == []
+
+
+def test_zero_valued_attributes_still_carry_their_type():
+    """Without the round-trip library: each zero must still write its AnyValue
+    member, so the KeyValue's value is not an empty AnyValue."""
+    for value, member in [(0, proto.int64_member(3, 0)),
+                          (0.0, proto.double_member(4, 0.0)),
+                          ("", proto.string_member(1, ""))]:
+        body = otlp.encode({}, [_span(attributes={"z": value})])
+        assert proto.string_field(1, "z") + proto.ld(2, member) in body
