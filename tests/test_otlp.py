@@ -1,7 +1,7 @@
 import struct
 from unittest import mock
 
-from rius_cc import otlp, proto, spans
+from rius_cc import net, otlp, proto, spans
 
 
 def _span(**kw):
@@ -84,14 +84,14 @@ def _fake_urlopen(status=200):
 
 
 def test_export_appends_v1_traces_to_bare_endpoint():
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen()) as m:
+    with mock.patch.object(net._OPENER, "open", return_value=_fake_urlopen()) as m:
         otlp.export("https://ingest.example.com", "key", b"body")
         req = m.call_args[0][0]
         assert req.full_url == "https://ingest.example.com/v1/traces"
 
 
 def test_export_does_not_double_slash_trailing_slash_endpoint():
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen()) as m:
+    with mock.patch.object(net._OPENER, "open", return_value=_fake_urlopen()) as m:
         otlp.export("https://ingest.example.com/", "key", b"body")
         req = m.call_args[0][0]
         assert req.full_url == "https://ingest.example.com/v1/traces"
@@ -102,7 +102,7 @@ def test_the_single_retry_waits_first(monkeypatch):
     against a receiver that is restarting just burns both attempts inside
     the same outage."""
     slept = []
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(503)) as m:
+    with mock.patch.object(net._OPENER, "open", return_value=_fake_urlopen(503)) as m:
         status = otlp.export("https://ingest.example.com", "key", b"body",
                              sleep=slept.append)
     assert status == 503
@@ -112,7 +112,7 @@ def test_the_single_retry_waits_first(monkeypatch):
 
 def test_a_4xx_is_not_retried_at_all(monkeypatch):
     slept = []
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(401)) as m:
+    with mock.patch.object(net._OPENER, "open", return_value=_fake_urlopen(401)) as m:
         otlp.export("https://ingest.example.com", "key", b"body", sleep=slept.append)
     assert m.call_count == 1
     assert slept == []
@@ -120,6 +120,6 @@ def test_a_4xx_is_not_retried_at_all(monkeypatch):
 
 def test_a_success_does_not_sleep():
     slept = []
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(200)):
+    with mock.patch.object(net._OPENER, "open", return_value=_fake_urlopen(200)):
         otlp.export("https://ingest.example.com", "key", b"body", sleep=slept.append)
     assert slept == []

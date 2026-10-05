@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional
 
-from rius_cc import platform_compat
+from rius_cc import net, platform_compat
 
 # `wait` runs under Claude Code's Bash tool, which kills a command after ten
 # minutes. Returning before that leaves the pending link on disk so a second
@@ -96,7 +96,7 @@ def _send(req: urllib.request.Request, timeout: float = REQUEST_TIMEOUT_SECONDS)
     """(status, parsed JSON body). Error statuses are data here, not
     exceptions: 428 is how the server says "not yet"."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with net.urlopen(req, timeout=timeout) as resp:
             return resp.status, _parse(resp.read())
     except urllib.error.HTTPError as err:
         return err.code, _parse(err.read())
@@ -152,8 +152,7 @@ def wait_lock_path(home: str) -> str:
 def _write_private(path: str, data: dict) -> None:
     """Write via a 0600 temp file and rename, so the secret is never readable
     by others, not even for the instant before a chmod."""
-    directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
+    directory = platform_compat.ensure_private_dir(os.path.dirname(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".rius-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
@@ -345,8 +344,8 @@ def _single_wait(home: str, sleep: Callable, now: Callable):
     """Two waits on one link would each mint a key, and the slower one could
     store a key the other's re-mint already revoked."""
     path = wait_lock_path(home)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = platform_compat.open_lock_file(path, mode=0o600)
+    platform_compat.ensure_private_dir(os.path.dirname(path))
+    fd = platform_compat.open_lock_file(path)
     try:
         _take_lock(fd, sleep, now)
         try:

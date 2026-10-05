@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import tempfile
 import time
 
@@ -21,6 +22,18 @@ from . import platform_compat
 
 RETRY_INTERVAL_S = 0.05
 OPEN_MARKER_SUFFIX = ".open"
+# Claude Code's are UUIDs. Anything else could carry "../" into a file name.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def is_valid_session_id(session_id) -> bool:
+    return isinstance(session_id, str) and bool(_SESSION_ID_RE.fullmatch(session_id))
+
+
+def require_valid_session_id(session_id) -> str:
+    if not is_valid_session_id(session_id):
+        raise ValueError("not a valid session id: %r" % (session_id,))
+    return session_id
 
 
 def new_state() -> dict:
@@ -55,21 +68,24 @@ def new_state() -> dict:
 
 
 def state_dir(home: str) -> str:
-    d = os.path.join(home, ".claude", "rius", "state")
-    os.makedirs(d, exist_ok=True)
-    return d
+    return platform_compat.rius_dir(home, "state")
+
+
+def session_file(session_id: str, home: str, suffix: str) -> str:
+    return os.path.join(state_dir(home),
+                        require_valid_session_id(session_id) + suffix)
 
 
 def state_path(session_id: str, home: str) -> str:
-    return os.path.join(state_dir(home), session_id + ".json")
+    return session_file(session_id, home, ".json")
 
 
 def lock_path(session_id: str, home: str) -> str:
-    return os.path.join(state_dir(home), session_id + ".lock")
+    return session_file(session_id, home, ".lock")
 
 
 def open_marker_path(session_id: str, home: str) -> str:
-    return os.path.join(state_dir(home), session_id + OPEN_MARKER_SUFFIX)
+    return session_file(session_id, home, OPEN_MARKER_SUFFIX)
 
 
 def sync_open_marker(session_id: str, home: str, st: dict) -> None:
@@ -107,8 +123,7 @@ def pinger_alive(session_id: str, home: str) -> bool:
     means the session may well be alive too.
     """
     try:
-        with open(os.path.join(state_dir(home),
-                               session_id + ".heartbeat.pid")) as fh:
+        with open(session_file(session_id, home, ".heartbeat.pid")) as fh:
             pid = int(fh.read().strip())
     except (OSError, ValueError):
         return False

@@ -67,7 +67,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import platform_compat  # noqa: E402
+from rius_cc import net, platform_compat  # noqa: E402
 
 PAYLOAD_VERSION = 1
 OPEN_TRACES_CAP = 32
@@ -117,7 +117,7 @@ def http_transport(url: str, api_key: str):
         }
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout):
+        with net.urlopen(req, timeout=timeout):
             pass
 
     return send
@@ -147,15 +147,18 @@ class Pinger:
         self._log = log or (lambda _msg: None)
 
     def _state_dir(self) -> str:
-        d = os.path.join(self.home, ".claude", "rius", "state")
-        os.makedirs(d, exist_ok=True)
-        return d
+        return platform_compat.rius_dir(self.home, "state")
 
     def stop_path(self) -> str:
-        return os.path.join(self._state_dir(), self.session_id + ".heartbeat.stop")
+        return self._state_dir_file(".heartbeat.stop")
 
     def pid_path(self) -> str:
-        return os.path.join(self._state_dir(), self.session_id + ".heartbeat.pid")
+        return self._state_dir_file(".heartbeat.pid")
+
+    def _state_dir_file(self, suffix: str) -> str:
+        from rius_cc import state
+        return os.path.join(self._state_dir(),
+                            state.require_valid_session_id(self.session_id) + suffix)
 
     def _pid_alive(self, pid: int) -> bool:
         """Never os.kill: on Windows that terminates or Ctrl+C's the target."""
@@ -254,6 +257,8 @@ def main() -> None:
 
     from rius_cc import config, log as rius_log, state
 
+    if not state.is_valid_session_id(session_id):
+        return
     cfg = config.resolve(session_id, cwd, os.environ, home)
 
     def log(message: str) -> None:

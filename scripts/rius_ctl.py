@@ -125,11 +125,29 @@ def _resolved_disables(disables):
 TOO_BROAD = ("Not changed: `%s` is too broad for a rule (the filesystem or a "
              "drive root, or a *, ? or [ right below it).")
 
+HOLDS_HOME = ("Not changed: `%s` holds your home folder, so every project on "
+              "this machine would be traced. Run /rius:enable-here inside a "
+              "project folder instead.")
+
+
+def _normalised(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _holds_home(folder, home):
+    """Is `folder` the home folder or one of its parents?"""
+    folder = _normalised(folder)
+    home = _normalised(config.resolved(home))
+    return home == folder or home.startswith(folder.rstrip(os.sep) + os.sep)
+
 
 def _enable_here(cwd, home):
     cwd = config.resolved(cwd)
     if not config.is_usable_rule(cwd):
         print(TOO_BROAD % cwd)
+        return
+    if _holds_home(cwd, home):
+        print(HOLDS_HOME % cwd)
         return
     _move_path(home, cwd, "enabled_paths", "disabled_paths")
     match = config.matching_rule(cwd, home)
@@ -418,6 +436,9 @@ def dispatch(argv, home):
         return
 
     inferred = False
+    if session_id and not state.is_valid_session_id(session_id):
+        print("Rius: %r is not a session id, so nothing was changed." % session_id)
+        return
     if action in SESSION_WRITE_ACTIONS and not session_id:
         # Refuse loudly rather than guess. Still exit 0, like every path here.
         print(_no_session_message(action))
