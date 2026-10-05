@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -205,3 +206,31 @@ def test_a_refusal_belongs_to_the_key_it_was_recorded_for(home, monkeypatch,
     other = config.resolve(SID, "/tmp/proj", dict(ENV, RIUS_API_KEY="gf_new"),
                            home)
     assert not notice.is_refused(home, other)
+
+
+def test_a_stopped_session_is_not_told_it_is_tracing(session_start, home,
+                                                     tmp_path):
+    """The exporter's stop is sticky: a conversation disabled after its trace
+    started sends nothing more, even where the rules now say on."""
+    _sign_in(home)
+    _enable(home, str(tmp_path))
+    st = state.load("new", home)
+    st.update({"continued_from": "old", "content_stopped": True})
+    state.save("new", home, st)
+    assert session_start(home, str(tmp_path), sid="new") == ""
+
+
+def test_month_old_records_are_pruned_and_this_sessions_kept(
+        session_start, home, tmp_path):
+    _sign_in(home)
+    _enable(home, str(tmp_path))
+    session_start(home, str(tmp_path), sid="old")
+    session_start(home, str(tmp_path), sid="recent")
+    session_start(home, str(tmp_path), sid="current")
+    notices = os.path.join(home, ".claude", "rius", "notices")
+    month_ago = time.time() - notice.SHOWN_RECORD_MAX_AGE_S - 60
+    for sid in ("old", "current"):
+        os.utime(os.path.join(notices, sid), (month_ago, month_ago))
+
+    assert session_start(home, str(tmp_path), sid="current") == ""
+    assert sorted(os.listdir(notices)) == ["current", "recent"]

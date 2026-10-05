@@ -203,9 +203,10 @@ it is on without asking:
   that is traced.
 - `Rius: run /rius:login to start tracing` in a folder you enabled before
   signing in.
-- `Rius: your workspace isn't accepting data (trial ended or paused). Open
-  the console to fix it.` once the backend has refused your data (HTTP 402).
-  It stays until an export succeeds again, and `/rius:status` shows it too.
+- `Rius: your workspace wasn't accepting data last time (trial ended or
+  paused). If you've fixed it, this clears on the next upload.` once the
+  backend has refused your data (HTTP 402). It stays until an export
+  succeeds again, and `/rius:status` shows it too.
 - `Rius installed: run /rius:login, then /rius:enable-here`, once ever, after
   you install. If you never sign in or enable a folder, Rius says nothing
   after that.
