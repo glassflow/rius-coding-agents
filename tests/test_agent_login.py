@@ -84,3 +84,22 @@ def test_login_messages_name_the_agent_command(monkeypatch, tmp_path, capsys):
     rius_ctl.dispatch(["login-wait", "--agent", "cursor"], str(tmp_path))
     out = capsys.readouterr().out
     assert "Run `/rius-login` first." in out
+
+
+def test_the_pending_wait_command_keeps_the_agent(cursor, monkeypatch,
+                                                  tmp_path, capsys):
+    monkeypatch.setattr(login, "post_json", scripted((201, LINK_RESPONSE)))
+    monkeypatch.setattr(rius_ctl, "_open_browser", lambda url: None)
+    rius_ctl.dispatch(["login", "--agent", "cursor", "--cwd", "/w"],
+                      str(tmp_path))
+    pending = [line for line in capsys.readouterr().out.splitlines()
+               if line.startswith("RIUS_LOGIN_PENDING:")]
+    assert pending and pending[0].endswith(" login-wait --agent cursor --cwd /w")
+
+
+def test_claude_code_pending_wait_command_is_unchanged(monkeypatch, tmp_path,
+                                                       capsys):
+    monkeypatch.setattr(login, "post_json", scripted((201, LINK_RESPONSE)))
+    monkeypatch.setattr(rius_ctl, "_open_browser", lambda url: None)
+    rius_ctl.dispatch(["login", "--cwd", "/w"], str(tmp_path))
+    assert "rius_ctl.sh login-wait --cwd /w" in capsys.readouterr().out

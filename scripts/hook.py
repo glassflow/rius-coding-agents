@@ -12,6 +12,10 @@ Does as little as possible: resolve config, and if enabled, hand off to a
 DETACHED exporter and exit. Never writes to stdout -- stdout is a control
 channel for hooks. Never exits non-zero -- instrumentation that can break the
 session it observes is worse than no instrumentation.
+
+With `--agent cursor` it spools the event instead (rius_cc/cursor_hook.py)
+and, being Cursor's hook, always answers on stdout: Cursor reads that answer
+as the hook's verdict.
 """
 import json
 import os
@@ -103,6 +107,9 @@ def main() -> None:
         agent.activate(profile)
         event = argv[0] if argv else ""
         raw = sys.stdin.read()
+        if profile.name == agent.CURSOR.name:
+            _run_cursor(event, raw, profile)
+            return
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict) or not payload.get("session_id"):
             return
@@ -202,6 +209,49 @@ def main() -> None:
                 pass
     except BaseException:
         pass
+
+
+def _run_cursor(event: str, raw: str, profile) -> None:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    payload = None
+    try:
+        from rius_cc import cursor_hook, platform_compat
+        payload = json.loads(raw) if raw.strip() else {}
+        home = platform_compat.home_dir(os.environ)
+        job = cursor_hook.handle(event, payload, os.environ, home)
+        if job is not None:
+            _spawn_cursor_exporter(event, job, home, profile, script_dir)
+    except BaseException:
+        pass
+    finally:
+        _answer_cursor(event, payload, os.path.dirname(script_dir))
+
+
+def _answer_cursor(event: str, payload, plugin_root: str) -> None:
+    try:
+        from rius_cc import cursor_hook
+        sys.stdout.write(cursor_hook.response(event, payload, plugin_root))
+        sys.stdout.flush()
+    except BaseException:
+        pass
+
+
+def _spawn_cursor_exporter(event, job, home, profile, script_dir) -> None:
+    from rius_cc import agent, platform_compat
+    fd, path = tempfile.mkstemp(prefix="rius-hook-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"event": event, "payload": job.payload()}, fh)
+    stderr, log_fh = _spawn_stderr(job, home)
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.join(script_dir, "exporter.py"), path]
+            + agent.child_argv(profile),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=stderr, close_fds=True,
+            **platform_compat.detached_child_kwargs())
+    finally:
+        if log_fh is not None:
+            log_fh.close()
 
 
 def _claude_code_pid() -> int:

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor sessionStart",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor beforeSubmitPrompt",
+        "timeout": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor preToolUse",
+        "timeout": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor postToolUse",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor postToolUseFailure",
+        "timeout": 10
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor afterAgentThought",
+        "timeout": 10
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor afterAgentResponse",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor subagentStart",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor subagentStop",
+        "timeout": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor preCompact",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor stop",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor sessionEnd",
+        "timeout": 10
+      }
+    ]
+  }
+}

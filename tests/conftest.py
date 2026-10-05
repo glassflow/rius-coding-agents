@@ -42,6 +42,29 @@ def real_state_dir_is_untouched():
                     pytrace=False)
 
 
+# Cursor's Rius directory: nothing real lives there yet on a developer
+# machine, and no test may create or change anything under it.
+REAL_CURSOR_RIUS_DIR = os.path.join(os.path.expanduser("~"), ".cursor", "rius")
+
+
+def _tree(path):
+    found = []
+    for root, _, files in os.walk(path):
+        found += [(os.path.join(root, f), os.path.getmtime(os.path.join(root, f)))
+                  for f in files]
+    return sorted(found)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_cursor_dir_is_untouched():
+    before = _tree(REAL_CURSOR_RIUS_DIR)
+    yield
+    if _tree(REAL_CURSOR_RIUS_DIR) != before:
+        pytest.fail("the test suite wrote into the real %s -- a test ran "
+                    "without an isolated HOME" % REAL_CURSOR_RIUS_DIR,
+                    pytrace=False)
+
+
 @pytest.fixture
 def fixtures_dir() -> pathlib.Path:
     return pathlib.Path(__file__).parent / "fixtures"

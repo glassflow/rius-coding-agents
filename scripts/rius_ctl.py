@@ -3,6 +3,7 @@
 
 Actions: on | off | clear | enable-here | disable-here | status | login |
          login-wait | logout
+         install-hooks | uninstall-hooks [--path <hooks.json>] (Cursor only)
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
          --agent <claude-code|codex|cursor> (default claude-code)
 
@@ -26,7 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, config, login, platform_compat, state  # noqa: E402
+from rius_cc import (agent, config, cursor_install, login,  # noqa: E402
+                     platform_compat, state)
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -327,8 +329,9 @@ _CTL_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rius_ctl.sh"
 
 
 def _pending_line(cwd):
-    return "RIUS_LOGIN_PENDING: bash %s login-wait --cwd %s" % (
-        _shell_quote(_CTL_SH), _shell_quote(cwd))
+    agent_flag = "".join(" " + arg for arg in agent.child_argv(agent.active()))
+    return "RIUS_LOGIN_PENDING: bash %s login-wait%s --cwd %s" % (
+        _shell_quote(_CTL_SH), agent_flag, _shell_quote(cwd))
 
 
 def _shell_quote(path):
@@ -437,7 +440,45 @@ def _localized_stdout(profile):
         sys.stdout.write(profile.localize(out.getvalue()))
 
 
+HOOKS_ACTIONS = ("install-hooks", "uninstall-hooks")
+
+
+def _hooks_path(argv, home):
+    if "--path" in argv and argv.index("--path") + 1 < len(argv):
+        return os.path.expanduser(argv[argv.index("--path") + 1])
+    return os.path.join(home, ".cursor", "hooks.json")
+
+
+def _hooks_action(action, argv, home):
+    """For Cursor builds that ignore a plugin's own hooks: merge them into
+    the user's hooks.json (or take them out again)."""
+    if agent.active().name != agent.CURSOR.name:
+        print("Rius: %s is for Cursor only; run it with --agent cursor."
+              % action)
+        return
+    path = _hooks_path(argv, home)
+    try:
+        if action == "install-hooks":
+            changed, count = cursor_install.install(
+                path, cursor_install.plugin_root())
+        else:
+            changed, count = cursor_install.uninstall(path)
+    except (cursor_install.HooksFileError, OSError) as exc:
+        print("Rius: %s" % exc)
+        return
+    if not changed:
+        print("%s already up to date (%d Rius hooks)." % (path, count))
+    elif count:
+        print("Wrote %d Rius hooks into %s. Restart Cursor to load them."
+              % (count, path))
+    else:
+        print("Removed the Rius hooks from %s." % path)
+
+
 def _dispatch(argv, home):
+    if argv and argv[0] in HOOKS_ACTIONS:
+        _hooks_action(argv[0], argv[1:], home)
+        return
     action, session_id, cwd, env_flag = _parse_args(argv)
 
     if action in ("login", "login-wait", "logout"):

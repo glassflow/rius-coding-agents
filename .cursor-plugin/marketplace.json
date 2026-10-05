@@ -1,0 +1,17 @@
+{
+  "name": "rius-coding-agents",
+  "owner": {
+    "name": "GlassFlow"
+  },
+  "metadata": {
+    "description": "Rius observability for coding agents"
+  },
+  "plugins": [
+    {
+      "name": "rius",
+      "source": "./",
+      "description": "Stream Cursor agent sessions to Rius as OTLP GenAI traces (beta)",
+      "version": "0.4.6"
+    }
+  ]
+}
