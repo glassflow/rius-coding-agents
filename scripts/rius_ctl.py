@@ -33,7 +33,8 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, config, login, notice, platform_compat, state  # noqa: E402
+from rius_cc import (agent, codex_trust, config, login,  # noqa: E402
+                     notice, platform_compat, state)
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -365,7 +366,8 @@ def _print_status(session_id, cwd, home, inferred=False):
     print("Endpoint: %s" % cfg.endpoint)
     creds = login.read_credentials(home)
     print(_tracing_sign_in_line(cfg, creds))
-    print(_querying_traces_line(creds))
+    for line in _querying_traces_lines(creds, home):
+        print(line)
     if _is_staging(creds) or os.environ.get("RIUS_MCP_URL"):
         print(RIUS_MCP_URL_RETIRED)
     print("API key: %s" % config.redact(cfg.api_key))
@@ -450,6 +452,26 @@ QUERYING_STAGING_TRACES = (
     "`claude mcp add --transport http rius-staging "
     "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
 RIUS_MCP_URL_RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
+# Codex has no headersHelper, so its bundled server cannot use the stored
+# key: it signs in on its own, through the server's OAuth.
+CODEX_QUERYING_TRACES = ("Querying traces: run `codex mcp login rius` once "
+                         "to sign in to the bundled rius server")
+_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_codex():
+    return agent.active().name == agent.CODEX.name
+
+
+def _querying_traces_lines(creds, home):
+    if _is_codex():
+        return [CODEX_QUERYING_TRACES,
+                codex_trust.status_line(_PLUGIN_ROOT, _codex_home(home))]
+    return [_querying_traces_line(creds)]
+
+
+def _codex_home(home):
+    return os.path.dirname(agent.active().rius_dir(home))
 
 
 def _querying_traces_line(creds):
@@ -535,7 +557,7 @@ def _login_wait(home, cwd):
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
     print(_tracing_signed_in(creds))
-    print(_querying_traces_line(creds))
+    print(_querying_traces_lines(creds, home)[0])
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
     moved = _moved_folders_warning(home, previous, creds)
     if moved:

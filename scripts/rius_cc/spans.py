@@ -89,6 +89,7 @@ _PENDING_ALLOWED_KEYS = {
     "cc.turn.source",
     "cc.subagent.id",
     "cc.subagent.depth",
+    "codex.subagent.id",
     # The session id a turn's conversation continued from, and the id it
     # runs under now (Claude Code moved the conversation). Ids, not content.
     "cc.continued_from",

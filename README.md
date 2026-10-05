@@ -316,6 +316,34 @@ answerable in chat. The
 [getting started guide](docs/getting-started.md#exploring-your-traces-from-claude-code)
 lists the main tools and how to register the server without the plugin.
 
+## Codex (beta)
+
+The same plugin traces [Codex](https://developers.openai.com/codex) CLI
+sessions (tested with codex-cli 0.144.1). Each session becomes one trace:
+turns, model calls with token counts (cached and reasoning tokens split
+out), tool calls with failed commands marked as errors, and subagents under
+the call that spawned them. A resumed session continues its trace.
+
+```
+codex plugin marketplace add glassflow/rius-coding-agents
+codex plugin add rius@rius-coding-agents
+```
+
+Then, in Codex:
+
+1. Open `/hooks` and trust the five `rius` hooks. Codex runs no plugin hook
+   until you do, so nothing is traced before this step.
+2. Ask Codex to run `$rius:rius-login`, then `$rius:rius-enable-here` in a
+   folder you want traced. Both need to write `~/.codex/rius`, so approve
+   the sandbox escalation Codex asks for.
+3. `$rius:rius-status` shows what is on, why, and whether the hooks are
+   trusted.
+
+Tracing is off by default and the content rules above apply unchanged.
+Codex keeps its own login, key and settings in `${CODEX_HOME:-~/.codex}/rius`,
+separate from Claude Code's. See [docs/codex.md](docs/codex.md) for details,
+the MCP sign-in and the known gaps.
+
 ## Beyond Claude Code
 
 Rius traces other agents as well. The

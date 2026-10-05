@@ -15,9 +15,9 @@ from typing import Mapping
 # Run with -I, which leaves this script's own folder off sys.path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import (agent, config, continuation, log as rius_log,  # noqa: E402
-                     notice, otlp,
-                     platform_compat, spans, state, subagents, transcript)
+from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
+                     log as rius_log, notice, otlp, platform_compat, spans,
+                     state, subagents, transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -38,6 +38,15 @@ FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
 # The pinger's own cap (heartbeat.MAX_LIFETIME_S): it covers a session whose
 # process could not be identified.
 STALE_AFTER_S = 12 * 60 * 60
+# Codex has no SessionEnd, so the sweep is the only thing that ever closes a
+# Codex trace: it waits an hour, not twelve, once the Codex process is gone.
+CODEX_STALE_AFTER_S = 60 * 60
+
+
+def _stale_after_s() -> int:
+    if agent.active().name == agent.CODEX.name:
+        return CODEX_STALE_AFTER_S
+    return STALE_AFTER_S
 
 
 def _export_error_reason(status: int) -> str:
@@ -294,6 +303,8 @@ def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
     """Close every open span of the session, with no content, reading
     nothing from its transcript."""
     ctx = _ctx(st, session_id, cfg, cwd, capture_content=False)
+    if agent.active().name == agent.CODEX.name:
+        return _close_codex_trace(st, ctx, cfg, session_id, home, end_ns)
     out = []
     try:
         out += subagents.finalize(
@@ -331,7 +342,7 @@ def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
         if st.get("key_fingerprint") != fingerprint:
             return
         last_seen_ns = _last_seen_ns(st)
-        if (now_ns - last_seen_ns < STALE_AFTER_S * 10**9
+        if (now_ns - last_seen_ns < _stale_after_s() * 10**9
                 or platform_compat.pid_alive(st.get("cc_pid") or 0)
                 or state.pinger_alive(session_id, home)):
             # Idle, not dead: a session can sit at a prompt for days.
@@ -521,6 +532,51 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                      on_success=_on_shipped(session_id, home, st, saves))
 
 
+def _close_codex_trace(st, ctx, cfg, session_id, home, end_ns) -> int:
+    out = codex_session.finalize(codex_session.load(st), ctx, end_ns)
+    attrs = codex_session.resource_attributes(
+        cfg.service_name, st.get("instance_id") or "", st)
+    return _ship(out, attrs, st, st.get("offset", 0), session_id, home, cfg,
+                 on_success=_on_shipped(session_id, home, st, []))
+
+
+def _ensure_instance_id(st, session_id, home, instance_id):
+    stored = st.get("instance_id")
+    if not stored:
+        stored = instance_id or str(uuid.uuid4())
+        st["instance_id"] = stored
+        state.save(session_id, home, st)
+    return stored
+
+
+def _run_codex_session(event, cfg, payload, home, instance_id) -> int:
+    """One hook event of a Codex session. Codex has no SessionEnd, so the
+    root stays open until the sweep closes it (sweep_stale)."""
+    session_id, cwd = payload["session_id"], payload["cwd"]
+    block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                     if event in FINAL_EVENTS else 0.0)
+    with state.session_lock(session_id, home,
+                            block_timeout=block_timeout) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held, skipping %s"
+                 % (session_id, event))
+            return 0
+        st = codex_session.load(state.load(session_id, home))
+        rollout_path = codex_session.note_payload(st, event, payload)
+        if not cfg.enabled or st.get("content_stopped"):
+            return _run_stopped(event, st, cfg, session_id, cwd,
+                                rollout_path or "", home)
+        instance_id = _ensure_instance_id(st, session_id, home, instance_id)
+        ctx = _ctx(st, session_id, cfg, cwd)
+        out, new_offset = codex_session.build(st, ctx, rollout_path)
+        if st.get("root_started"):
+            st.setdefault("root_cwd", cwd)
+        attrs = codex_session.resource_attributes(cfg.service_name,
+                                                  instance_id, st)
+        return _ship(out, attrs, st, new_offset, session_id, home, cfg,
+                     on_success=_on_shipped(session_id, home, st, []))
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         instance_id: str = "") -> int:
     cfg = None
@@ -541,8 +597,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
 
-        result = _run_session(event, cfg, session_id, cwd, transcript_path,
-                              home, instance_id)
+        if agent.active().name == agent.CODEX.name:
+            result = _run_codex_session(event, cfg, payload, home,
+                                        instance_id)
+        else:
+            result = _run_session(event, cfg, session_id, cwd,
+                                  transcript_path, home, instance_id)
         if event == "SessionStart" and cfg.enabled and cfg.api_key:
             # After this session's own export: by then it has taken over any
             # conversation it continues, so that one's root is not swept.
