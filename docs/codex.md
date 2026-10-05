@@ -134,8 +134,13 @@ turn things off.
   and the connect page still say "Claude Code".
 - LLM span start times are approximate (the previous event in the rollout).
 - OpenAI does not report cache-write tokens, so none are sent.
-- `apply_patch` (`custom_tool_call`) and interrupted turns are parsed from
-  their documented shape but were not seen in a recorded run.
+- Code mode (`code_mode_host`, on by default in codex-cli 0.144.1) runs
+  every tool through one `exec` call that runs a script. Each such call is
+  one TOOL span named `exec`; the commands, patches and spawns inside it
+  get no spans of their own. Its output carries no exit code, so a failed
+  command inside `exec` reads as success.
+- Interrupted turns are parsed from their documented shape but were not
+  seen in a recorded run.
 - A failed tool call is only marked as an error when it is a non-zero exit
   or an MCP error; other failures read as success.
 - `codex exec --ephemeral` writes no rollout file, so it is not traced.

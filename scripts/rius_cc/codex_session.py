@@ -10,6 +10,7 @@ events, and each subagent keeps its own offset and builder state.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -17,6 +18,12 @@ from . import codex_rollout, codex_spans, state
 from .spans import Ctx, Span
 
 SUBAGENT_STOP = "SubagentStop"
+POST_TOOL_USE = "PostToolUse"
+# What PostToolUse calls a spawn: plain in code mode, namespaced otherwise.
+_SPAWN_TOOL_NAMES = ("spawn_agent", codex_spans.SPAWN_TOOL)
+# Rounds of linking and building per call, so a grandchild is linked in the
+# same call as the child whose rollout spawned it.
+_MAX_LINK_ROUNDS = 8
 
 
 def load(st: dict) -> dict:
@@ -47,7 +54,24 @@ def note_payload(st: dict, event: str,
         _set_parent_path(st, path)
     if agent_id:
         _remember(st, agent_id, sub_path, payload.get("agent_type") or "")
+    if event == POST_TOOL_USE:
+        _note_spawn(st, payload)
     return st.get("transcript_path") or None
+
+
+def _note_spawn(st: dict, payload: Mapping[str, Any]) -> None:
+    """A spawn's PostToolUse names the new agent before any hook of its own."""
+    if payload.get("tool_name") not in _SPAWN_TOOL_NAMES:
+        return
+    response = payload.get("tool_response")
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except ValueError:
+            return
+    child = response.get("agent_id") if isinstance(response, dict) else None
+    if isinstance(child, str) and state.is_valid_session_id(child):
+        _remember(st, child, "", "")
 
 
 def _may_be_parents(st: dict, path: str) -> bool:
@@ -101,24 +125,84 @@ def _spawned(st: dict) -> Dict[str, str]:
 
 def _build_subagents(st: dict, ctx: Ctx) -> List[Span]:
     out: List[Span] = []
-    for agent_id, parent_span_id in _spawned(st).items():
-        if not state.is_valid_session_id(agent_id):
-            continue
-        sub = st["codex_subs"].get(agent_id)
-        if not sub or not sub.get("path"):
-            path = _beside_parent(st, agent_id)
-            if not path:
-                continue
-            _remember(st, agent_id, path, "")
-            sub = st["codex_subs"][agent_id]
-        if sub.get("state") is None:
-            sub["state"] = codex_spans.new_subagent_state(
-                agent_id, sub.get("agent_type") or "", parent_span_id)
-        records, sub["offset"] = codex_rollout.read_from(
-            sub["path"], sub.get("offset", 0))
-        out += codex_spans.build(records, sub["state"], ctx)
-        _seen(st, records)
+    built = set()
+    for _ in range(_MAX_LINK_ROUNDS):
+        _link_unspawned(st)
+        todo = [(agent_id, parent) for agent_id, parent in _spawned(st).items()
+                if agent_id not in built]
+        if not todo:
+            break
+        for agent_id, parent_span_id in todo:
+            built.add(agent_id)
+            out += _build_subagent(st, ctx, agent_id, parent_span_id)
     return out
+
+
+def _build_subagent(st: dict, ctx: Ctx, agent_id: str,
+                    parent_span_id: str) -> List[Span]:
+    if not state.is_valid_session_id(agent_id):
+        return []
+    sub = _with_path(st, agent_id)
+    if sub is None:
+        return []
+    if sub.get("state") is None:
+        sub["state"] = codex_spans.new_subagent_state(
+            agent_id, sub.get("agent_type") or "", parent_span_id)
+    out = _late_agent_type(sub, ctx)
+    records, sub["offset"] = codex_rollout.read_from(
+        sub["path"], sub.get("offset", 0))
+    _seen(st, records)
+    return out + codex_spans.build(records, sub["state"], ctx)
+
+
+def _late_agent_type(sub: dict, ctx: Ctx) -> List[Span]:
+    """A spawn's PostToolUse names the child before its own hooks give its
+    type. Its root, if already sent, is sent again under that name."""
+    sub_state = sub["state"]
+    attrs = sub_state.setdefault("root_attrs", {})
+    if not sub.get("agent_type") or attrs.get("gen_ai.agent.name"):
+        return []
+    sub_state["root_name"] = sub["agent_type"]
+    attrs["gen_ai.agent.name"] = sub["agent_type"]
+    return [codex_spans.open_root(sub_state, ctx)] if sub_state["root_started"] else []
+
+
+def _with_path(st: dict, agent_id: str) -> Optional[dict]:
+    sub = st["codex_subs"].get(agent_id)
+    if not sub or not sub.get("path"):
+        path = _beside_parent(st, agent_id)
+        if not path:
+            return None
+        _remember(st, agent_id, path, "")
+        sub = st["codex_subs"][agent_id]
+    return sub
+
+
+def _link_unspawned(st: dict) -> None:
+    """Hang each subagent a hook named, but no spawn_agent output did, under
+    the call that spawned it. In code mode the spawn runs inside an `exec`
+    call, so its rollout's own session record says which agent spawned it
+    and its thread id (a UUIDv7) when."""
+    spawned = _spawned(st)
+    for agent_id in list(st["codex_subs"]):
+        if agent_id in spawned or not state.is_valid_session_id(agent_id):
+            continue
+        created_ms = codex_spans.uuid7_ms(agent_id)
+        sub = _with_path(st, agent_id)
+        session = codex_rollout.read_session(sub["path"]) if sub else None
+        if created_ms is None or session is None:
+            continue
+        spawner = _spawner_state(st, session.get("parent_thread_id"))
+        tool = spawner and codex_spans.spawning_tool(spawner, created_ms * 10**6)
+        if tool:
+            spawner.setdefault("spawned", {})[agent_id] = tool
+
+
+def _spawner_state(st: dict, thread_id: str) -> Optional[dict]:
+    if not thread_id or thread_id == st.get("thread_id"):
+        return st
+    sub = st["codex_subs"].get(thread_id)
+    return sub.get("state") if sub else None
 
 
 def _beside_parent(st: dict, agent_id: str) -> str:

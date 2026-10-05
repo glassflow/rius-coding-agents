@@ -57,7 +57,16 @@ def _session(p: Dict[str, Any]) -> Dict[str, Any]:
         "git_branch": _text(git.get("branch")),
         "agent_role": _text(p.get("agent_role")),
         "forked_from_id": _text(p.get("forked_from_id")),
+        "parent_thread_id": _parent_thread_id(p),
     }
+
+
+def _parent_thread_id(p: Dict[str, Any]) -> str:
+    """A subagent's rollout names the thread that spawned it."""
+    source = p.get("source")
+    spawn = source.get("subagent") if isinstance(source, dict) else None
+    spawn = spawn.get("thread_spawn") if isinstance(spawn, dict) else None
+    return _text(spawn.get("parent_thread_id")) if isinstance(spawn, dict) else ""
 
 
 def _turn_context(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -125,9 +134,20 @@ def _tool_call(p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _tool_output(p: Dict[str, Any]) -> Dict[str, Any]:
     output = p.get("output")
+    if isinstance(output, list):
+        output = _joined_text(output)
     if not isinstance(output, str):
         output = json.dumps(output)
     return {"call_id": _text(p.get("call_id")), "output": output}
+
+
+def _joined_text(parts: List[Any]) -> Any:
+    """Code mode's `exec` answers with content parts. Their text, joined as
+    the model reads it: dumped as JSON, every newline would become `\\n` and
+    the scrubber would no longer see a `key = secret` line as one."""
+    texts = [p.get("text") for p in parts
+             if isinstance(p, dict) and isinstance(p.get("text"), str)]
+    return "".join(texts) if texts else parts
 
 
 _ITEMS = {
@@ -165,6 +185,17 @@ def parse_line(line: str) -> Optional[Record]:
         return Record(kind, _timestamp_ns(_text(raw.get("timestamp"))), fields)
     except (ValueError, IndexError):
         return None
+
+
+def read_session(path: str) -> Optional[Record]:
+    """The session record a rollout opens with, or None."""
+    try:
+        with open(path, "rb") as fh:
+            first = fh.readline()
+    except OSError:
+        return None
+    record = parse_line(first.decode("utf-8", errors="replace"))
+    return record if record is not None and record.kind == SESSION else None
 
 
 def read_from(path: str, offset: int) -> Tuple[List[Record], int]:

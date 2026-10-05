@@ -28,6 +28,10 @@ both. Claude Code: no change in what is traced or sent.
   parent's history; those inherited turns are not sent again, so the
   parent's model calls are counted once. Nested subagents (depth 2 and
   more) stay under the subagent that spawned them.
+- In Codex's code mode (on by default), a subagent spawned from inside an
+  `exec` call hangs under that call; before, it and its model calls were
+  never sent. The text of `exec` output is scrubbed as text, so a
+  `name = secret` line is no longer missed.
 - With content on, Codex and Cursor remove secrets as Claude Code does:
   every content attribute and error line is scrubbed, and a read of a
   secret-shaped file (`.env*`, `*.pem`, `id_rsa*`, ...) is replaced whole.

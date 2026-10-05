@@ -37,12 +37,15 @@ _EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
 SPAWN_TOOL = "multi_agent_v1__spawn_agent"
+# How many tool starts an agent remembers, to find the call that spawned a
+# subagent (spawning_tool).
+_TOOL_STARTS_KEPT = 256
 
 
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
             "session": {}, "model": "", "turn": None, "open_tools": {},
-            "spawned": {}}
+            "spawned": {}, "tool_starts": []}
 
 
 def new_subagent_state(agent_id: str, agent_type: str,
@@ -196,6 +199,9 @@ def _on_tool_call(rec, state, ctx, out):
             "start_ns": rec.timestamp_ns, "tool_name": rec.get("name"),
             "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
     state["open_tools"][call_id] = tool
+    starts = state.setdefault("tool_starts", [])
+    starts.append([rec.timestamp_ns, tool["span_id"]])
+    del starts[:-_TOOL_STARTS_KEPT]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
                         tool["tool_name"], "TOOL", rec.timestamp_ns,
                         {"gen_ai.tool.name": tool["tool_name"]}))
@@ -304,6 +310,16 @@ def _on_tool_output(rec, state, ctx, out):
                          "ERROR" if error_type else "OK", status_message, events))
 
 
+def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
+    """The span id of the call that spawned a subagent created at
+    `created_ns`: the agent's last call begun by then. In code mode
+    (`code_mode_host`, on by default) a spawn runs inside an `exec` call
+    whose output need not name the agent, so the time is all there is."""
+    begun = [span_id for start_ns, span_id in state.get("tool_starts") or []
+             if start_ns <= created_ns]
+    return begun[-1] if begun else None
+
+
 def _note_spawned(state: dict, tool: dict, output: str) -> None:
     """spawn_agent answers with the new agent's id, which names its rollout."""
     try:
@@ -390,6 +406,11 @@ def _root(state: dict, ctx: Ctx, start_ns: int) -> Span:
     return _pending(ctx, _root_span_id(state, ctx), state.get("root_parent"),
                     state.get("root_name") or DEFAULT_ROOT_NAME, "AGENT",
                     start_ns, _root_attrs(state))
+
+
+def open_root(state: dict, ctx: Ctx) -> Span:
+    """The root's pending row again, as first sent but for its name."""
+    return _root(state, ctx, state["root_start_ns"])
 
 
 def _adopt_role(state: dict, records: List[Any]) -> None:
