@@ -66,7 +66,7 @@ def test_every_manifest_carries_the_same_version():
                           (ROOT / "pyproject.toml").read_text(), re.M).group(1)
     versions = {_manifest()["version"], claude["version"],
                 market["plugins"][0]["version"], pyproject}
-    assert versions == {"0.5.0"}
+    assert versions == {"0.6.0"}
 
 
 def test_the_mcp_server_signs_in_with_oauth():
