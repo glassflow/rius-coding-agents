@@ -89,6 +89,8 @@ run each of these on its own:
 `/rius:login` opens the Rius console (`https://console.rius-glassflow.com`)
 in the browser, where you sign in or sign up and pick the workspace this
 machine sends to; the plugin stores a key for it. That is the whole flow.
+Over SSH, or on a machine with no display, no browser is opened: open the
+printed link on any device and check that it shows the same code.
 If `/rius:status` doesn't say `on`, the
 [getting started guide](docs/getting-started.md) covers the rest end to end:
 workspace, key and scopes, endpoints, staging, first trace, the Rius MCP
