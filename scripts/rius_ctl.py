@@ -2,7 +2,7 @@
 """CLI backing the /rius:* slash commands (one command file per action).
 
 Actions: on | off | clear | enable-here | disable-here | status | login |
-         login-wait | logout
+         login-wait | logout | use-key
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
@@ -27,7 +27,7 @@ from rius_cc import config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout> "
+    "<on|off|clear|enable-here|disable-here|status|login|login-wait|logout|use-key> "
     "[--session <id>] [--cwd <path>] [--env <production|staging>]"
 )
 
@@ -388,6 +388,13 @@ def _logout(home, cwd):
               % _date(creds.get("expires_at")))
 
 
+def _use_key(home, env_flag):
+    env_name = env_flag or login.DEFAULT_ENVIRONMENT
+    creds = login.use_key(home, sys.stdin.read().strip(), env_name)
+    print("Stored the key for %s; it is sent only to %s. Run /rius:enable-here "
+          "in a folder to trace it." % (env_name, creds["endpoint"]))
+
+
 def _date(timestamp):
     return timestamp[:10] if isinstance(timestamp, str) else "unknown"
 
@@ -396,7 +403,8 @@ def _run_account_action(action, home, cwd, env_flag):
     cwd = cwd or os.getcwd()
     handlers = {"login": lambda: _login(home, cwd, env_flag),
                 "login-wait": lambda: _login_wait(home, cwd),
-                "logout": lambda: _logout(home, cwd)}
+                "logout": lambda: _logout(home, cwd),
+                "use-key": lambda: _use_key(home, env_flag)}
     try:
         handlers[action]()
     except (login.WaitInProgress, login.Superseded) as exc:
@@ -408,7 +416,7 @@ def _run_account_action(action, home, cwd, env_flag):
 def dispatch(argv, home):
     action, session_id, cwd, env_flag = _parse_args(argv)
 
-    if action in ("login", "login-wait", "logout"):
+    if action in ("login", "login-wait", "logout", "use-key"):
         _run_account_action(action, home, cwd, env_flag)
         return
 

@@ -33,15 +33,32 @@ including which endpoint to use for which environment.
 
 ## Where the API key goes
 
-Not into the plugin. The plugin traces only with the key `/rius:login`
-stores in `~/.claude/rius/credentials.json` (mode 0600), and sends it only
-to the server stored with it. `RIUS_API_KEY` and `RIUS_ENDPOINT` in the
+Into `~/.claude/rius/credentials.json` (mode 0600), the same file
+`/rius:login` writes. To use a key you minted in the console, pipe it in
+from a terminal:
+
+```bash
+pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key                # production
+pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env staging
+```
+
+`<plugin>` is the installed plugin's folder, for example
+`~/.claude/plugins/cache/rius-coding-agents/rius/<version>`.
+
+The key is read from stdin, so it never lands in your shell history or a
+command line. The endpoint is the environment's built-in ingest host and
+cannot be given. Storing a key replaces, and revokes, the one stored
+before. There is no slash command for it: Claude cannot store a key for
+you. `/rius:status` shows `Key from: rius_ctl.sh use-key`.
+
+The plugin traces only with that stored key, and sends it only to the
+server stored with it. `RIUS_API_KEY` and `RIUS_ENDPOINT` in the
 environment are ignored: Claude Code hands hooks the `env` block of a
 project's committed `.claude/settings.json`, so honouring them would let any
 repo you clone send your sessions to its own workspace, or your key to its
 own server. `/rius:status` says so when either is set.
 
-A key you mint by hand is for registering the Rius MCP server yourself, as
+A key you mint by hand also works for registering the Rius MCP server yourself, as
 in
 [Exploring your traces](getting-started.md#exploring-your-traces-from-claude-code),
 or for the Rius SDKs. Keep it out of any settings file that is committed.

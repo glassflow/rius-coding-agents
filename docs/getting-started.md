@@ -147,9 +147,9 @@ admins and requires a region to be chosen for it.
 
 ## 2. Mint an API key
 
-The plugin itself only uses the key `/rius:login` stores (see
-[5. Sign in](#5-sign-in)). Mint one by hand for the MCP server or the Rius
-SDKs.
+The plugin itself only uses a key stored in `~/.claude/rius/` (see
+[5. Sign in](#5-sign-in)). To use one you mint here, store it with
+`rius_ctl.sh use-key` ([API keys](api-keys.md#where-the-api-key-goes)).
 
 In the console: workspace settings, then API keys, then create a key.
 
@@ -279,7 +279,9 @@ so a repo you clone could otherwise send your sessions to its own
 workspace, or your key to its own server. `RIUS_API_KEY` and
 `RIUS_ENDPOINT` are ignored, and `/rius:status` says so when either is set.
 
-A key you minted by hand is still what you use to register the MCP server
+To trace with a key you minted in the console instead, store it with
+`rius_ctl.sh use-key` (see [API keys](api-keys.md#where-the-api-key-goes)).
+A hand-minted key is also what you use to register the MCP server
 yourself (see
 [Exploring your traces](#exploring-your-traces-from-claude-code)) or for the
 Rius SDKs.

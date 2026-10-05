@@ -37,7 +37,8 @@ _NO_KEY = "no API key: run `/rius:login`"
 _UNTRUSTED_ENDPOINT = ("no API key: the stored key's server %s is not a Rius "
                        "server, so it is never sent there; run `/rius:login`")
 
-IGNORED_API_KEY = "RIUS_API_KEY is set but ignored; run /rius:login"
+IGNORED_API_KEY = ("RIUS_API_KEY is set but ignored; run /rius:login, or store "
+                   "a console key with `rius_ctl.sh use-key`")
 IGNORED_ENDPOINT = ("RIUS_ENDPOINT is set but ignored; traces go to the "
                     "server your /rius:login key came from")
 IGNORED_ENABLE = ("RIUS_CLAUDE_ENABLED=true is set but ignored; run "
@@ -345,8 +346,9 @@ def _credential(home: str):
     endpoint = creds.get("endpoint")
     if not login.is_rius_url(endpoint, creds.get("env")):
         return None, DEFAULT_ENDPOINT, None, None, _UNTRUSTED_ENDPOINT % endpoint
-    return (creds["api_key"], endpoint, STORED_KEY_SOURCE,
-            creds.get("workspace_name"), None)
+    source = (login.USE_KEY_SOURCE if creds.get("source") == login.USE_KEY_SOURCE
+              else STORED_KEY_SOURCE)
+    return (creds["api_key"], endpoint, source, creds.get("workspace_name"), None)
 
 
 def _ignored_env(env: Mapping[str, str]) -> list:

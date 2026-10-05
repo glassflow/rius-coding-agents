@@ -46,12 +46,14 @@ ENVIRONMENTS = {
         "link_base": "https://connect.console.rius-glassflow.com",
         "console_url": "https://console.rius-glassflow.com",
         "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
+        "ingest_url": "https://ingest.eu.console.rius-glassflow.com",
         "domain": "rius-glassflow.com",
     },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
         "mcp_url": "https://mcp.eu.staging.rius.glassflow.xyz/mcp",
+        "ingest_url": "https://ingest.eu.staging.rius.glassflow.xyz",
         "domain": "rius.glassflow.xyz",
     },
 }
@@ -356,6 +358,28 @@ def _require_rius_urls(body: dict, env_name: str) -> None:
 def _credentials(env_name: str, body: dict) -> dict:
     creds = {field: body.get(field) for field in _CREDENTIAL_FIELDS}
     creds["env"] = env_name
+    return creds
+
+
+USE_KEY_SOURCE = "rius_ctl.sh use-key"
+
+
+def use_key(home: str, api_key: str, env_name: str,
+            post: Callable = post_json) -> dict:
+    """Store a key minted in the console, as `/rius:login` would store its
+    own. The endpoint is the environment's built-in one, never an input."""
+    _require_known(env_name)
+    if not api_key or any(c.isspace() for c in api_key):
+        raise LoginError("No key read. Pipe the key in on stdin, e.g. "
+                         "`pbpaste | rius_ctl.sh use-key`.")
+    environment = ENVIRONMENTS[env_name]
+    creds = {"api_key": api_key, "endpoint": environment["ingest_url"],
+             "mcp_url": environment["mcp_url"], "env": env_name,
+             "source": USE_KEY_SOURCE}
+    previous = read_credentials(home)
+    _write_private(credentials_path(home), creds)
+    if previous and previous["api_key"] != api_key:
+        revoke(previous, post=post)
     return creds
 
 

@@ -19,7 +19,9 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
     with the `/rius:login` key, and sends it only to the server stored with
     it, which must be an `https` Rius host. `/rius:login` refuses to store
     a key whose ingest or MCP server is not one. If you used
-    `RIUS_API_KEY`, run `/rius:login`.
+    `RIUS_API_KEY`, run `/rius:login`, or store a console key with
+    `rius_ctl.sh use-key [--env staging]`, which reads it from stdin and
+    takes the endpoint from the environment you name.
   - `/rius:status` prints one line for each setting that is ignored, and
     the session's start logs it in `~/.claude/rius/log/`. (#37)
 
