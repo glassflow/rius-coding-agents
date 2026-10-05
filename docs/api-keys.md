@@ -19,7 +19,8 @@ you one without leaving Claude Code. To mint one by hand instead, for
   hashed. Expiry is chosen at creation from never, 30 days, 90 days or 1
   year, defaulting to never.
 - Keys are scoped to one workspace and carry scopes. This plugin needs
-  `ingest`. The Rius MCP server needs `read`. One key can hold both.
+  `ingest`. The Rius MCP server needs `read` when you give it a key; the
+  plugin's bundled server signs in with OAuth instead. One key can hold both.
 
 > **The first key has to come from a browser login.** An API key can never
 > mint another API key -- the backend refuses, so that a leaked agent key
@@ -56,7 +57,6 @@ blast radius of a later `/rius:enable-here` wider than it needs to be.
 Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
 as well. Without it, the plugin uses the key `/rius:login` stored in
 `~/.claude/rius/credentials.json` (mode 0600). `RIUS_API_KEY` wins for
-tracing when both are present. The bundled MCP server only ever uses the
-`/rius:login` key; with `RIUS_API_KEY` alone, register the MCP server by
-hand, as in
+tracing when both are present. Neither key reaches the bundled MCP server,
+which signs in with OAuth in `/mcp`; see
 [Exploring your traces](getting-started.md#exploring-your-traces-from-claude-code).

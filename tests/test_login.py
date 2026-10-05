@@ -508,7 +508,7 @@ def server(monkeypatch):
         # These run the real sleep; the floor has its own clock-driven test.
         monkeypatch.setattr(login, "MIN_POLL_SECONDS", 0)
         return fake
-    for name in ("RIUS_API_KEY", "RIUS_ENV", "RIUS_MCP_URL"):
+    for name in ("RIUS_API_KEY", "RIUS_ENV"):
         monkeypatch.delenv(name, raising=False)
     return install
 
@@ -551,8 +551,8 @@ def test_login_wait_success_says_where_it_landed(tmp_path, server, capsys):
     out = capsys.readouterr().out
     assert out.splitlines()[:3] == [
         "Connected as x@acme.com → eng-shared (Acme).",
-        "Trace this folder (/opt/proj)? Run /rius:enable-here.",
-        'Reconnect "rius" in /mcp to query your traces.']
+        "Tracing: signed in as workspace eng-shared (Acme)",
+        "Querying traces: run /mcp and sign in to rius"]
     assert "enabled folder" not in out
     assert "supersecretkey" not in out and DEVICE_CODE not in out
 
@@ -810,122 +810,57 @@ def test_login_with_an_unknown_environment_says_so(tmp_path, server, capsys):
     assert fake.calls == []
 
 
-# --- MCP follows the stored environment ----------------------------------------
+# --- Two sign-ins: the key traces, MCP OAuth queries ---------------------------
 
 PROD_MCP = "https://mcp.eu.console.rius-glassflow.com/mcp"
-STAGING_MCP = "https://mcp.eu.staging.rius.glassflow.xyz/mcp"
+QUERYING = "Querying traces: run /mcp and sign in to rius"
 
 
-def test_the_default_mcp_url_is_production():
-    assert config.DEFAULT_MCP_URL == PROD_MCP
+def _bundled_mcp_server():
+    mcp_json = pathlib.Path(__file__).parent.parent / ".mcp.json"
+    return json.loads(mcp_json.read_text())["mcpServers"]["rius"]
 
 
-def test_login_wait_on_staging_says_how_to_point_mcp_at_it(
-        tmp_path, server, capsys):
-    home = str(tmp_path)
-    _park(home, env="staging")
-    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
-    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
-    out = capsys.readouterr().out
-    assert "RIUS_MCP_URL=%s" % STAGING_MCP in out
-    assert 'Reconnect "rius" in /mcp' not in out
+def test_the_bundled_mcp_server_is_production_at_a_fixed_url():
+    # The directory accepts only an absolute https URL here, and OAuth needs
+    # no helper to hand it a key.
+    assert _bundled_mcp_server() == {"type": "http", "url": PROD_MCP}
+    assert login.ENVIRONMENTS[login.DEFAULT_ENVIRONMENT]["mcp_url"] == PROD_MCP
 
 
-def test_login_wait_is_quiet_about_mcp_when_it_already_points_there(
+def test_login_wait_under_an_env_key_says_the_env_key_still_traces(
         tmp_path, server, capsys, monkeypatch):
-    monkeypatch.setenv("RIUS_MCP_URL", STAGING_MCP + "/")
-    home = str(tmp_path)
-    _park(home, env="staging")
-    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
-    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
-    out = capsys.readouterr().out
-    assert "RIUS_MCP_URL" not in out
-    assert 'Reconnect "rius" in /mcp to query your traces.' in out
-
-
-def test_login_wait_on_production_needs_no_mcp_setting(tmp_path, server, capsys):
     home = str(tmp_path)
     _park(home)
-    server((200, dict(TOKEN_RESPONSE, mcp_url=PROD_MCP)))
-    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
-    out = capsys.readouterr().out
-    assert "RIUS_MCP_URL" not in out
-    assert 'Reconnect "rius" in /mcp to query your traces.' in out
-
-
-def test_login_wait_under_an_env_key_still_points_mcp_at_the_new_key(
-        tmp_path, server, capsys, monkeypatch):
-    # Claude Code withholds credential-named variables from a plugin's
-    # headersHelper, so the bundled server uses the stored key regardless.
-    home = str(tmp_path)
-    _park(home, env="staging")
-    server((200, dict(TOKEN_RESPONSE, mcp_url=STAGING_MCP)))
+    server((200, TOKEN_RESPONSE))
     monkeypatch.setenv("RIUS_API_KEY", "ri_env")
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
-    assert "RIUS_MCP_URL=%s" % STAGING_MCP in out
     assert ("NOTE: RIUS_API_KEY is set in your environment and still wins "
-            "over this key for tracing. Unset it to trace with the new one. "
-            "The bundled MCP server uses the new key either way.") in out
+            "over this key for tracing. Unset it to trace with the new one.") in out
+    assert QUERYING in out
 
 
-def test_a_key_without_an_mcp_url_is_not_flagged(tmp_path, server, capsys):
-    home = str(tmp_path)
-    _park(home)
-    body = dict(TOKEN_RESPONSE)
-    del body["mcp_url"]
-    server((200, body))
-    rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
-    assert "RIUS_MCP_URL" not in capsys.readouterr().out
-
-
-def test_status_shows_the_mcp_url_and_flags_a_mismatch(tmp_path):
-    home = str(tmp_path)
-    _store(home, mcp_url=STAGING_MCP)
-    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
-    assert "MCP: %s" % PROD_MCP in r.stdout
-    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
-
-
-def test_status_follows_rius_mcp_url(tmp_path):
-    home = str(tmp_path)
-    _store(home, mcp_url=STAGING_MCP)
-    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home,
-             {"RIUS_MCP_URL": STAGING_MCP})
-    assert "MCP: %s" % STAGING_MCP in r.stdout
-    assert "RIUS_MCP_URL=" not in r.stdout
-
-
-def test_status_under_an_env_key_still_flags_the_stored_key_s_mcp(tmp_path):
-    home = str(tmp_path)
-    _store(home, mcp_url=STAGING_MCP)
-    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home,
-             {"RIUS_API_KEY": "ri_env"})
-    assert "MCP: %s" % PROD_MCP in r.stdout
-    assert "MCP key: /rius:login" in r.stdout
-    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
-
-
-def test_status_under_an_env_key_alone_says_mcp_has_no_key(tmp_path):
-    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path),
-             {"RIUS_API_KEY": "ri_env"})
-    assert ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
-            "bundled MCP server; run /rius:login to query your traces.") in r.stdout
-
-
-def test_status_with_a_stored_key_names_it_as_the_mcp_key(tmp_path):
+def test_status_names_the_tracing_workspace_and_the_mcp_sign_in(tmp_path):
     home = str(tmp_path)
     _store(home)
     r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
-    assert "MCP key: /rius:login" in r.stdout
-    assert 'Reconnect "rius" in /mcp' in r.stdout
+    assert "Tracing: signed in as workspace personal (Me)" in r.stdout
+    assert QUERYING in r.stdout
+    assert "MCP key" not in r.stdout and "RIUS_MCP_URL" not in r.stdout
 
 
-def test_a_staging_key_without_an_mcp_url_is_still_flagged(tmp_path):
-    home = str(tmp_path)
-    _store(home, env="staging")
-    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], home)
-    assert "RIUS_MCP_URL=%s" % STAGING_MCP in r.stdout
+def test_status_under_an_env_key_says_where_the_tracing_key_comes_from(tmp_path):
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path),
+             {"RIUS_API_KEY": "ri_env"})
+    assert "Tracing: using the key from RIUS_API_KEY" in r.stdout
+    assert QUERYING in r.stdout
+
+
+def test_status_without_a_key_says_to_sign_in_for_tracing(tmp_path):
+    r = _ctl(["status", "--session", "s1", "--cwd", "/x"], str(tmp_path))
+    assert "Tracing: not signed in; run /rius:login" in r.stdout
+    assert QUERYING in r.stdout
 
 
 def test_a_key_of_an_unknown_environment_is_not_revoked_anywhere():
