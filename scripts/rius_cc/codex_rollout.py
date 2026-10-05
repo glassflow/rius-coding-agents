@@ -68,7 +68,10 @@ def _usage(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     last = info.get("last_token_usage") if isinstance(info, dict) else None
     if not isinstance(last, dict):
         return None         # a rate-limit-only update: no model call behind it
+    total = info.get("total_token_usage")
     return {
+        "session_total_tokens": _int(total.get("total_tokens")
+                                     if isinstance(total, dict) else None),
         "input_tokens": _int(last.get("input_tokens")),
         "cached_input_tokens": _int(last.get("cached_input_tokens")),
         "output_tokens": _int(last.get("output_tokens")),

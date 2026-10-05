@@ -100,6 +100,21 @@ def test_token_totals_match_codex_own_total(fixtures_dir):
     assert sum(s.attributes["gen_ai.usage.output_tokens"] for s in llms) == 105
 
 
+def test_a_repeated_token_count_is_not_another_model_call(tmp_path, fixtures_dir):
+    # Codex re-sends its last usage with a rate-limit update; the running
+    # total does not move, so no model call is behind it.
+    lines = (fixtures_dir / FIXTURE).read_bytes().splitlines(keepends=True)
+    doubled = tmp_path / "rollout-doubled.jsonl"
+    doubled.write_bytes(b"".join(
+        line * 2 if b'"token_count"' in line else line for line in lines))
+    ctx, state = _ctx(), cs.new_state()
+    records, _ = cr.read_from(str(doubled), 0)
+    out = cs.build(records, state, ctx)
+    llms = _of_kind(out, "LLM")
+    assert len(llms) == 6
+    assert sum(s.attributes["gen_ai.usage.input_tokens"] for s in llms) == 51000
+
+
 def test_a_failed_command_is_typed_by_its_exit_code(fixtures_dir):
     out, _ = _build(fixtures_dir)
     failed = [t for t in _of_kind(out, "TOOL") if t.status_code == "ERROR"]

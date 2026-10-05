@@ -145,7 +145,22 @@ def _usage_attrs(ctx: Ctx, model: str, rec) -> Dict[str, Any]:
     return attrs
 
 
+def _repeats_last_call(rec, state: dict) -> bool:
+    """A token_count that leaves the session's running total where it was
+    reports no new model call: Codex re-sends its last usage alongside
+    other updates (rate limits, say)."""
+    total = rec.get("session_total_tokens")
+    if not total:
+        return False
+    if total == state.get("session_total_tokens"):
+        return True
+    state["session_total_tokens"] = total
+    return False
+
+
 def _on_usage(rec, state, ctx, out):
+    if _repeats_last_call(rec, state):
+        return
     turn = state["turn"]
     attrs = _usage_attrs(ctx, state["model"], rec)
     _content_attr(ctx, attrs, "output.value", turn["reply"])
