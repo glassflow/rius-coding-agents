@@ -36,11 +36,18 @@ def _is_codex(payload: dict, env, home: str) -> bool:
     name = os.path.basename(transcript)
     if name.startswith("rollout-") and name.endswith(".jsonl"):
         return True
-    return _is_within(transcript, _codex_home(env, home))
+    # A CODEX_HOME set to a parent of Claude Code's home must not swallow
+    # Claude Code's own transcripts.
+    return (_is_within(transcript, _codex_home(env, home))
+            and not _is_within(transcript, _claude_home(env, home)))
 
 
 def _codex_home(env, home: str) -> str:
     return env.get("CODEX_HOME") or os.path.join(home, ".codex")
+
+
+def _claude_home(env, home: str) -> str:
+    return env.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
 
 
 def _is_within(path: str, root: str) -> bool:
