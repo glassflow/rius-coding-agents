@@ -60,7 +60,7 @@ def test_an_escaped_line_break_ends_a_value():
     secret = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
     text = json.dumps({"text": "aws_access_key_id = %s\naws_secret_access_key"
                                " = %s\n" % ("AKIA" + "Q" * 16, secret)})
-    out = scrub.scrub(text)
+    out = scrub.scrub(text, json_text=True)
     assert secret not in out
     assert json.loads(out)["text"].endswith(
         "aws_secret_access_key = %s\n" % scrub.marker("access-key"))
@@ -76,9 +76,40 @@ def test_an_escaped_line_break_ends_a_value():
 def test_scrubbed_json_is_still_json(command):
     """A value cut at an escaped quote broke the JSON, and with it the check
     that a call reads a secret-shaped file."""
-    out = scrub.scrub(json.dumps({"command": command, "cwd": ""}))
+    out = scrub.scrub(json.dumps({"command": command, "cwd": ""}), json_text=True)
     assert json.loads(out)["cwd"] == ""
     assert scrub.reads_secret_file(out)
+
+
+# Plain text, and what 0.5.0's scrubber made of it: a backslash is part of
+# the value, so a Windows path or a literal `\t` cannot cut it short.
+PLAIN = [
+    (r"password=C:\temp\secret more", "password=[redacted:password] more"),
+    (r"token=abc\tdef", "token=[redacted:token]"),
+    (r"token=ab\\cd x", "token=[redacted:token] x"),
+    (r"secret=x\ny", "secret=[redacted:secret]"),
+    (r'api_key=a\"b c', 'api_key=[redacted:api-key]"b c'),
+]
+
+
+@pytest.mark.parametrize("text, expected", PLAIN)
+def test_plain_text_redacts_the_whole_value(text, expected):
+    assert scrub.scrub(text) == expected
+    assert spans.exportable(text, 1000) == expected
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("PASSWORD=hunter2\nnext line", "PASSWORD=[redacted:password]\nnext line"),
+    ("token=abc\tdef", "token=[redacted:token]\tdef"),
+    ("password=C:\\temp\\secret more", "password=[redacted:password] more"),
+    ('secret=x\\', "secret=[redacted:secret]"),
+])
+def test_json_text_stops_a_value_at_an_escape_and_stays_json(line, expected):
+    """JSON-encoded, `\\n` ends the line but `\\\\` is a backslash."""
+    text = json.dumps({"out": line, "cwd": ""})
+    out = scrub.scrub(text, json_text=True)
+    assert json.loads(out) == {"out": expected, "cwd": ""}
+    assert json.loads(spans.exportable(text, 1000, json_text=True))["out"] == expected
 
 
 def test_an_unterminated_private_key_is_removed_to_the_end():
@@ -114,9 +145,10 @@ ADVERSARIAL = {
 
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL))
 def test_a_32kb_value_scrubs_in_linear_time(name):
-    started = time.perf_counter()
-    scrub.scrub(ADVERSARIAL[name])
-    assert time.perf_counter() - started < 0.5, name
+    for json_text in (False, True):
+        started = time.perf_counter()
+        scrub.scrub(ADVERSARIAL[name], json_text)
+        assert time.perf_counter() - started < 0.5, name
 
 
 def test_a_secret_cut_by_the_cap_is_still_removed():

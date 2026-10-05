@@ -308,10 +308,12 @@ def _on_tool_output(rec, state, ctx, out):
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
-    _content_attr(ctx, attrs, "input.value", tool["input_json"])
+    # Arguments are JSON, and an output often is (JSON.stringify in exec).
+    _content_attr(ctx, attrs, "input.value", tool["input_json"], json_text=True)
     secret_file = reads_secret_file(tool["input_json"])
     _content_attr(ctx, attrs, "output.value",
-                  scrub.SECRET_FILE_MARKER if secret_file else output)
+                  scrub.SECRET_FILE_MARKER if secret_file else output,
+                  json_text=True)
     error_type = tool_error(tool, output)
     status_message, events = "", []
     if error_type:
@@ -361,7 +363,8 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     for tool in state["open_tools"].values():
         attrs = _attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", tool["input_json"])
+        _content_attr(ctx, attrs, "input.value", tool["input_json"],
+                      json_text=True)
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                              tool["tool_name"], "TOOL", tool["start_ns"],
                              now_ns, attrs, status_code="UNSET"))

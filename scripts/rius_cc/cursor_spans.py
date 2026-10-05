@@ -89,10 +89,12 @@ def _base_attrs(ctx: Ctx, kind_oi: str, model: str = "") -> Dict[str, Any]:
     return attrs
 
 
-def _content(ctx: Ctx, attrs: Dict[str, Any], key: str, value: Any) -> None:
+def _content(ctx: Ctx, attrs: Dict[str, Any], key: str, value: Any,
+             json_text: bool = False) -> None:
     if not ctx.capture_content or value in (None, "", [], {}):
         return
-    attrs[key] = exportable(_as_text(value), ctx.max_attr_bytes)
+    attrs[key] = exportable(_as_text(value), ctx.max_attr_bytes,
+                            json_text or not isinstance(value, str))
 
 
 def _as_text(value: Any) -> str:
@@ -544,9 +546,11 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
     if tool["closed_at_session_end"]:
         # No postToolUse came: the outcome is unknown, not OK.
         attrs["cursor.tool.closed_at_session_end"] = True
-    _content(ctx, attrs, "input.value", tool["input"])
+    # A tool's input and output are JSON as Cursor sends them.
+    _content(ctx, attrs, "input.value", tool["input"], json_text=True)
     _content(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
-             if tool["output"] and _reads_secret_file(tool) else tool["output"])
+             if tool["output"] and _reads_secret_file(tool) else tool["output"],
+             json_text=True)
     finished = (tool["end_ns"] and not tool["interrupted"]
                 and not tool["closed_at_session_end"])
     status, message, events = ("OK" if finished else "UNSET"), "", []

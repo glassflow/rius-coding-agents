@@ -91,13 +91,19 @@ def spool_path(spool_dir: str, conversation_id: str) -> str:
     return os.path.join(spool_dir, name + SPOOL_SUFFIX)
 
 
-def _content_value(value: Any, max_bytes: int) -> str:
+# Content fields Cursor sends as JSON, or as a JSON string.
+_JSON_FIELDS = ("tool_input", "tool_output", "result_json", "edits",
+                "attachments", "modified_files")
+
+
+def _content_value(key: str, value: Any, max_bytes: int) -> str:
     """Content as the spool keeps it: secrets removed before it touches
     the disk, since the spool outlives the session by up to a week. Only
     what is kept is scrubbed, so a huge output cannot run the hook past
     Cursor's timeout."""
-    text = value if isinstance(value, str) else json.dumps(value)
-    return exportable(text, max_bytes)
+    if isinstance(value, str):
+        return exportable(value, max_bytes, key in _JSON_FIELDS)
+    return exportable(json.dumps(value), max_bytes, True)
 
 
 # What a call that reads a secret-shaped file returns, or writes into it.
@@ -179,7 +185,7 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
                 record[key] = (
                     scrub.SECRET_FILE_MARKER
                     if secret_file and key in _SECRET_FILE_FIELDS
-                    else _content_value(payload[key], max_attr_bytes))
+                    else _content_value(key, payload[key], max_attr_bytes))
     return record
 
 
