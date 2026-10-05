@@ -122,3 +122,33 @@ def test_a_cursor_session_reaches_the_receiver_as_one_tree(server, tmp_path):
     assert not any(k.startswith("gen_ai.usage") for s in spans.values()
                    for k in _attrs(s))
     assert not (tmp_path / ".claude").exists()
+
+
+@posix_only("Cursor hooks run the launcher through bash")
+def test_a_real_headless_subagent_reaches_the_receiver_in_one_tree(
+        server, tmp_path):
+    """Payloads captured from cursor-agent -p, with the session env the CLI
+    handed each hook: the subagent's events carry only its own id."""
+    with agent.using(agent.CURSOR):
+        sign_in(str(tmp_path), api_key="glassflow_dummy", endpoint=server)
+        config.write_path_rules(str(tmp_path),
+                                {"enabled_paths": ["/Users/dev/project"]})
+    for payload in cursor_fixtures.payloads("real_headless_subagent"):
+        session_env = payload.pop("_hook_env", {})
+        env = minimal_env(HOME=str(tmp_path),
+                          PATH="/usr/bin:/bin:/usr/local/bin", **session_env)
+        event = payload["hook_event_name"]
+        r = subprocess.run([BASH, LAUNCHER, "--agent", "cursor", event],
+                           input=json.dumps(payload), capture_output=True,
+                           text=True, env=env, timeout=30)
+        assert r.returncode == 0 and isinstance(json.loads(r.stdout), dict)
+    _wait_for_closed_root()
+
+    latest = _latest_spans()
+    spans = [span for span, _ in latest.values()]
+    assert len({span.trace_id for span in spans}) == 1
+    task = next(s for s in spans if s.name == "Task")
+    subagent = next(s for s in spans if s.name == "explore")
+    assert subagent.parent_span_id == task.span_id
+    assert sum(1 for s in spans if s.parent_span_id == subagent.span_id) == 6
+    assert sum(1 for s in spans if s.name == "turn") == 1

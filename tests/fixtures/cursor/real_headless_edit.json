@@ -1,0 +1,260 @@
+{
+ "_source": "REAL, captured from cursor-agent 2026.10.01-e373342 (cursor-agent -p, Read then Write of one file; the CLI reused one tool_use_id) on 2026-10-05 and redacted: ids remapped, all content, emails, paths and tokens replaced. _hook_env is the session env the CLI handed that hook (set by a Rius sessionStart answer).",
+ "events": [
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "is_background_agent": false,
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "sessionStart",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "<redacted content>"
+   },
+   "tool_use_id": "call-c0de0007-0000-4000-8000-000000000008-0\nfc_c0de0008-0000-4000-8000-000000000009_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "preToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0009-0000-4000-8000-00000000000a-0-step",
+   "model": "cursor-grok-4.5-high-fast",
+   "model_id": "grok-4.5",
+   "model_params": [
+    {
+     "id": "effort",
+     "value": "high"
+    },
+    {
+     "id": "speed",
+     "value": "fast"
+    }
+   ],
+   "text": "<redacted content>",
+   "duration_ms": 1,
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "afterAgentThought",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": null,
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "<redacted content>"
+   },
+   "tool_output": "{\"file_path\": \"<redacted content>\", \"content_length\": 32}",
+   "duration": 463.609,
+   "tool_use_id": "call-c0de0007-0000-4000-8000-000000000008-0\nfc_c0de0008-0000-4000-8000-000000000009_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "postToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "<redacted content>"
+   },
+   "tool_use_id": "call-c0de000a-0000-4000-8000-00000000000b-1\nfc_c0de000b-0000-4000-8000-00000000000c_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "preToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0009-0000-4000-8000-00000000000a-1-step",
+   "model": "cursor-grok-4.5-high-fast",
+   "model_id": "grok-4.5",
+   "model_params": [
+    {
+     "id": "effort",
+     "value": "high"
+    },
+    {
+     "id": "speed",
+     "value": "fast"
+    }
+   ],
+   "text": "<redacted content>",
+   "duration_ms": 2,
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "afterAgentThought",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Read",
+   "tool_input": {
+    "file_path": "<redacted content>"
+   },
+   "tool_output": "{\"file_path\": \"<redacted content>\", \"content_length\": 32}",
+   "duration": 2.23,
+   "tool_use_id": "call-c0de000a-0000-4000-8000-00000000000b-1\nfc_c0de000b-0000-4000-8000-00000000000c_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "postToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Write",
+   "tool_input": {
+    "file_path": "<redacted content>",
+    "content": "<redacted content>"
+   },
+   "tool_use_id": "call-c0de000a-0000-4000-8000-00000000000b-1\nfc_c0de000b-0000-4000-8000-00000000000c_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "preToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "tool_name": "Write",
+   "tool_input": {
+    "file_path": "<redacted content>",
+    "content": "<redacted content>"
+   },
+   "tool_output": "{\"file_path\": \"<redacted content>\", \"success\": true}",
+   "duration": 34.167,
+   "tool_use_id": "call-c0de000a-0000-4000-8000-00000000000b-1\nfc_c0de000b-0000-4000-8000-00000000000c_0",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "postToolUse",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0009-0000-4000-8000-00000000000a-2-step",
+   "model": "cursor-grok-4.5-high-fast",
+   "model_id": "grok-4.5",
+   "model_params": [
+    {
+     "id": "effort",
+     "value": "high"
+    },
+    {
+     "id": "speed",
+     "value": "fast"
+    }
+   ],
+   "text": "<redacted content>",
+   "duration_ms": 1,
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "afterAgentThought",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  },
+  {
+   "conversation_id": "c0de0006-0000-4000-8000-000000000007",
+   "generation_id": "c0de0006-0000-4000-8000-000000000007",
+   "model": "default",
+   "reason": "completed",
+   "duration_ms": 15374,
+   "is_background_agent": false,
+   "final_status": "completed",
+   "session_id": "c0de0006-0000-4000-8000-000000000007",
+   "hook_event_name": "sessionEnd",
+   "cursor_version": "2026.10.01-e373342",
+   "workspace_roots": [
+    "/Users/dev/project"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/p/agent-transcripts/c0de0006-0000-4000-8000-000000000007.jsonl",
+   "_hook_env": {
+    "RIUS_CURSOR_SESSION_ID": "c0de0006-0000-4000-8000-000000000007"
+   }
+  }
+ ]
+}

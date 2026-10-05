@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from . import agent, cursor_events, cursor_spans
 
 SPOOL_DIRNAME = "spool"
-PARENT_SUFFIX = ".parent"
+PARENT_SUFFIX = cursor_events.PARENT_SUFFIX
 TICKS_SUFFIX = ".ticks"
 
 # Exported at once: the session opening, a turn or subagent finishing, the

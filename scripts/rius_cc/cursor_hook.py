@@ -7,6 +7,7 @@ spool and talking to the network are the detached exporter's job.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, Mapping, NamedTuple, Optional
 
 from . import config, cursor_events, cursor_export, state
@@ -55,8 +56,34 @@ def _context_note(session_env: Dict[str, str]) -> str:
     """The same values for the agent itself: Cursor applies a sessionStart
     `env` to later hooks, and may not pass it to the agent's Shell tool."""
     return ("%s plugin root %s, session id %s (used only by the /rius-* "
-            "commands)." % (CONTEXT_NOTE_PREFIX, session_env[PLUGIN_ROOT_ENV],
-                            session_env.get(SESSION_ENV, "unknown")))
+            "commands; ignore it for anything else)."
+            % (CONTEXT_NOTE_PREFIX, session_env[PLUGIN_ROOT_ENV],
+               session_env.get(SESSION_ENV, "unknown")))
+
+
+# A subagent's first event is a tool call or a thought, never these.
+_NEVER_FIRST_IN_A_SUBAGENT = ("sessionStart", "beforeSubmitPrompt",
+                              "sessionEnd", "subagentStart", "subagentStop")
+
+
+def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
+                           sdir: str) -> None:
+    """Hang a subagent that fired no subagentStart under its parent.
+
+    `cursor-agent -p` fires no subagentStart: a Task subagent's events
+    arrive under the subagent's own conversation id with nothing that names
+    the parent. The session env that sessionStart returned still names it,
+    so a conversation that first shows up while a different one owns the
+    session is that one's subagent.
+    """
+    parent = str(env.get(SESSION_ENV) or "")
+    if (event in _NEVER_FIRST_IN_A_SUBAGENT or parent == key
+            or not state.is_valid_session_id(parent)
+            or os.path.exists(cursor_events.spool_path(sdir, key))
+            or not os.path.exists(cursor_events.spool_path(sdir, parent))
+            or cursor_export.root_conversation(sdir, key) != key):
+        return
+    cursor_export.link_subagent(sdir, key, parent)
 
 
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
@@ -90,6 +117,7 @@ def handle(event: str, payload: Any, env: Mapping[str, str],
     key = cursor_events.spool_key(payload)
     if not state.is_valid_session_id(key):
         return None
+    link_headless_subagent(event, key, env, sdir)
     root = cursor_export.root_conversation(sdir, key)
     if not state.is_valid_session_id(root):
         return None

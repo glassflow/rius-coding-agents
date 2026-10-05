@@ -16,6 +16,7 @@ is the same row. Cursor reports no token counts, so no LLM span has any.
 from __future__ import annotations
 
 import json
+import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +43,17 @@ _PROVIDER_PREFIXES = (
 )
 
 _NO_MODEL = ("", "unknown", "default")
+
+# cursor-agent names each model step of a turn `<turn id>-<step>-<random>`
+# in afterAgentThought; the turn itself is the bare id.
+_STEP_OF_TURN = re.compile(
+    r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"-[0-9]+-[0-9A-Za-z]+$")
+
+
+def turn_key(generation_id: str) -> str:
+    match = _STEP_OF_TURN.match(generation_id)
+    return match.group(1) if match else generation_id
 _TURN_STATUS = {"completed": "OK", "error": "ERROR"}
 
 
@@ -102,6 +114,38 @@ class _Fold:
         self.tools: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.subagents: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.last_ns = 0
+        # Bumped by each sessionEnd: `cursor-agent -p --resume` runs one
+        # prompt per process, each closed by its own sessionEnd.
+        self.segment = 0
+
+    def note_scope(self, event: Dict[str, Any]) -> None:
+        """A linked subagent that fired no subagentStart (cursor-agent -p)
+        gets its span from its first event, under the latest Task call."""
+        cid = str(event.get("conversation_id") or "")
+        if not cid or cid == self.cid or event.get("event") in (
+                "subagentStart", "subagentStop"):
+            return
+        sub = self.subagents.get(cid)
+        if sub is None:
+            task = self._unclaimed_task()
+            sub = {"id": cid, "start_ns": event["ts"], "end_ns": None,
+                   "type": (task or {}).get("subagent_type") or "",
+                   "model": "", "tool_call_id": task["id"] if task else "",
+                   "turn": task["turn"] if task else None, "task": None,
+                   "stop": {}, "implicit": True, "last_ns": event["ts"],
+                   "segment": self.segment}
+            self.subagents[cid] = sub
+        if sub.get("implicit"):
+            sub["last_ns"] = event["ts"]
+            sub["model"] = sub["model"] or _model_of(event)
+
+    def _unclaimed_task(self) -> Optional[Dict[str, Any]]:
+        claimed = {s["tool_call_id"] for s in self.subagents.values()}
+        for tool in reversed(list(self.tools.values())):
+            if (tool["name"] == "Task" and tool["scope"] == self.cid
+                    and tool["key"] not in claimed):
+                return tool
+        return None
 
     def scope_of(self, event: Dict[str, Any]) -> str:
         """The conversation an event ran in: ours, or a subagent's."""
@@ -118,15 +162,17 @@ class _Fold:
         if (not gen or self.scope_of(event) != self.cid
                 or gen in (self.cid, event.get("session_id"))):
             return None
-        key = gen
+        key = turn_key(gen)
         turn = self.turns.get(key)
         if turn is None:
             turn = {"key": key, "start_ns": event["ts"],
                     "end_ns": None, "prompt": None, "status": "",
-                    "loop_count": None, "model": "", "texts": [],
-                    "response_ns": 0, "thought_ms": 0, "context": {}}
+                    "loop_count": None, "model": "", "model_id": "",
+                    "texts": [], "response_ns": 0, "thought_ms": 0,
+                    "context": {}, "segment": self.segment}
             self.turns[key] = turn
         turn["model"] = _model_of(event) or turn["model"]
+        turn["model_id"] = str(event.get("model_id") or "") or turn["model_id"]
         return turn
 
 
@@ -141,6 +187,29 @@ def _on_session_end(fold: _Fold, e: Dict[str, Any]) -> None:
     fold.root["end_ns"] = e["ts"]
     for key in ("reason", "final_status", "duration_ms", "error_message"):
         fold.root[key] = e.get(key)
+    _close_segment(fold, e)
+    fold.segment += 1
+
+
+def _close_segment(fold: _Fold, e: Dict[str, Any]) -> None:
+    """End what this process left open: in cursor-agent -p no stop ends a
+    turn, a Task call gets no postToolUse, and a subagent no subagentStop.
+    Left open, a later --resume of the conversation would stretch them."""
+    for sub in fold.subagents.values():
+        if sub["end_ns"] is None and sub.get("segment") == fold.segment:
+            sub["end_ns"] = sub.get("last_ns") or e["ts"]
+            task = fold.tools.get(sub["tool_call_id"])
+            if task is not None and task["end_ns"] is None:
+                task["end_ns"] = sub["end_ns"]
+                task["closed_at_session_end"] = True
+    for tool in fold.tools.values():
+        if tool["end_ns"] is None and tool["segment"] == fold.segment:
+            tool["end_ns"] = e["ts"]
+            tool["closed_at_session_end"] = True
+    for turn in fold.turns.values():
+        if turn["end_ns"] is None and turn["segment"] == fold.segment:
+            turn["end_ns"] = e["ts"]
+            turn["status"] = turn["status"] or str(e.get("final_status") or "")
 
 
 def _on_prompt(fold: _Fold, e: Dict[str, Any]) -> None:
@@ -180,20 +249,34 @@ def _on_compact(fold: _Fold, e: Dict[str, Any]) -> None:
             turn["context"][key] = e[key]
 
 
-def _tool(fold: _Fold, e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _tool_key(fold: _Fold, e: Dict[str, Any]) -> str:
+    """cursor-agent can hand two calls one tool_use_id (a Read and the
+    Write after it); the tool name tells them apart."""
     tool_id = str(e.get("tool_use_id") or "")
-    if not tool_id:
+    name = str(e.get("tool_name") or "")
+    known = fold.tools.get(tool_id)
+    if tool_id and name and known is not None and known["name"] != name:
+        return "%s#%s" % (tool_id, name)
+    return tool_id
+
+
+def _tool(fold: _Fold, e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    key = _tool_key(fold, e)
+    if not key:
         return None
-    tool = fold.tools.get(tool_id)
+    tool = fold.tools.get(key)
     if tool is None:
         turn = fold.turn_for(e)
-        tool = {"id": tool_id, "name": str(e.get("tool_name") or "tool"),
+        tool = {"key": key, "id": str(e.get("tool_use_id")),
+                "name": str(e.get("tool_name") or "tool"),
                 "scope": fold.scope_of(e),
                 "turn": turn["key"] if turn else None,
-                "start_ns": None, "end_ns": None, "input": None,
-                "output": None, "failure": None, "error": None,
-                "interrupted": False, "exit_code": None, "model": _model_of(e)}
-        fold.tools[tool_id] = tool
+                "segment": fold.segment, "start_ns": None, "end_ns": None,
+                "input": None, "output": None, "failure": None, "error": None,
+                "interrupted": False, "exit_code": None, "model": _model_of(e),
+                "subagent_type": e.get("subagent_type") or "",
+                "closed_at_session_end": False}
+        fold.tools[key] = tool
     if e.get("tool_input") is not None:
         tool["input"] = e["tool_input"]
     return tool
@@ -243,7 +326,7 @@ def _on_subagent_start(fold: _Fold, e: Dict[str, Any]) -> None:
         "model": e.get("subagent_model") or "",
         "tool_call_id": str(e.get("tool_call_id") or ""),
         "turn": turn["key"] if turn else None,
-        "task": e.get("task"), "stop": {},
+        "task": e.get("task"), "stop": {}, "segment": fold.segment,
     }
 
 
@@ -276,12 +359,34 @@ def _fold_events(events: List[Dict[str, Any]], conversation_id: str) -> _Fold:
         if not fold.root.get("start_ns"):
             fold.root["start_ns"] = e["ts"]
         fold.last_ns = max(fold.last_ns, e["ts"])
+        fold.note_scope(e)
         handler = _HANDLERS.get(e.get("event") or "")
         if handler is not None:
             handler(fold, e)
         if not fold.root.get("model"):
             fold.root["model"] = _model_of(e)
+            fold.root["model_id"] = str(e.get("model_id") or "")
+    _adopt_orphan_tools(fold)
     return fold
+
+
+def _adopt_orphan_tools(fold: _Fold) -> None:
+    """cursor-agent stamps tool hooks with the conversation id, not the
+    turn's generation id, so a tool would hang off the session. It belongs
+    to the turn of the same process that had started by then, or to that
+    process's first turn when the tool's hook fired before any thought."""
+    for tool in fold.tools.values():
+        if tool["turn"] is not None or tool["scope"] != fold.cid:
+            continue
+        turns = [t for t in fold.turns.values()
+                 if t["segment"] == tool["segment"]]
+        if not turns:
+            continue
+        start = tool["start_ns"] if tool["start_ns"] is not None else 0
+        started = [t for t in turns if t["start_ns"] <= start]
+        turn = started[-1] if started else turns[0]
+        tool["turn"] = turn["key"]
+        turn["start_ns"] = min(turn["start_ns"], start or turn["start_ns"])
 
 
 class _Ids:
@@ -324,7 +429,8 @@ def _scope_parent(fold: _Fold, ids: _Ids, scope: str) -> str:
 
 def _root_span(fold: _Fold, ctx: Ctx, ids: _Ids, end_ns: Optional[int]) -> Span:
     root = fold.root
-    attrs = _base_attrs(ctx, "AGENT", root.get("model") or "")
+    attrs = _base_attrs(ctx, "AGENT",
+                        root.get("model_id") or root.get("model") or "")
     _set(attrs, "cursor.composer_mode", root.get("composer_mode"))
     _set(attrs, "cursor.background", root.get("background"))
     _set(attrs, "cursor.session.reason", root.get("reason"))
@@ -362,7 +468,7 @@ def _llm_span(ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
     if end_ns is None:
         return None
     model = turn["model"]
-    attrs = _base_attrs(ctx, "LLM", model)
+    attrs = _base_attrs(ctx, "LLM", turn["model_id"] or model)
     _set(attrs, "gen_ai.request.model", model)
     _set(attrs, "gen_ai.response.model", model)
     if turn["thought_ms"]:
@@ -431,10 +537,14 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
     attrs["gen_ai.tool.call.id"] = tool["id"]
     if tool["interrupted"]:
         attrs["cursor.tool.interrupted"] = True
+    if tool["closed_at_session_end"]:
+        # No postToolUse came: the outcome is unknown, not OK.
+        attrs["cursor.tool.closed_at_session_end"] = True
     _content(ctx, attrs, "input.value", tool["input"])
     _content(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
              if tool["output"] and _reads_secret_file(tool) else tool["output"])
-    finished = tool["end_ns"] and not tool["interrupted"]
+    finished = (tool["end_ns"] and not tool["interrupted"]
+                and not tool["closed_at_session_end"])
     status, message, events = ("OK" if finished else "UNSET"), "", []
     if _tool_failed(tool):
         error_type = tool_error_type(tool)
@@ -444,14 +554,15 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
         events.append((tool["end_ns"], "exception", {
             "exception.type": error_type, "exception.message": message}))
     start_ns = tool["start_ns"] if tool["start_ns"] is not None else fold.last_ns
-    return _span(ids, span_id_for(tool["id"]), _tool_parent(fold, ids, tool),
+    return _span(ids, span_id_for(tool["key"]), _tool_parent(fold, ids, tool),
                  tool["name"], "TOOL", start_ns, end_ns, attrs, status,
                  message, events)
 
 
 def _subagent_parent(fold: _Fold, ids: _Ids, sub: Dict[str, Any]) -> str:
-    if sub["tool_call_id"] in fold.tools:
-        return span_id_for(sub["tool_call_id"])
+    task = fold.tools.get(sub["tool_call_id"])
+    if task is not None:
+        return span_id_for(task["key"])
     if sub["turn"]:
         return ids.turn(sub["turn"])
     return ids.root
