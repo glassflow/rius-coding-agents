@@ -30,6 +30,32 @@ case "$0" in
     *)    dir= ;;
 esac
 
+# Fast exit, before any Python starts (RIUS-1224): with no key anywhere,
+# hook.py resolves no key and returns without doing anything, so on a
+# signed-out machine every tool call would pay two interpreter startups for
+# nothing. File tests only. Anything uncertain falls through to hook.py.
+rius_hook_has_work() {
+    [ -n "${RIUS_API_KEY:-}" ] && return 0
+    [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
+    for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
+        [ -n "$rius_home" ] || continue
+        rius_dir="$rius_home/.claude/rius"
+        [ -e "$rius_dir/credentials.json" ] && return 0
+        # A trace still open on the backend (state.sync_open_marker).
+        for rius_open in "$rius_dir"/state/*.open; do
+            [ -e "$rius_open" ] && return 0
+        done
+        # SessionStart may owe a notice: the once-ever install hint, or
+        # "run /rius:login" for folders enabled before signing in.
+        if [ "${1:-}" = "SessionStart" ]; then
+            [ -e "$rius_dir/install-notice-shown" ] || return 0
+            [ -e "$rius_dir/config.json" ] && return 0
+        fi
+    done
+    return 1
+}
+rius_hook_has_work "${1:-}" || exit 0
+
 # Guarded, not bare: a failed `.` would end this shell non-zero, which is
 # the one thing a hook may never do.
 if [ -n "$dir" ] && [ -r "$dir/_find_python.sh" ]; then

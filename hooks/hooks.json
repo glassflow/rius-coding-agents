@@ -7,7 +7,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" SessionStart",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 10
           }
         ]
       }
@@ -18,7 +19,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" UserPromptSubmit",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 5
           }
         ]
       }
@@ -29,7 +31,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" PreToolUse",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 5
           }
         ]
       }
@@ -40,7 +43,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" PostToolUse",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 5
           }
         ]
       }
@@ -51,7 +55,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" Stop",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 5
           }
         ]
       }
@@ -62,7 +67,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" SessionEnd",
-            "shell": "bash"
+            "shell": "bash",
+            "timeout": 1.5
           }
         ]
       }

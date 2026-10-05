@@ -635,7 +635,8 @@ def test_launcher_names_a_missing_find_python_sh_instead_of_blaming_path(tmp_pat
     # deliberately no hook.py, no _find_python.sh copied alongside
     r = subprocess.run([SH, str(bare / "hook.sh"), "Stop"], input="{}",
                        capture_output=True, text=True, timeout=30,
-                       env=minimal_env(PATH=os.environ["PATH"], HOME=str(home)))
+                       env=minimal_env(PATH=os.environ["PATH"], HOME=str(home),
+                                       RIUS_API_KEY="glassflow_k"))
     assert r.returncode == 0
     assert r.stdout.strip() == ""
     log = home / ".claude" / "rius" / "log" / "bootstrap.log"
@@ -693,7 +694,8 @@ def test_launcher_says_so_when_no_interpreter_exists(tmp_path):
         tools = str(fakebin)
     r = subprocess.run([SH, HOOK_SH, "Stop"], input="{}",
                        capture_output=True, text=True, timeout=30,
-                       env=minimal_env(PATH=tools, HOME=str(home)))
+                       env=minimal_env(PATH=tools, HOME=str(home),
+                                       RIUS_API_KEY="glassflow_k"))
     assert r.returncode == 0
     assert r.stdout.strip() == ""
     log = home / ".claude" / "rius" / "log" / "bootstrap.log"

@@ -1,0 +1,182 @@
+"""RIUS-1224: the plugin never slows down a session.
+
+On a machine with no Rius key, hook.py resolves no key and returns, so
+hook.sh exits before starting any Python. Every hook declares a timeout,
+and the Command Line Tools stub on macOS is never probed."""
+import json
+import os
+import pathlib
+import subprocess
+import time
+
+import pytest
+
+from tests.platforms import BASH, minimal_env, posix_only
+
+ROOT = pathlib.Path(__file__).parent.parent
+HOOK_SH = str(ROOT / "scripts" / "hook.sh")
+FIND_PYTHON_SH = str(ROOT / "scripts" / "_find_python.sh")
+HOOKS_JSON = ROOT / "hooks" / "hooks.json"
+
+OFF_PATH_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop",
+                   "SessionEnd")
+
+
+def _recording_interpreters(tmp_path):
+    """Every interpreter name hook.sh may try, each one logging that it ran."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "python-started"
+    for name in ("python3", "python", "py"):
+        stub = bindir / name
+        stub.write_text('#!/bin/sh\necho "$0" >> "%s"\nexit 0\n'
+                        % str(log).replace("\\", "/"))
+        stub.chmod(0o755)
+    return str(bindir), log
+
+
+def _home(tmp_path, notice_shown=True):
+    rius = tmp_path / "home" / ".claude" / "rius"
+    rius.mkdir(parents=True)
+    if notice_shown:
+        (rius / "install-notice-shown").write_text("")
+    return rius
+
+
+def _hook(tmp_path, event, **env):
+    bindir, log = _recording_interpreters(tmp_path)
+    base = {"PATH": bindir + os.pathsep + os.environ["PATH"],
+            "HOME": str(tmp_path / "home"), "USERPROFILE": ""}
+    base.update(env)
+    started = time.monotonic()
+    r = subprocess.run([BASH, HOOK_SH, event],
+                       input=json.dumps({"session_id": "s1", "cwd": "/x"}),
+                       capture_output=True, text=True, timeout=30,
+                       env=minimal_env(**base))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == ""
+    return log.exists(), time.monotonic() - started
+
+
+@pytest.mark.parametrize("event", OFF_PATH_EVENTS + ("SessionStart",))
+def test_signed_out_hooks_start_no_python(tmp_path, event):
+    _home(tmp_path)
+    ran, _ = _hook(tmp_path, event)
+    assert not ran
+
+
+@pytest.mark.parametrize("event", OFF_PATH_EVENTS)
+def test_enabled_folders_without_a_key_still_skip_python_on_tool_events(
+        tmp_path, event):
+    (_home(tmp_path) / "config.json").write_text('{"enabled_paths": ["/x"]}')
+    ran, _ = _hook(tmp_path, event)
+    assert not ran
+
+
+def test_the_off_path_is_fast(tmp_path):
+    _home(tmp_path)
+    timings = []
+    for _ in range(5):
+        ran, elapsed = _hook(tmp_path, "PreToolUse")
+        assert not ran
+        timings.append(elapsed)
+    # SessionEnd's whole shared budget is 1.5 s; the off path is a shell
+    # doing file tests, far inside it even on a slow CI runner.
+    assert sorted(timings)[2] < 0.5, timings
+
+
+def _with_key(tmp_path):
+    _home(tmp_path)
+    return {"RIUS_API_KEY": "glassflow_k"}
+
+
+def _with_credentials(tmp_path):
+    (_home(tmp_path) / "credentials.json").write_text('{"api_key": "ri_x"}')
+    return {}
+
+
+def _with_an_open_trace(tmp_path):
+    state = _home(tmp_path) / "state"
+    state.mkdir()
+    (state / "other-session.open").write_text("")
+    return {}
+
+
+def _with_no_home_at_all(tmp_path):
+    _home(tmp_path)
+    return {"HOME": "", "USERPROFILE": ""}
+
+
+@pytest.mark.parametrize("setup", [_with_key, _with_credentials,
+                                   _with_an_open_trace, _with_no_home_at_all])
+@pytest.mark.parametrize("event", ("SessionStart", "PreToolUse", "SessionEnd"))
+def test_anything_hook_py_could_act_on_starts_python(tmp_path, setup, event):
+    ran, _ = _hook(tmp_path, event, **setup(tmp_path))
+    assert ran
+
+
+def test_session_start_runs_until_the_install_notice_was_shown(tmp_path):
+    _home(tmp_path, notice_shown=False)
+    assert _hook(tmp_path, "SessionStart")[0]
+
+
+def test_session_start_runs_for_folders_enabled_before_sign_in(tmp_path):
+    (_home(tmp_path) / "config.json").write_text('{"enabled_paths": ["/x"]}')
+    assert _hook(tmp_path, "SessionStart")[0]
+
+
+# --- hooks.json --------------------------------------------------------------
+
+def _hook_entries():
+    hooks = json.loads(HOOKS_JSON.read_text())["hooks"]
+    for event, groups in hooks.items():
+        for group in groups:
+            for entry in group["hooks"]:
+                yield event, entry
+
+
+def test_every_hook_declares_a_timeout():
+    for event, entry in _hook_entries():
+        timeout = entry.get("timeout")
+        assert isinstance(timeout, (int, float)) and 0 < timeout <= 10, (
+            event, timeout)
+
+
+def test_session_end_stays_inside_its_shared_budget():
+    """A SessionEnd timeout above 1.5 s raises the budget Claude Code waits
+    for at exit, so a larger one would slow down quitting."""
+    ends = [entry["timeout"] for event, entry in _hook_entries()
+            if event == "SessionEnd"]
+    assert ends and all(t <= 1.5 for t in ends), ends
+
+
+# --- the macOS Command Line Tools stub ---------------------------------------
+
+def _resolve_python(tmp_path, xcode_select_exit):
+    bindir = tmp_path / "macbin"
+    bindir.mkdir()
+    for name, body in (("uname", "echo Darwin"),
+                       ("xcode-select", "exit %d" % xcode_select_exit)):
+        stub = bindir / name
+        stub.write_text("#!/bin/sh\n%s\n" % body)
+        stub.chmod(0o755)
+    script = '. "%s"; printf "%%s" "$rius_py"' % FIND_PYTHON_SH
+    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
+                       timeout=30, env={"PATH": "%s:/usr/bin:/bin" % bindir})
+    return r.stdout
+
+
+_needs_usr_bin_python3 = pytest.mark.skipif(
+    not os.path.exists("/usr/bin/python3"), reason="no /usr/bin/python3 here")
+
+
+@posix_only("/usr/bin/python3 is the macOS stub's path")
+@_needs_usr_bin_python3
+def test_the_stub_is_skipped_without_the_command_line_tools(tmp_path):
+    assert _resolve_python(tmp_path, xcode_select_exit=2) == ""
+
+
+@posix_only("/usr/bin/python3 is the macOS stub's path")
+@_needs_usr_bin_python3
+def test_usr_bin_python3_is_used_once_the_command_line_tools_exist(tmp_path):
+    assert _resolve_python(tmp_path, xcode_select_exit=0) == "python3"

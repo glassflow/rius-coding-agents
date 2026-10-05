@@ -4,7 +4,7 @@
 # SOURCED, never executed. The caller needs the winning interpreter in its
 # OWN shell so it can `exec` it -- see the note on the exec in hook.sh.
 #
-# Sets, and nothing else:
+# Sets (plus rius_-prefixed scratch variables and helpers):
 #   rius_py          the interpreter to run, empty if none of them works
 #   rius_candidates  what was tried, for the caller's message
 #
@@ -18,12 +18,23 @@
 # Windows took the POSIX branch, put the Store alias first, and skipped the
 # probe that would have rejected it. So: several signals, none load-bearing.
 rius_windows=0
+rius_macos=0
 case "${OS:-}" in Windows_NT) rius_windows=1 ;; esac
 [ -n "${WINDIR:-}" ] && rius_windows=1
 [ -n "${windir:-}" ] && rius_windows=1
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) rius_windows=1 ;;
+    Darwin) rius_macos=1 ;;
 esac
+
+# On a Mac without the Command Line Tools, /usr/bin/python3 is a stub that
+# opens the "install developer tools" dialog when run -- so the probe below
+# would pop it on every hook. `xcode-select -p` fails quietly in that case.
+rius_is_macos_stub() {
+    [ "$rius_macos" = "1" ] || return 1
+    case "$1" in /usr/bin/python3|/usr/bin/python) ;; *) return 1 ;; esac
+    ! xcode-select -p >/dev/null 2>&1 </dev/null
+}
 
 # On Windows `py` (the PEP 397 launcher) is tried first and deliberately.
 # `python3` there is usually the Microsoft Store's App Execution Alias: a
@@ -37,7 +48,8 @@ fi
 
 rius_py=
 for rius_candidate in $rius_candidates; do
-    command -v "$rius_candidate" >/dev/null 2>&1 || continue
+    rius_path=$(command -v "$rius_candidate" 2>/dev/null) || continue
+    rius_is_macos_stub "$rius_path" && continue
     # Unconditional, on every platform. It costs one process in a path that
     # is about to spawn a Python anyway, and it makes "is this actually a
     # Python?" independent of the platform guess above -- which is the
