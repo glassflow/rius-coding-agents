@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from rius_cc import config, login
+from rius_cc import agent, config, login
 from tests.platforms import IS_WINDOWS
 from tests.signed_in import sign_in
 
@@ -79,3 +79,12 @@ def test_replacing_a_login_key_revokes_it(home):
 
 def test_the_ignored_env_key_line_points_at_use_key():
     assert "rius_ctl.sh use-key" in config.IGNORED_API_KEY
+
+
+@pytest.mark.parametrize("name", ["codex", "cursor"])
+def test_a_console_key_is_stored_for_the_agent_named(home, name):
+    r = _use_key(home, ["--agent", name])
+    assert "Stored the key for production" in r.stdout
+    with agent.using(agent.select(name)):
+        assert config.resolve("s1", "/x", {}, home).api_key == KEY
+    assert not os.path.exists(os.path.join(home, ".claude"))

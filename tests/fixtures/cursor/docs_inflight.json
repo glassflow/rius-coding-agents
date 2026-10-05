@@ -1,0 +1,36 @@
+{
+ "_source": "DOCS-DERIVED, not captured from a live run. Field names follow cursor.com/docs/agent/hooks (fetched 2026-10-05) and the payload builders in the cursor-agent 2026.02.13-41ac335 bundle (index.js, 357.index.js, 434.index.js): session events carry generation_id == conversation_id, MCP tools are named 'MCP:<tool>', Shell output is {output, exitCode}. Replace with T5 captures.",
+ "events": [
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000003",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "auto",
+   "hook_event_name": "beforeSubmitPrompt",
+   "generation_id": "gen-0101",
+   "prompt": "Run the full migration suite against the staging database"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000003",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "auto",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0101",
+   "tool_name": "Shell",
+   "tool_input": {
+    "command": "make migrate-test DB=staging-replica"
+   },
+   "tool_use_id": "tool-shell-9",
+   "cwd": "/Users/dev/acme-api"
+  }
+ ]
+}

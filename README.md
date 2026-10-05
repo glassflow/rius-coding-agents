@@ -401,6 +401,55 @@ answerable in chat. The
 [getting started guide](docs/getting-started.md#exploring-your-traces-from-claude-code)
 lists the main tools and how to register the server without the plugin.
 
+## Codex (beta)
+
+The same plugin traces [Codex](https://developers.openai.com/codex) CLI
+sessions (tested with codex-cli 0.144.1). Each session becomes one trace:
+turns, model calls with token counts (cached and reasoning tokens split
+out), tool calls with failed commands marked as errors, and subagents under
+the call that spawned them. A resumed session continues its trace.
+
+```
+codex plugin marketplace add glassflow/rius-coding-agents
+codex plugin add rius@rius-coding-agents
+```
+
+Then, in Codex:
+
+1. Open `/hooks` and trust the five `rius` hooks. Codex runs no plugin hook
+   until you do, so nothing is traced before this step.
+2. Type `$rius:rius-login`, then `$rius:rius-enable-here` in a folder you
+   want traced. Codex never runs these skills on its own. Both need to write `~/.codex/rius`, so approve
+   the sandbox escalation Codex asks for.
+3. `$rius:rius-status` shows what is on, why, and whether the hooks are
+   trusted.
+4. To query your traces from Codex, run `codex mcp login rius` once. The
+   bundled MCP server signs in with OAuth only, as in Claude Code.
+
+Tracing is off by default and the content rules above apply unchanged.
+Codex keeps its own login, key and settings in `~/.codex/rius`, separate
+from Claude Code's, and always under your home folder, whatever
+`CODEX_HOME` says. See [docs/codex.md](docs/codex.md) for details,
+the MCP sign-in and the known gaps.
+
+## Cursor (beta)
+
+The repo also ships a Cursor plugin (`.cursor-plugin/`). It traces Cursor
+agent sessions: one trace per conversation, with a span for each turn, model
+answer, tool call and subagent. Install it with "Import from Repo"
+(`glassflow/rius-coding-agents`) in Cursor's plugin settings, then run
+`/rius-login` and `/rius-enable-here` in the agent chat. To query your
+traces, connect the bundled `rius` MCP server in Cursor's MCP settings; it
+signs in with OAuth only.
+
+- **No token counts or cost.** Cursor's hooks do not report usage.
+- **Beta.** It is tested against payloads from real `cursor-agent`
+  sessions; the IDE agent and plugin import are not verified yet.
+- Its key, settings and state are its own, under `~/.cursor/rius/`.
+
+[docs/cursor.md](docs/cursor.md) has the details, including a fallback for
+older `cursor-agent` builds that ignore plugin hooks.
+
 ## Beyond Claude Code
 
 Rius traces other agents as well. The
@@ -426,6 +475,7 @@ can send to Rius over OTLP.
 | [Installing and updating](docs/install.md) | Marketplace cache, upgrading from `rius-claude-code`, local checkout, platforms |
 | [How it works](docs/how-it-works.md) | The span tree, subagents, live spans, generation timing, heartbeat |
 | [API keys](docs/api-keys.md) | Minting a key by hand and where to keep it |
+| [Cursor (beta)](docs/cursor.md) | The Cursor plugin: install, commands, what is and is not traced |
 | [Design records](docs/design/) | The original spec, plan and build log |
 | [Changelog](CHANGELOG.md) | What changed in each version |
 | [Rius docs](https://docs.glassflow.ai/rius) | The product: console, alerts, MCP tools, SDKs |

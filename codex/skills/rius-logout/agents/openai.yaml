@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: sign out"
+  short_description: "Remove and revoke the stored Rius key"
+policy:
+  allow_implicit_invocation: false

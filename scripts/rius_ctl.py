@@ -3,6 +3,7 @@
 
 Actions: on | off | clear | enable-here | content-on-here | disable-here |
          status | login | login-wait | logout | use-key
+         install-hooks | uninstall-hooks [--path <hooks.json>] (Cursor only)
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
          --agent <claude-code|codex|cursor> (default claude-code)
          `-- '<typed text>'`: what the user typed after a slash command
@@ -33,7 +34,8 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, config, login, notice, platform_compat, state  # noqa: E402
+from rius_cc import (agent, codex_trust, config, cursor_install,  # noqa: E402
+                     login, notice, platform_compat, state)
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -91,7 +93,12 @@ FLAG_VALUES = {
     "--session": ("a session id (letters, digits, - and _)", _is_session_id),
     "--cwd": ("a folder path", _is_folder),
     "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
+    "--path": ("a hooks.json path", _is_folder),
+    "--agent": ("claude-code, codex or cursor",
+                lambda value: value in agent.PROFILES),
 }
+# Taken off before ACTION_FLAGS is consulted, so every action takes it.
+EVERY_ACTION_FLAGS = ("--agent",)
 # Flags that take no value.
 SWITCHES = ("--debug",)
 ACTION_FLAGS = {
@@ -106,6 +113,8 @@ ACTION_FLAGS = {
     "login-wait": ("--cwd",),
     "logout": ("--cwd",),
     "use-key": ("--cwd", "--env"),
+    "install-hooks": ("--path",),
+    "uninstall-hooks": ("--path",),
 }
 # What a person may type after a slash command, e.g. `/rius:login --env
 # staging`. The command file passes that text as ONE quoted word after `--`,
@@ -391,7 +400,8 @@ def _print_status(session_id, cwd, home, inferred=False, debug=False):
     print("Endpoint: %s" % cfg.endpoint)
     creds = login.read_credentials(home)
     print(_tracing_sign_in_line(cfg, creds))
-    print(_querying_traces_line(creds))
+    for line in _querying_traces_lines(creds, home):
+        print(line)
     if _is_staging(creds) or os.environ.get("RIUS_MCP_URL"):
         print(RIUS_MCP_URL_RETIRED)
     print("API key: %s" % config.redact(cfg.api_key))
@@ -476,6 +486,29 @@ QUERYING_STAGING_TRACES = (
     "`claude mcp add --transport http rius-staging "
     "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
 RIUS_MCP_URL_RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
+# Codex has no headersHelper, so its bundled server cannot use the stored
+# key: it signs in on its own, through the server's OAuth.
+CODEX_QUERYING_TRACES = ("Querying traces: run `codex mcp login rius` once "
+                         "to sign in to the bundled rius server")
+_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_codex():
+    return agent.active().name == agent.CODEX.name
+
+
+def _querying_traces_lines(creds, home):
+    if _is_codex():
+        return [CODEX_QUERYING_TRACES,
+                codex_trust.status_line(_PLUGIN_ROOT, _codex_home(home))]
+    return [_querying_traces_line(creds)]
+
+
+def _codex_home(home):
+    """Codex's own home, for reading which hooks it trusts. Only Rius's
+    files stay under the OS home whatever CODEX_HOME says; this is a read
+    for a status line."""
+    return os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
 
 
 def _querying_traces_line(creds):
@@ -561,7 +594,7 @@ def _login_wait(home, cwd):
     print("Connected as %s → %s%s."
           % (creds["email"], creds["workspace_name"], _in_org(creds)))
     print(_tracing_signed_in(creds))
-    print(_querying_traces_line(creds))
+    print(_querying_traces_lines(creds, home)[0])
     print("Trace this folder (%s)? Run /rius:enable-here." % cwd)
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
@@ -624,12 +657,24 @@ def _run_account_action(action, home, cwd, env_flag):
 
 def dispatch(argv, home):
     try:
-        profile, argv = agent.from_argv(argv, os.environ)
-    except agent.UnknownAgent as exc:
-        print("Rius: %s." % exc)
+        profile, argv = _agent_and_rest(argv)
+    except ArgumentError as exc:
+        print("%s Nothing was changed." % exc)
         return
     with agent.using(profile), _localized_stdout(profile):
         _dispatch(argv, home)
+
+
+def _agent_and_rest(argv):
+    """`--agent` comes off first, wherever it sits before `--`, and every
+    action takes it (EVERY_ACTION_FLAGS)."""
+    try:
+        name, rest = agent.split_flag(argv)
+    except agent.UnknownAgent:
+        raise ArgumentError("Rius: `%s` needs a value: %s."
+                            % (agent.FLAG, FLAG_VALUES[agent.FLAG][0]))
+    _flag_value(agent.FLAG, [name])
+    return agent.select(name), rest
 
 
 @contextlib.contextmanager
@@ -646,6 +691,35 @@ def _localized_stdout(profile):
         sys.stdout.write(profile.localize(out.getvalue()))
 
 
+HOOKS_ACTIONS = ("install-hooks", "uninstall-hooks")
+
+
+def _hooks_action(action, path, home):
+    """For Cursor builds that ignore a plugin's own hooks: merge them into
+    the user's hooks.json (or take them out again)."""
+    if agent.active().name != agent.CURSOR.name:
+        print("Rius: %s is for Cursor only; run it with --agent cursor."
+              % action)
+        return
+    path = path or os.path.join(home, ".cursor", "hooks.json")
+    try:
+        if action == "install-hooks":
+            changed, count = cursor_install.install(
+                path, cursor_install.plugin_root())
+        else:
+            changed, count = cursor_install.uninstall(path)
+    except (cursor_install.HooksFileError, OSError) as exc:
+        print("Rius: %s" % exc)
+        return
+    if not changed:
+        print("%s already up to date (%d Rius hooks)." % (path, count))
+    elif count:
+        print("Wrote %d Rius hooks into %s. Restart Cursor to load them."
+              % (count, path))
+    else:
+        print("Removed the Rius hooks from %s." % path)
+
+
 def _dispatch(argv, home):
     try:
         action, flags = _parse_args(argv)
@@ -655,6 +729,9 @@ def _dispatch(argv, home):
     session_id, cwd = flags.get("--session"), flags.get("--cwd")
     env_flag = flags.get("--env")
 
+    if action in HOOKS_ACTIONS:
+        _hooks_action(action, flags.get("--path"), home)
+        return
     if action in ("login", "login-wait", "logout", "use-key"):
         _run_account_action(action, home, cwd, env_flag)
         return

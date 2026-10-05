@@ -1,0 +1,141 @@
+{
+ "_source": "DOCS-DERIVED, not captured from a live run. Field names follow cursor.com/docs/agent/hooks (fetched 2026-10-05) and the payload builders in the cursor-agent 2026.02.13-41ac335 bundle (index.js, 357.index.js, 434.index.js): session events carry generation_id == conversation_id, MCP tools are named 'MCP:<tool>', Shell output is {output, exitCode}. Replace with T5 captures.",
+ "events": [
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "sessionStart",
+   "generation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "session_id": "c0ffee00-0000-4000-8000-000000000004",
+   "is_background_agent": true,
+   "composer_mode": "agent"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "beforeSubmitPrompt",
+   "generation_id": "gen-0201",
+   "prompt": "Delete the generated build artifacts directory please"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0201",
+   "tool_name": "Delete",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/dist"
+   },
+   "tool_use_id": "tool-del-1"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "postToolUseFailure",
+   "generation_id": "gen-0201",
+   "tool_name": "Delete",
+   "tool_input": {
+    "path": "/Users/dev/acme-api/dist"
+   },
+   "error_message": "Delete blocked by preToolUse hook: protected path",
+   "failure_type": "permission_denied",
+   "duration": 0,
+   "tool_use_id": "tool-del-1",
+   "is_interrupt": false
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "preToolUse",
+   "generation_id": "gen-0201",
+   "tool_name": "Shell",
+   "tool_input": {
+    "command": "sleep 600 && rm -rf dist"
+   },
+   "tool_use_id": "tool-shell-int"
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "postToolUseFailure",
+   "generation_id": "gen-0201",
+   "tool_name": "Shell",
+   "tool_input": {
+    "command": "sleep 600 && rm -rf dist"
+   },
+   "error_message": "Command interrupted by the user before finishing",
+   "failure_type": "error",
+   "duration": 4000,
+   "tool_use_id": "tool-shell-int",
+   "is_interrupt": true
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "stop",
+   "generation_id": "gen-0201",
+   "status": "error",
+   "loop_count": 0
+  },
+  {
+   "conversation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "cursor_version": "2026.08.27",
+   "workspace_roots": [
+    "/Users/dev/acme-api"
+   ],
+   "user_email": "dev@example.com",
+   "transcript_path": "/Users/dev/.cursor/projects/acme/agent-transcripts/x.jsonl",
+   "model": "gemini-3-pro",
+   "hook_event_name": "sessionEnd",
+   "generation_id": "c0ffee00-0000-4000-8000-000000000004",
+   "session_id": "c0ffee00-0000-4000-8000-000000000004",
+   "reason": "error",
+   "duration_ms": 9000,
+   "is_background_agent": true,
+   "final_status": "error",
+   "error_message": "Model provider returned 500 for the background agent run"
+  }
+ ]
+}

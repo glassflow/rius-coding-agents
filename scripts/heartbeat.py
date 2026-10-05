@@ -244,7 +244,7 @@ class Pinger:
 
 
 def main() -> None:
-    profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+    profile, argv = agent.from_argv(sys.argv[1:])
     agent.activate(profile)
     if len(argv) < 4:
         return

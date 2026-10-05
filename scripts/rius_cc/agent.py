@@ -14,7 +14,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import os
-from typing import Iterator, List, Mapping, Optional, Tuple
+from typing import Iterator, List, Tuple
 
 FLAG = "--agent"
 
@@ -30,18 +30,24 @@ class AgentProfile:
     service_name: str
     root_name: str
     provider: str
+    # Under the OS home, never an agent's own home variable: see rius_dir.
     home_parts: Tuple[str, ...]
-    home_env: Optional[str]
     attr_prefix: str
     env_prefix: str
     command_prefix: str
     login_wait_budget: int
     sends_agent_on_link: bool
-    base_dir: Optional[str] = None
+    # Claude Code runs a hook through a shell, so its pid is hook.py's
+    # grandparent; Codex runs the hook command itself.
+    hook_parent_is_agent: bool = False
 
     def rius_dir(self, home: str) -> str:
-        base = self.base_dir or os.path.join(home, *self.home_parts)
-        return os.path.join(base, "rius")
+        """Where this agent's key, settings and state live: under the OS
+        home, never under CODEX_HOME. A project can set environment
+        variables for the hooks and the commands, so honouring one here
+        would let a cloned repo pick where the key is read from and where
+        traces are switched on."""
+        return os.path.join(home, *self.home_parts, "rius")
 
     def state_dir(self, home: str) -> str:
         return os.path.join(self.rius_dir(home), "state")
@@ -61,14 +67,9 @@ class AgentProfile:
         if self is CLAUDE_CODE:
             return text
         return (text.replace(CLAUDE_CODE.command_prefix, self.command_prefix)
-                .replace(CLAUDE_CODE.display_name, self.display_name))
-
-    def bind(self, env: Mapping[str, str]) -> "AgentProfile":
-        """This profile with its home taken from `home_env` when that is set."""
-        override = env.get(self.home_env) if self.home_env else None
-        if not override:
-            return self
-        return dataclasses.replace(self, base_dir=override)
+                .replace(CLAUDE_CODE.display_name, self.display_name)
+                .replace("files Claude reads",
+                         "files %s reads" % self.display_name))
 
 
 # Wait budgets stay under the agent's own limit on one shell command, so a
@@ -76,22 +77,24 @@ class AgentProfile:
 CLAUDE_CODE = AgentProfile(
     name="claude-code", display_name="Claude Code",
     service_name="claude-code", root_name="claude-code session",
-    provider="anthropic", home_parts=(".claude",), home_env=None,
+    provider="anthropic", home_parts=(".claude",),
     attr_prefix="cc.", env_prefix="RIUS_CLAUDE_", command_prefix="/rius:",
     login_wait_budget=540, sends_agent_on_link=False)
 
 CODEX = AgentProfile(
     name="codex", display_name="Codex",
     service_name="codex", root_name="codex session",
-    provider="openai", home_parts=(".codex",), home_env="CODEX_HOME",
-    attr_prefix="codex.", env_prefix="RIUS_CODEX_", command_prefix="$rius-",
-    login_wait_budget=540, sends_agent_on_link=True)
+    provider="openai", home_parts=(".codex",),
+    attr_prefix="codex.", env_prefix="RIUS_CODEX_",
+    command_prefix="$rius:rius-",
+    login_wait_budget=540, sends_agent_on_link=True,
+    hook_parent_is_agent=True)
 
 # Cursor routes to several vendors, so its provider comes from each model name.
 CURSOR = AgentProfile(
     name="cursor", display_name="Cursor",
     service_name="cursor", root_name="cursor session",
-    provider="", home_parts=(".cursor",), home_env=None,
+    provider="", home_parts=(".cursor",),
     attr_prefix="cursor.", env_prefix="RIUS_CURSOR_", command_prefix="/rius-",
     login_wait_budget=540, sends_agent_on_link=True)
 
@@ -120,9 +123,9 @@ def activate(profile: AgentProfile) -> None:
     _active = profile
 
 
-def select(name: str, env: Mapping[str, str]) -> AgentProfile:
+def select(name: str) -> AgentProfile:
     try:
-        return PROFILES[name].bind(env)
+        return PROFILES[name]
     except KeyError:
         raise UnknownAgent("unknown agent %r (choose %s)"
                            % (name, ", ".join(sorted(PROFILES))))
@@ -143,10 +146,9 @@ def split_flag(argv: List[str]) -> Tuple[str, List[str]]:
     return name, rest
 
 
-def from_argv(argv: List[str],
-              env: Mapping[str, str]) -> Tuple[AgentProfile, List[str]]:
+def from_argv(argv: List[str]) -> Tuple[AgentProfile, List[str]]:
     name, rest = split_flag(argv)
-    return select(name, env), rest
+    return select(name), rest
 
 
 def child_argv(profile: AgentProfile) -> List[str]:

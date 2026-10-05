@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: trace this folder with content"
+  short_description: "Trace this folder with content, secrets removed"
+policy:
+  allow_implicit_invocation: false

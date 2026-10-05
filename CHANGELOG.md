@@ -4,6 +4,70 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.6.0 (unreleased)
+
+Rius for Codex and Cursor, in beta, with the 0.5.0 hardening applied to
+both. Claude Code: no change in what is traced or sent.
+
+### Codex (beta)
+
+- The plugin traces Codex CLI sessions (tested with codex-cli 0.144.1).
+  Install with `codex plugin marketplace add glassflow/rius-coding-agents`
+  and `codex plugin add rius@rius-coding-agents`, trust the hooks in
+  `/hooks`, then type `$rius:rius-login` and `$rius:rius-enable-here`.
+  Each session is one trace of turns, model calls with token counts
+  (cached and reasoning split out), tool calls and subagents; a resumed
+  session continues it. Codex has no SessionEnd, so a Codex trace is
+  closed by a later Codex session once the old process has exited and it
+  has been idle for an hour. (#27, #31)
+- Codex keeps its own key, settings and state in `~/.codex/rius`, under
+  the home folder the operating system reports. `CODEX_HOME` is not used
+  for them, so a repository cannot point Rius at a key or rules it ships.
+- The bundled MCP server signs in with OAuth: `codex mcp login rius`.
+- A subagent spawned with `fork_context` starts from a copy of its
+  parent's history; those inherited turns are not sent again, so the
+  parent's model calls are counted once. Nested subagents (depth 2 and
+  more) stay under the subagent that spawned them.
+- In Codex's code mode (on by default), a subagent spawned from inside an
+  `exec` call hangs under that call; before, it and its model calls were
+  never sent. The text of `exec` output is scrubbed as text, one line per
+  part, so a `name = secret` line is no longer missed, and a script that
+  reads a secret-shaped file has its output replaced whole as well.
+- With content on, Codex and Cursor remove secrets as Claude Code does:
+  every content attribute and error line is scrubbed, and a read of a
+  secret-shaped file (`.env*`, `*.pem`, `id_rsa*`, ...) is replaced whole.
+- The skills only run when you type them (`allow_implicit_invocation:
+  false`). `$rius:rius-enable-content-here` is the Codex form of
+  `/rius:enable-content-here`.
+
+### Cursor (beta)
+
+- The repo also ships a Cursor plugin (`.cursor-plugin/`): one trace per
+  conversation with turns, model answers, tool calls and subagents. Cursor
+  reports no token usage, so there is no token count or cost. Install it
+  with "Import from Repo"; `rius_ctl.sh install-hooks --agent cursor`
+  covers `cursor-agent` builds that ignore plugin hooks. (#25, #28)
+- Cursor keeps its own key and state in `~/.cursor/rius`. Spools of
+  conversations idle for 7 days are deleted once their trace is closed.
+- Built from real `cursor-agent` (2026.10.01) payloads: a headless run is
+  one turn, a Task subagent hangs under its Task call (parallel Tasks
+  each under their own), and the local spool holds content only with
+  secrets removed, never the output of a secret-shaped file read.
+- The bundled MCP server signs in with OAuth (Connect in Cursor's MCP
+  settings). The `/rius-*` commands only run when you type them.
+
+### Both
+
+- `RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored, as for Claude Code: sign
+  in with the login skill or command, or store a console key with
+  `rius_ctl.sh use-key --agent codex|cursor`. `RIUS_CODEX_ENABLED` and
+  `RIUS_CURSOR_ENABLED` can only turn tracing off.
+- Hooks go through the same launcher as Claude Code's (`python -I`, no
+  interpreter from inside the project), with 10 s / 5 s timeouts. A
+  signed-out Codex or Cursor user starts no Python on a tool call.
+- Conversation and subagent ids must look like ids before they name a
+  file. `--agent` is checked like every other `rius_ctl` flag.
+
 ## 0.5.0 (2026-10-05)
 
 Hardening for Anthropic's plugin directory: safer defaults, sign-ins that

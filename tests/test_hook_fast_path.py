@@ -36,8 +36,8 @@ def _recording_interpreters(tmp_path):
     return str(bindir), log
 
 
-def _home(tmp_path, notice_shown=True):
-    rius = tmp_path / "home" / ".claude" / "rius"
+def _home(tmp_path, notice_shown=True, agent_dir=".claude"):
+    rius = tmp_path / "home" / agent_dir / "rius"
     rius.mkdir(parents=True)
     if notice_shown:
         (rius / "install-notice-shown").write_text("")
@@ -45,6 +45,12 @@ def _home(tmp_path, notice_shown=True):
 
 
 def _hook(tmp_path, *argv, **env):
+    ran, elapsed, stdout = _hook_out(tmp_path, *argv, **env)
+    assert stdout == ""
+    return ran, elapsed
+
+
+def _hook_out(tmp_path, *argv, **env):
     bindir, log = _recording_interpreters(tmp_path)
     base = {"PATH": bindir + os.pathsep + os.environ["PATH"],
             "HOME": str(tmp_path / "home"), "USERPROFILE": ""}
@@ -55,8 +61,7 @@ def _hook(tmp_path, *argv, **env):
                        capture_output=True, text=True, timeout=30,
                        env=minimal_env(**base))
     assert r.returncode == 0, r.stderr
-    assert r.stdout == ""
-    return log.exists(), time.monotonic() - started
+    return log.exists(), time.monotonic() - started, r.stdout
 
 
 @pytest.mark.parametrize("event", OFF_PATH_EVENTS + ("SessionStart",))
@@ -82,11 +87,68 @@ def test_an_env_key_alone_starts_no_python(tmp_path, event):
     assert not ran
 
 
-def test_another_agent_always_starts_python(tmp_path):
-    # Its files live outside ~/.claude, where these file tests look.
-    _home(tmp_path)
-    ran, _ = _hook(tmp_path, "--agent", "codex", "PreToolUse")
+AGENT_DIRS = {"codex": ".codex", "cursor": ".cursor"}
+AGENT_EVENTS = {"codex": ("SessionStart", "PostToolUse", "Stop"),
+                "cursor": ("postToolUse", "stop", "sessionEnd")}
+SIGNED_OUT_ANSWER = {"codex": "", "cursor": "{}"}
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_DIRS))
+def test_a_signed_out_agent_starts_no_python(tmp_path, name):
+    _home(tmp_path, agent_dir=AGENT_DIRS[name])
+    for event in AGENT_EVENTS[name]:
+        ran, _, out = _hook_out(tmp_path, "--agent", name, event)
+        assert not ran and out == SIGNED_OUT_ANSWER[name], event
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_DIRS))
+def test_an_agent_with_its_own_key_starts_python(tmp_path, name):
+    (_home(tmp_path, agent_dir=AGENT_DIRS[name])
+     / "credentials.json").write_text('{"api_key": "ri_x"}')
+    ran, _, _ = _hook_out(tmp_path, "--agent", name, AGENT_EVENTS[name][1])
     assert ran
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_DIRS))
+def test_an_agent_with_an_open_trace_starts_python(tmp_path, name):
+    state = _home(tmp_path, agent_dir=AGENT_DIRS[name]) / "state"
+    state.mkdir()
+    (state / "other-session.open").write_text("")
+    ran, _, _ = _hook_out(tmp_path, "--agent", name, AGENT_EVENTS[name][2])
+    assert ran
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_DIRS))
+def test_one_agents_key_starts_no_python_for_another(tmp_path, name):
+    (_home(tmp_path) / "credentials.json").write_text('{"api_key": "ri_x"}')
+    _home(tmp_path, agent_dir=AGENT_DIRS[name])
+    ran, _, _ = _hook_out(tmp_path, "--agent", name, AGENT_EVENTS[name][1])
+    assert not ran
+
+
+def test_a_codex_key_starts_no_python_for_claude_code(tmp_path):
+    _home(tmp_path)
+    (_home(tmp_path, agent_dir=".codex")
+     / "credentials.json").write_text('{"api_key": "ri_x"}')
+    assert not _hook(tmp_path, "PostToolUse")[0]
+
+
+def test_codex_session_start_runs_until_its_install_notice_was_shown(tmp_path):
+    _home(tmp_path)
+    _home(tmp_path, notice_shown=False, agent_dir=".codex")
+    assert _hook_out(tmp_path, "--agent", "codex", "SessionStart")[0]
+
+
+def test_cursor_session_start_always_starts_python(tmp_path):
+    # Its answer tells the /rius-* commands, /rius-login included, where
+    # the plugin lives.
+    _home(tmp_path, agent_dir=".cursor")
+    assert _hook_out(tmp_path, "--agent", "cursor", "sessionStart")[0]
+
+
+def test_an_unknown_agent_is_left_to_hook_py(tmp_path):
+    _home(tmp_path)
+    assert _hook_out(tmp_path, "--agent", "vim", "Stop")[0]
 
 
 def test_the_off_path_is_fast(tmp_path):
@@ -161,6 +223,26 @@ def test_every_hook_declares_a_timeout():
         timeout = entry.get("timeout")
         assert isinstance(timeout, (int, float)) and 0 < timeout <= 10, (
             event, timeout)
+
+
+def _agent_hook_entries(path):
+    hooks = json.loads((ROOT / path).read_text())["hooks"]
+    for event, groups in hooks.items():
+        for group in groups:
+            # Codex nests handlers like Claude Code; Cursor lists them flat.
+            for entry in group.get("hooks", [group]):
+                yield event, entry
+
+
+@pytest.mark.parametrize("path", ["codex/hooks.json", "cursor/hooks.json"])
+def test_every_codex_and_cursor_hook_declares_a_timeout(path):
+    entries = list(_agent_hook_entries(path))
+    assert entries
+    for event, entry in entries:
+        limit = 10 if event.lower() == "sessionstart" else 5
+        assert entry.get("timeout") == limit, (path, event, entry)
+        assert entry["command"].startswith('bash "${'), entry
+        assert '/scripts/hook.sh" --agent ' in entry["command"], entry
 
 
 def test_session_end_allows_a_cold_interpreter_start():

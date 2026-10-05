@@ -46,11 +46,20 @@ _COMBINED = re.compile("|".join("(?P<p%d>%s)" % (i, pattern)
 # `input_tokens: 12` and `tokenizer=` are left alone. A quote may be escaped:
 # tool inputs arrive JSON-encoded. The key is kept, so a reader still sees
 # which setting it was; only the value goes.
+_KEY = (r"(?i)(?P<key>(?P<word>password|passwd|secret|token|api[_-]?key"
+        r"|access[_-]?key|private[_-]?key)(?:[_-]?(?:key|id|value|hash))?"
+        r"[\"']?[ \t]{0,8}[:=](?!=)[ \t]{0,8})")
 _PAIR = re.compile(
-    r"(?i)(?P<key>(?P<word>password|passwd|secret|token|api[_-]?key"
-    r"|access[_-]?key|private[_-]?key)(?:[_-]?(?:key|id|value|hash))?"
-    r"[\"']?[ \t]{0,8}[:=](?!=)[ \t]{0,8})"
-    r"(?P<value>\\?\"[^\"\n]{1,512}\"|'[^'\n]{1,512}'|[^\s\"',;&)]{1,512})")
+    _KEY + r"(?P<value>\\?\"[^\"\n]{1,512}\"|'[^'\n]{1,512}'|[^\s\"',;&)]{1,512})")
+
+# The same pairs in text known to be JSON-encoded, where `\"` quotes a
+# value and `\n`, `\r` or `\t` ends a line or a field: an unquoted value
+# stops there, so it cannot swallow the next line's key, and an escape is
+# taken whole (`\\` is one backslash), so the JSON stays valid once the
+# value goes. Plain text keeps _PAIR: there `C:\temp\secret` is one value.
+_PAIR_JSON = re.compile(
+    _KEY + r"(?P<value>\\\"(?:[^\"\\\n]|\\[^\"\n]){1,512}\\\"|\"[^\"\n]{1,512}\""
+    r"|'[^'\n]{1,512}'|(?:[^\s\"',;&)\\]|\\[^nrt\"\s]){1,512})")
 
 # Basenames whose contents are secret as a whole: a .env file is nothing
 # but values, so no pattern could tell its harmless lines from the rest.
@@ -77,11 +86,13 @@ def _replace_pair(match) -> str:
     return match.group("key") + marker(word)
 
 
-def scrub(text: str) -> str:
-    """`text` with every recognised secret replaced by a marker."""
+def scrub(text: str, json_text: bool = False) -> str:
+    """`text` with every recognised secret replaced by a marker.
+    `json_text` says the text is JSON-encoded, escapes and all."""
     if not text:
         return text
-    return _PAIR.sub(_replace_pair, _COMBINED.sub(_replace_pattern, text))
+    pair = _PAIR_JSON if json_text else _PAIR
+    return pair.sub(_replace_pair, _COMBINED.sub(_replace_pattern, text))
 
 
 def is_secret_path(path: str) -> bool:

@@ -36,25 +36,39 @@ esac
 # signed-out machine every tool call would pay two interpreter startups for
 # nothing. File tests only. Anything uncertain falls through to hook.py,
 # including a home folder that could not be resolved.
-# RIUS_API_KEY is not a reason to run: hook.py ignores it. Another agent's
-# files are not under ~/.claude, so `--agent` always falls through.
+# RIUS_API_KEY is not a reason to run: hook.py ignores it. Each agent's files
+# are in its own folder (rius_cc/agent.py), and an agent hook.py does not
+# know falls through, for hook.py to refuse.
 rius_os_home_resolved=
 if [ -n "$dir" ] && [ -r "$dir/_os_home.sh" ]; then
     . "$dir/_os_home.sh"
 fi
 
 rius_hook_has_work() {
-    [ "${1:-}" = "--agent" ] && return 0
+    rius_agent_dir=.claude
+    rius_event=${1:-}
+    if [ "${1:-}" = "--agent" ]; then
+        case "${2:-}" in
+            codex)  rius_agent_dir=.codex ;;
+            cursor) rius_agent_dir=.cursor ;;
+            *)      return 0 ;;
+        esac
+        rius_event=${3:-}
+    fi
+    # Cursor's sessionStart answer tells the /rius-* commands where the
+    # plugin is, and /rius-login is how a signed-out user gets a key.
+    [ "$rius_event" = "sessionStart" ] && return 0
     if [ "${rius_trusts_env:-0}" = "1" ]; then
         [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
         for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
             [ -n "$rius_home" ] || continue
-            rius_home_has_work "$rius_home/.claude/rius" "${1:-}" && return 0
+            rius_home_has_work "$rius_home/$rius_agent_dir/rius" \
+                "$rius_event" && return 0
         done
         return 1
     fi
     [ -n "${rius_os_home:-}" ] || return 0
-    rius_home_has_work "$rius_os_home/.claude/rius" "${1:-}"
+    rius_home_has_work "$rius_os_home/$rius_agent_dir/rius" "$rius_event"
 }
 
 rius_home_has_work() {
@@ -76,7 +90,12 @@ rius_home_has_work() {
     fi
     return 1
 }
-rius_hook_has_work "${1:-}" || exit 0
+if ! rius_hook_has_work "$@"; then
+    # Cursor reads every hook's stdout as its answer: "{}" is "no objection"
+    # (rius_cc/cursor_events.response_for).
+    [ "$rius_agent_dir" = .cursor ] && printf '{}'
+    exit 0
+fi
 
 # Guarded, not bare: a failed `.` would end this shell non-zero, which is
 # the one thing a hook may never do.
@@ -109,14 +128,15 @@ fi
 # land under a different root than the plugin's own logs. It is a last-
 # resort message written when nothing else can run; a second location for
 # it is a far smaller problem than no message at all.
-# Same for the per-agent homes in rius_cc/agent.py.
+# Codex and Cursor, new here, take the OS home that _os_home.sh found,
+# like rius_cc/agent.py.
 event=$1
 agent_home="${HOME:-$USERPROFILE}/.claude"
 if [ "$1" = "--agent" ]; then
     event=$3
     case "$2" in
-        codex)  agent_home="${CODEX_HOME:-${HOME:-$USERPROFILE}/.codex}" ;;
-        cursor) agent_home="${HOME:-$USERPROFILE}/.cursor" ;;
+        codex)  agent_home="${rius_os_home:-${HOME:-$USERPROFILE}}/.codex" ;;
+        cursor) agent_home="${rius_os_home:-${HOME:-$USERPROFILE}}/.cursor" ;;
     esac
 fi
 log_dir="$agent_home/rius/log"

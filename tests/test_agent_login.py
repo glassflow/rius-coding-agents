@@ -3,6 +3,7 @@ control plane, survive one that does not know the field yet, and keep their
 own credentials."""
 import dataclasses
 import os
+import pathlib
 import socket
 
 import pytest
@@ -17,8 +18,11 @@ HOST = socket.gethostname()[:64]
 
 @pytest.fixture
 def cursor():
-    with agent.using(agent.select("cursor", {})):
+    with agent.using(agent.CURSOR):
         yield
+
+
+ROOT = pathlib.Path(__file__).parent.parent
 
 
 def _start(home, post):
@@ -84,3 +88,8 @@ def test_login_messages_name_the_agent_command(monkeypatch, tmp_path, capsys):
     rius_ctl.dispatch(["login-wait", "--agent", "cursor"], str(tmp_path))
     out = capsys.readouterr().out
     assert "Run `/rius-login` first." in out
+
+
+def test_the_cursor_login_command_waits_as_cursor():
+    text = (ROOT / "cursor" / "commands" / "rius-login.md").read_text()
+    assert '/scripts/rius_ctl.sh" login-wait --agent cursor' in text

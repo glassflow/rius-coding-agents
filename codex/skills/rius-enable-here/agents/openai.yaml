@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: trace this folder"
+  short_description: "Trace this folder, structure only"
+policy:
+  allow_implicit_invocation: false

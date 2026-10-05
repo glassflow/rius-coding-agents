@@ -49,7 +49,8 @@ fi
 # A repository can set PATH for every hook through its .claude/settings.json,
 # so an interpreter that lives in the project folder (or a PATH entry that is
 # relative, and so means "somewhere in the project") is never run. The
-# project folder is Claude Code's CLAUDE_PROJECT_DIR, else the cwd. When that
+# project folder is Claude Code's CLAUDE_PROJECT_DIR (Cursor's
+# CURSOR_PROJECT_DIR), else the cwd, which is Codex's session folder. When that
 # is the home folder or /, everything would be "inside", so the rule is off.
 # The home folder is the OS's (_os_home.sh), never $HOME, which the same
 # settings file could point at the project to switch the rule off.
@@ -58,7 +59,8 @@ if [ -z "${rius_os_home_resolved:-}" ] && [ -n "${dir:-}" ] \
     . "$dir/_os_home.sh"
 fi
 rius_home=${rius_os_home:-}
-rius_project=$(cd -P -- "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P)
+rius_project=$(cd -P -- "${CLAUDE_PROJECT_DIR:-${CURSOR_PROJECT_DIR:-$PWD}}" \
+    2>/dev/null && pwd -P)
 rius_home_real=
 [ -n "$rius_home" ] && rius_home_real=$(cd -P -- "$rius_home" 2>/dev/null && pwd -P)
 case "$rius_project" in /|"$rius_home_real") rius_project= ;; esac

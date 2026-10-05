@@ -13,6 +13,10 @@ DETACHED exporter and exit. stdout is a control channel for hooks: the only
 thing ever written there is SessionStart's one-line notice for the user, as
 hook JSON (rius_cc.notice). Never exits non-zero -- instrumentation that can
 break the session it observes is worse than no instrumentation.
+
+With `--agent cursor` it spools the event instead (rius_cc/cursor_hook.py)
+and, being Cursor's hook, always answers on stdout: Cursor reads that answer
+as the hook's verdict.
 """
 import json
 import os
@@ -98,10 +102,13 @@ def main() -> None:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from rius_cc import agent
 
-        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        profile, argv = agent.from_argv(sys.argv[1:])
         agent.activate(profile)
         event = argv[0] if argv else ""
         raw = sys.stdin.read()
+        if profile.name == agent.CURSOR.name:
+            _run_cursor(event, raw, profile)
+            return
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict) or not payload.get("session_id"):
             return
@@ -113,16 +120,19 @@ def main() -> None:
         if not state.is_valid_session_id(session_id):
             return
         home = platform_compat.home_dir(os.environ)
-        if (profile.name == agent.CLAUDE_CODE.name
-                and foreign_agent.is_foreign(payload, os.environ, home)):
-            return
+        if profile.name == agent.CLAUDE_CODE.name:
+            if foreign_agent.is_foreign(payload, os.environ, home):
+                return
+        elif not payload.get("transcript_path"):
+            return      # e.g. `codex exec --ephemeral`: no log to trace
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
         if event == "SessionStart":
             for note in cfg.ignored_env:
                 log.write(home, cfg, "session %s: %s" % (session_id, note),
                           force=True)
-        if event == "SessionStart" and cfg.api_key:
+        if (event == "SessionStart" and cfg.api_key
+                and profile.name == agent.CLAUDE_CODE.name):
             # A conversation Claude Code moved to this new id is taken over
             # HERE, before anything is spawned: the old id's pinger is told
             # to stop before this id's starts (one pinger per root), and the
@@ -154,7 +164,8 @@ def main() -> None:
         cc_pid = 0
         if event == "SessionStart" and not stopped:
             source = payload.get("source", "")
-            cc_pid = _claude_code_pid()
+            cc_pid = (_direct_parent_pid() if profile.hook_parent_is_agent
+                      else _claude_code_pid())
             instance_id = _mint_instance_id(state, session_id, home, source,
                                             cc_pid)
             _clear_stop_file(state, session_id, home)
@@ -223,6 +234,8 @@ def _spawn_exporter(script_dir, event, payload, args, stderr, detach):
         except OSError:
             pass
         raise
+
+
 def _print_notice(session_id: str, cfg, home: str) -> None:
     try:
         from rius_cc import notice
@@ -232,6 +245,43 @@ def _print_notice(session_id: str, cfg, home: str) -> None:
     if output:
         sys.stdout.write(output + "\n")
         sys.stdout.flush()
+
+
+def _run_cursor(event: str, raw: str, profile) -> None:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    payload = None
+    try:
+        from rius_cc import cursor_hook, platform_compat
+        payload = json.loads(raw) if raw.strip() else {}
+        home = platform_compat.home_dir(os.environ)
+        job = cursor_hook.handle(event, payload, os.environ, home)
+        if job is not None:
+            _spawn_cursor_exporter(event, job, home, profile, script_dir)
+    except BaseException:
+        pass
+    finally:
+        _answer_cursor(event, payload, os.path.dirname(script_dir))
+
+
+def _answer_cursor(event: str, payload, plugin_root: str) -> None:
+    try:
+        from rius_cc import cursor_hook
+        sys.stdout.write(cursor_hook.response(event, payload, plugin_root))
+        sys.stdout.flush()
+    except BaseException:
+        pass
+
+
+def _spawn_cursor_exporter(event, job, home, profile, script_dir) -> None:
+    from rius_cc import agent, platform_compat
+    stderr, log_fh = _spawn_stderr(job, home)
+    try:
+        _spawn_exporter(script_dir, event, job.payload(),
+                        agent.child_argv(profile), stderr,
+                        platform_compat.detached_child_kwargs())
+    finally:
+        if log_fh is not None:
+            log_fh.close()
 
 
 def _claude_code_pid() -> int:
@@ -259,6 +309,13 @@ def _claude_code_pid() -> int:
     except BaseException:
         return 0
     return grandparent if grandparent > 0 else 0
+
+
+def _direct_parent_pid() -> int:
+    """The agent that ran this hook with no shell in between (Codex). An
+    orphaned hook reports init, which never dies: 0, so nothing is watched."""
+    parent = os.getppid()
+    return parent if parent > 1 else 0
 
 
 if __name__ == "__main__":

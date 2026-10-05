@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rius: sign in"
+  short_description: "Sign in to Rius and pick a workspace"
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,38 @@
+{
+  "name": "rius",
+  "version": "0.6.0",
+  "description": "Stream Codex sessions to Rius as OTLP GenAI traces (beta)",
+  "author": {
+    "name": "GlassFlow",
+    "url": "https://www.glassflow.ai"
+  },
+  "homepage": "https://github.com/glassflow/rius-coding-agents",
+  "repository": "https://github.com/glassflow/rius-coding-agents",
+  "license": "MIT",
+  "keywords": [
+    "observability",
+    "opentelemetry",
+    "tracing",
+    "llm",
+    "ai-agents",
+    "mcp",
+    "rius",
+    "codex"
+  ],
+  "skills": "./codex/skills/",
+  "hooks": "./codex/hooks.json",
+  "mcpServers": {
+    "rius": {
+      "type": "http",
+      "url": "https://mcp.eu.console.rius-glassflow.com/mcp"
+    }
+  },
+  "interface": {
+    "displayName": "Rius",
+    "shortDescription": "Trace Codex sessions in Rius",
+    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, and tool calls. Tracing is off until you enable a folder.",
+    "developerName": "GlassFlow",
+    "category": "Developer Tools",
+    "websiteURL": "https://www.glassflow.ai/rius"
+  }
+}

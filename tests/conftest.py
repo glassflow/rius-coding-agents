@@ -63,6 +63,30 @@ def real_state_dir_is_untouched():
                     pytrace=False)
 
 
+# Codex's and Cursor's Rius directories: always under the OS home, whatever
+# CODEX_HOME says, and no test may create or change anything under them.
+REAL_AGENT_RIUS_DIRS = [os.path.join(os.path.expanduser("~"), agent_dir, "rius")
+                        for agent_dir in (".codex", ".cursor")]
+
+
+def _tree(path):
+    found = []
+    for root, _, files in os.walk(path):
+        found += [(os.path.join(root, f), os.path.getmtime(os.path.join(root, f)))
+                  for f in files]
+    return sorted(found)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_agent_dirs_are_untouched():
+    before = [_tree(path) for path in REAL_AGENT_RIUS_DIRS]
+    yield
+    for path, tree in zip(REAL_AGENT_RIUS_DIRS, before):
+        if _tree(path) != tree:
+            pytest.fail("the test suite wrote into the real %s -- a test ran "
+                        "without an isolated HOME" % path, pytrace=False)
+
+
 @pytest.fixture
 def fixtures_dir() -> pathlib.Path:
     return pathlib.Path(__file__).parent / "fixtures"

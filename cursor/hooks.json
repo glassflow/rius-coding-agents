@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor sessionStart",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor beforeSubmitPrompt",
+        "timeout": 5
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor preToolUse",
+        "timeout": 5
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor postToolUse",
+        "timeout": 5
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor postToolUseFailure",
+        "timeout": 5
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor afterAgentThought",
+        "timeout": 5
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor afterAgentResponse",
+        "timeout": 5
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor subagentStart",
+        "timeout": 5
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor subagentStop",
+        "timeout": 5
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor preCompact",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor stop",
+        "timeout": 5
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/hook.sh\" --agent cursor sessionEnd",
+        "timeout": 5
+      }
+    ]
+  }
+}

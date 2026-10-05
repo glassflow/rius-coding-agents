@@ -15,9 +15,10 @@ from typing import Mapping
 # Run with -I, which leaves this script's own folder off sys.path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import (agent, config, continuation, log as rius_log,  # noqa: E402
-                     notice, otlp,
-                     platform_compat, spans, state, subagents, transcript)
+from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
+                     cursor_export, cursor_spans, log as rius_log, notice,
+                     otlp, platform_compat, spans, state, subagents,
+                     transcript)
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -38,6 +39,15 @@ FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
 # The pinger's own cap (heartbeat.MAX_LIFETIME_S): it covers a session whose
 # process could not be identified.
 STALE_AFTER_S = 12 * 60 * 60
+# Codex has no SessionEnd, so the sweep is the only thing that ever closes a
+# Codex trace: it waits an hour, not twelve, once the Codex process is gone.
+CODEX_STALE_AFTER_S = 60 * 60
+
+
+def _stale_after_s() -> int:
+    if agent.active().name == agent.CODEX.name:
+        return CODEX_STALE_AFTER_S
+    return STALE_AFTER_S
 
 
 def _export_error_reason(status: int) -> str:
@@ -294,6 +304,8 @@ def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
     """Close every open span of the session, with no content, reading
     nothing from its transcript."""
     ctx = _ctx(st, session_id, cfg, cwd, capture_content=False)
+    if agent.active().name == agent.CODEX.name:
+        return _close_codex_trace(st, ctx, cfg, session_id, home, end_ns)
     out = []
     try:
         out += subagents.finalize(
@@ -331,7 +343,7 @@ def _close_if_stale(cfg, session_id, home, fingerprint, now_ns) -> None:
         if st.get("key_fingerprint") != fingerprint:
             return
         last_seen_ns = _last_seen_ns(st)
-        if (now_ns - last_seen_ns < STALE_AFTER_S * 10**9
+        if (now_ns - last_seen_ns < _stale_after_s() * 10**9
                 or platform_compat.pid_alive(st.get("cc_pid") or 0)
                 or state.pinger_alive(session_id, home)):
             # Idle, not dead: a session can sit at a prompt for days.
@@ -521,8 +533,158 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                      on_success=_on_shipped(session_id, home, st, saves))
 
 
+def _close_codex_trace(st, ctx, cfg, session_id, home, end_ns) -> int:
+    out = codex_session.finalize(codex_session.load(st), ctx, end_ns)
+    attrs = codex_session.resource_attributes(
+        cfg.service_name, st.get("instance_id") or "", st)
+    return _ship(out, attrs, st, st.get("offset", 0), session_id, home, cfg,
+                 on_success=_on_shipped(session_id, home, st, []))
+
+
+def _ensure_instance_id(st, session_id, home, instance_id):
+    stored = st.get("instance_id")
+    if not stored:
+        stored = instance_id or str(uuid.uuid4())
+        st["instance_id"] = stored
+        state.save(session_id, home, st)
+    return stored
+
+
+def _run_codex_session(event, cfg, payload, home, instance_id) -> int:
+    """One hook event of a Codex session. Codex has no SessionEnd, so the
+    root stays open until the sweep closes it (sweep_stale)."""
+    session_id, cwd = payload["session_id"], payload["cwd"]
+    block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                     if event in FINAL_EVENTS else 0.0)
+    with state.session_lock(session_id, home,
+                            block_timeout=block_timeout) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held, skipping %s"
+                 % (session_id, event))
+            return 0
+        st = codex_session.load(state.load(session_id, home))
+        rollout_path = codex_session.note_payload(st, event, payload)
+        if not cfg.enabled or st.get("content_stopped"):
+            return _run_stopped(event, st, cfg, session_id, cwd,
+                                rollout_path or "", home)
+        instance_id = _ensure_instance_id(st, session_id, home, instance_id)
+        ctx = _ctx(st, session_id, cfg, cwd)
+        out, new_offset = codex_session.build(st, ctx, rollout_path)
+        if st.get("root_started"):
+            st.setdefault("root_cwd", cwd)
+        attrs = codex_session.resource_attributes(cfg.service_name,
+                                                  instance_id, st)
+        return _ship(out, attrs, st, new_offset, session_id, home, cfg,
+                     on_success=_on_shipped(session_id, home, st, []))
+
+
+def _ship_cursor(st, events, out, conversation_id, home, cfg) -> int:
+    resource = cursor_spans.resource_attributes(
+        events, service_name=cfg.service_name)
+    return _ship(out, resource, st, len(events), conversation_id, home, cfg,
+                 on_success=lambda: state.sync_open_marker(conversation_id,
+                                                           home, st))
+
+
+def _export_cursor(event, cfg, conversation_id, home) -> int:
+    """Send what changed in a Cursor conversation's spool since the last
+    accepted export. A folder disabled mid-session sends nothing more until
+    sessionEnd, which closes the open spans without content."""
+    closing = event == "sessionEnd"
+    block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
+                     if event in cursor_export.FINAL_EVENTS else 0.0)
+    with state.session_lock(conversation_id, home,
+                            block_timeout=block_timeout) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held, skipping %s"
+                 % (conversation_id, event))
+            return 0
+        st = state.load(conversation_id, home)
+        if not cfg.enabled and not (closing and state.trace_is_open(st)):
+            _log(home, cfg, "session %s: %s" % (conversation_id, cfg.reason))
+            return 0
+        events = cursor_export.read_events(home, conversation_id)
+        out = cursor_export.spans_to_send(
+            st, events, conversation_id,
+            capture_content=cfg.enabled and cfg.capture_content,
+            max_attr_bytes=cfg.max_attr_bytes,
+            final_ns=_now_ns() if closing else None,
+            closing_only=not cfg.enabled)
+        return _ship_cursor(st, events, out, conversation_id, home, cfg)
+
+
+def _close_stale_cursor(cfg, conversation_id, home, fingerprint,
+                        now_ns) -> None:
+    """Cursor gives no pid to watch, so a conversation idle this long with
+    its trace still open is taken to have ended without a sessionEnd."""
+    with state.session_lock(conversation_id, home) as got:
+        if not got:
+            return
+        st = state.load(conversation_id, home)
+        if not state.trace_is_open(st):
+            state.sync_open_marker(conversation_id, home, st)
+            return
+        last_ns = st.get("last_ns") or 0
+        if (st.get("key_fingerprint") != fingerprint
+                or now_ns - last_ns < STALE_AFTER_S * 10**9):
+            return
+        _log(home, cfg, "session %s: never ended; closing its trace"
+             % conversation_id)
+        events = cursor_export.read_events(home, conversation_id)
+        out = cursor_export.spans_to_send(
+            st, events, conversation_id, capture_content=False,
+            max_attr_bytes=cfg.max_attr_bytes, final_ns=last_ns,
+            closing_only=True)
+        _ship_cursor(st, events, out, conversation_id, home, cfg)
+
+
+def sweep_stale_cursor(cfg, current_id, home, now_ns=None) -> None:
+    fingerprint = config.key_fingerprint(cfg.api_key, cfg.endpoint)
+    if not fingerprint:
+        return
+    now_ns = _now_ns() if now_ns is None else now_ns
+    for conversation_id in state.open_marked_sessions(home):
+        if conversation_id == current_id:
+            continue
+        try:
+            _close_stale_cursor(cfg, conversation_id, home, fingerprint,
+                                now_ns)
+        except Exception as exc:
+            _log(home, cfg, "session %s: stale-trace sweep failed: %r"
+                 % (conversation_id, exc), force=True)
+
+
+def run_cursor(event: str, payload: dict, env: Mapping[str, str],
+               home: str) -> int:
+    cfg = None
+    try:
+        conversation_id = payload.get("conversation_id")
+        if not state.is_valid_session_id(conversation_id):
+            return 0
+        cfg = config.resolve(conversation_id, payload.get("cwd") or "", env,
+                             home)
+        if not cfg.api_key:
+            return 0
+        result = _export_cursor(event, cfg, conversation_id, home)
+        if event == "sessionStart":
+            if cfg.enabled:
+                sweep_stale_cursor(cfg, conversation_id, home)
+            cursor_export.prune(cursor_export.spool_dir(home),
+                                state.open_marked_sessions(home))
+        return result
+    except BaseException as exc:  # never raise out of the exporter
+        try:
+            _log(home, cfg, "exception in run_cursor(): %r" % (exc,),
+                 force=True)
+        except BaseException:
+            pass
+        return 0
+
+
 def run(event: str, payload: dict, env: Mapping[str, str], home: str,
         instance_id: str = "") -> int:
+    if agent.active().name == agent.CURSOR.name:
+        return run_cursor(event, payload, env, home)
     cfg = None
     try:
         session_id = payload.get("session_id")
@@ -541,8 +703,12 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             _log(home, cfg, "session %s: %s" % (session_id, cfg.reason))
             return 0
 
-        result = _run_session(event, cfg, session_id, cwd, transcript_path,
-                              home, instance_id)
+        if agent.active().name == agent.CODEX.name:
+            result = _run_codex_session(event, cfg, payload, home,
+                                        instance_id)
+        else:
+            result = _run_session(event, cfg, session_id, cwd,
+                                  transcript_path, home, instance_id)
         if event == "SessionStart" and cfg.enabled and cfg.api_key:
             # After this session's own export: by then it has taken over any
             # conversation it continues, so that one's root is not swept.
@@ -563,7 +729,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
 
 def main() -> None:
     try:
-        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        profile, argv = agent.from_argv(sys.argv[1:])
         agent.activate(profile)
         payload_path = argv[0]
         instance_id = argv[1] if len(argv) > 1 else ""

@@ -89,6 +89,7 @@ _PENDING_ALLOWED_KEYS = {
     "cc.turn.source",
     "cc.subagent.id",
     "cc.subagent.depth",
+    "codex.subagent.id",
     # The session id a turn's conversation continued from, and the id it
     # runs under now (Claude Code moved the conversation). Ids, not content.
     "cc.continued_from",
@@ -220,22 +221,23 @@ def tool_error_line(output: str, max_bytes: int = ERROR_MESSAGE_MAX_BYTES) -> st
 SCRUB_MARGIN_BYTES = 4096
 
 
-def exportable(value: str, limit: int) -> str:
+def exportable(value: str, limit: int, json_text: bool = False) -> str:
     """`value` with secrets removed, capped at `limit` bytes. Only what can
     be kept is scanned, which bounds the cost of a huge file read."""
     encoded = value.encode("utf-8")
     if len(encoded) <= limit:
-        return scrub.scrub(value)
+        return scrub.scrub(value, json_text)
     head = encoded[:limit + SCRUB_MARGIN_BYTES].decode("utf-8", errors="ignore")
-    kept = scrub.scrub(head).encode("utf-8")[:limit]
+    kept = scrub.scrub(head, json_text).encode("utf-8")[:limit]
     return (kept.decode("utf-8", errors="ignore")
             + " …[truncated %d bytes]" % (len(encoded) - len(kept)))
 
 
-def _content_attr(ctx: Ctx, attrs: Dict[str, Any], key: str, value: str) -> None:
+def _content_attr(ctx: Ctx, attrs: Dict[str, Any], key: str, value: str,
+                  json_text: bool = False) -> None:
     if not ctx.capture_content:
         return
-    attrs[key] = exportable(value, ctx.max_attr_bytes)
+    attrs[key] = exportable(value, ctx.max_attr_bytes, json_text)
 
 
 def _current_turn_parent(state: dict, root_span_id: str) -> str:

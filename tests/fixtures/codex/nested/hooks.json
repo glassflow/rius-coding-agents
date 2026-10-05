@@ -1,0 +1,89 @@
+{
+ "_comment": "The hook events codex-cli 0.144.1 fired for this run, in order; rollouts named by thread id.",
+ "hooks": [
+  {
+   "event": "SessionStart",
+   "agent_id": "",
+   "agent_type": "",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": ""
+  },
+  {
+   "event": "UserPromptSubmit",
+   "agent_id": "",
+   "agent_type": "",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "",
+   "agent_type": "",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": ""
+  },
+  {
+   "event": "UserPromptSubmit",
+   "agent_id": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_type": "default",
+   "transcript": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_type": "default",
+   "transcript": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_transcript": ""
+  },
+  {
+   "event": "UserPromptSubmit",
+   "agent_id": "01a10ca3-b102-72e3-b86e-b2a45a1178d9",
+   "agent_type": "default",
+   "transcript": "01a10ca3-b102-72e3-b86e-b2a45a1178d9",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca3-b102-72e3-b86e-b2a45a1178d9",
+   "agent_type": "default",
+   "transcript": "01a10ca3-b102-72e3-b86e-b2a45a1178d9",
+   "agent_transcript": ""
+  },
+  {
+   "event": "SubagentStop",
+   "agent_id": "01a10ca3-b102-72e3-b86e-b2a45a1178d9",
+   "agent_type": "default",
+   "transcript": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_transcript": "01a10ca3-b102-72e3-b86e-b2a45a1178d9"
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_type": "default",
+   "transcript": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_transcript": ""
+  },
+  {
+   "event": "SubagentStop",
+   "agent_id": "01a10ca3-afbb-7811-bf5d-f7280cb58b19",
+   "agent_type": "default",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": "01a10ca3-afbb-7811-bf5d-f7280cb58b19"
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "",
+   "agent_type": "",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": ""
+  },
+  {
+   "event": "Stop",
+   "agent_id": "",
+   "agent_type": "",
+   "transcript": "01a10ca3-ad67-7ec1-a93b-2248e7bc1e90",
+   "agent_transcript": ""
+  }
+ ]
+}
