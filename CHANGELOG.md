@@ -24,6 +24,13 @@ both. Claude Code: no change in what is traced or sent.
   the home folder the operating system reports. `CODEX_HOME` is not used
   for them, so a repository cannot point Rius at a key or rules it ships.
 - The bundled MCP server signs in with OAuth: `codex mcp login rius`.
+- A subagent spawned with `fork_context` starts from a copy of its
+  parent's history; those inherited turns are not sent again, so the
+  parent's model calls are counted once. Nested subagents (depth 2 and
+  more) stay under the subagent that spawned them.
+- With content on, Codex and Cursor remove secrets as Claude Code does:
+  every content attribute and error line is scrubbed, and a read of a
+  secret-shaped file (`.env*`, `*.pem`, `id_rsa*`, ...) is replaced whole.
 - The skills only run when you type them (`allow_implicit_invocation:
   false`). `$rius:rius-enable-content-here` is the Codex form of
   `/rius:enable-content-here`.
