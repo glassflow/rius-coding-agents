@@ -154,7 +154,7 @@ def main() -> None:
         try:
             exporter = os.path.join(script_dir, "exporter.py")
             subprocess.Popen(
-                [sys.executable, exporter, path, instance_id],
+                [sys.executable, "-I", exporter, path, instance_id],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
@@ -168,7 +168,7 @@ def main() -> None:
                 # short-lived hook process itself.
                 heartbeat = os.path.join(script_dir, "heartbeat.py")
                 subprocess.Popen(
-                    [sys.executable, heartbeat, session_id, cwd, home,
+                    [sys.executable, "-I", heartbeat, session_id, cwd, home,
                      str(cc_pid), instance_id],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,

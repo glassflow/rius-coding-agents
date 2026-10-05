@@ -59,7 +59,7 @@ for rius_candidate in $rius_candidates; do
     # `< /dev/null` because the candidate is by definition not trusted to
     # be Python: without it, a candidate that reads stdin drains the hook
     # payload and the real interpreter gets an empty one.
-    "$rius_candidate" -c "" >/dev/null 2>&1 </dev/null || continue
+    "$rius_candidate" -I -c "" >/dev/null 2>&1 </dev/null || continue
     rius_py=$rius_candidate
     break
 done

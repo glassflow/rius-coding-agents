@@ -16,6 +16,6 @@ if [ -n "$dir" ] && [ -r "$dir/_find_python.sh" ]; then
 fi
 
 if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then
-    exec "$rius_py" "$dir/mcp_headers.py"
+    exec "$rius_py" -I "$dir/mcp_headers.py"
 fi
 echo "{}"

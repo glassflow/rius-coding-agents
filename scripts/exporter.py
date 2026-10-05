@@ -12,7 +12,10 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, continuation, log as rius_log, otlp,
+# Run with -I, which leaves this script's own folder off sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from rius_cc import (config, continuation, log as rius_log, otlp,  # noqa: E402
                      platform_compat, spans, state, subagents, transcript)
 
 

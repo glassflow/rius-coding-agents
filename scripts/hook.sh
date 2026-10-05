@@ -81,7 +81,7 @@ if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then
     # walk lands one level short, on a shell that is already exiting: the
     # pinger would see a dead process on its first iteration and quit,
     # producing zero heartbeats -- silently, as ever.
-    exec "$rius_py" "$dir/hook.py" "$@"
+    exec "$rius_py" -I "$dir/hook.py" "$@"
 fi
 
 # Nothing to run. Leave a breadcrumb, then exit 0 like every other path here.

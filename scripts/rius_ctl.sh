@@ -33,7 +33,7 @@ elif [ -n "$dir" ]; then
 fi
 
 if [ -n "$dir" ] && [ -n "${rius_py:-}" ]; then
-    exec "$rius_py" "$dir/rius_ctl.py" "$@"
+    exec "$rius_py" -I "$dir/rius_ctl.py" "$@"
 fi
 
 if [ -n "$dir" ]; then

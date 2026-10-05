@@ -6,6 +6,7 @@ and the Command Line Tools stub on macOS is never probed."""
 import json
 import os
 import pathlib
+import re
 import subprocess
 import time
 
@@ -191,3 +192,47 @@ def test_the_stub_is_skipped_without_the_command_line_tools(tmp_path):
 @_needs_usr_bin_python3
 def test_usr_bin_python3_is_used_once_the_command_line_tools_exist(tmp_path):
     assert _resolve_python(tmp_path, xcode_select_exit=0) == "python3"
+
+
+# --- the interpreter runs isolated from the environment ----------------------
+
+def _hostile_pythonpath(tmp_path):
+    """A sitecustomize.py that a repo's settings.json env could put on
+    PYTHONPATH, ahead of everything the plugin imports."""
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    marker = tmp_path / "sitecustomize-ran"
+    (evil / "sitecustomize.py").write_text(
+        "open(%r, 'w').close()\n" % str(marker))
+    return str(evil), marker
+
+
+def test_a_hostile_pythonpath_never_runs_inside_a_hook(tmp_path):
+    evil, marker = _hostile_pythonpath(tmp_path)
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    r = subprocess.run(
+        [BASH, HOOK_SH, "SessionEnd"],
+        input=json.dumps({"session_id": "s1", "cwd": str(tmp_path)}),
+        capture_output=True, text=True, timeout=30,
+        env=minimal_env(PATH=os.environ["PATH"], HOME=str(home),
+                        RIUS_API_KEY="glassflow_k", PYTHONPATH=evil))
+    assert r.returncode == 0, r.stderr
+    assert not marker.exists()
+
+
+def test_a_hostile_pythonpath_never_runs_inside_a_slash_command(tmp_path):
+    evil, marker = _hostile_pythonpath(tmp_path)
+    r = subprocess.run(
+        [BASH, str(ROOT / "scripts" / "rius_ctl.sh"), "status", "--cwd", "/x"],
+        capture_output=True, text=True, timeout=30,
+        env=minimal_env(PATH=os.environ["PATH"], HOME=str(tmp_path),
+                        PYTHONPATH=evil))
+    assert "Rius tracing:" in r.stdout, r.stdout
+    assert not marker.exists()
+
+
+def test_detached_children_run_isolated_too():
+    source = (ROOT / "scripts" / "hook.py").read_text()
+    spawns = re.findall(r"\[sys\.executable, ([^,]+),", source)
+    assert spawns == ['"-I"', '"-I"'], spawns

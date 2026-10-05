@@ -723,7 +723,7 @@ def _payload_in_disabled(tmp_path, sid):
 
 
 def _spawned(calls):
-    return [pathlib.Path(c["argv"][1]).name for c in calls]
+    return [pathlib.Path(c["argv"][2]).name for c in calls]
 
 
 def test_a_disabled_session_with_an_open_trace_still_reaches_the_exporter(
