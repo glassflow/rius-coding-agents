@@ -239,6 +239,8 @@ def test_rius_ctl_refuses_an_unknown_agent(tmp_path, capsys):
 @posix_only("the fallback breadcrumb is a POSIX-shell path")
 def test_launcher_breadcrumb_lands_in_the_agent_home(tmp_path):
     codex_home = tmp_path / "codex"
+    with agent.using(agent.CODEX):
+        signed_in.sign_in(str(tmp_path / "home"))
     env = {"HOME": str(tmp_path / "home"), "CODEX_HOME": str(codex_home),
            "PATH": (_fakebin(tmp_path, python3="fail", python="fail")
                     + os.pathsep + TOOLS_WITHOUT_PYTHON)}

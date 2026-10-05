@@ -35,14 +35,27 @@ esac
 # hook.py resolves no key and returns without doing anything, so on a
 # signed-out machine every tool call would pay two interpreter startups for
 # nothing. File tests only. Anything uncertain falls through to hook.py.
-# RIUS_API_KEY is not a reason to run: hook.py ignores it. Another agent's
-# files are not under ~/.claude, so `--agent` always falls through.
+# RIUS_API_KEY is not a reason to run: hook.py ignores it. Each agent's files
+# are in its own folder (rius_cc/agent.py), and an agent hook.py does not
+# know falls through, for hook.py to refuse.
 rius_hook_has_work() {
-    [ "${1:-}" = "--agent" ] && return 0
+    rius_agent_dir=.claude
+    rius_event=${1:-}
+    if [ "${1:-}" = "--agent" ]; then
+        case "${2:-}" in
+            codex)  rius_agent_dir=.codex ;;
+            cursor) rius_agent_dir=.cursor ;;
+            *)      return 0 ;;
+        esac
+        rius_event=${3:-}
+    fi
+    # Cursor's sessionStart answer tells the /rius-* commands where the
+    # plugin is, and /rius-login is how a signed-out user gets a key.
+    [ "$rius_event" = "sessionStart" ] && return 0
     [ -z "${HOME:-}${USERPROFILE:-}" ] && return 0
     for rius_home in "${HOME:-}" "${USERPROFILE:-}"; do
         [ -n "$rius_home" ] || continue
-        rius_dir="$rius_home/.claude/rius"
+        rius_dir="$rius_home/$rius_agent_dir/rius"
         [ -e "$rius_dir/credentials.json" ] && return 0
         # A trace still open on the backend (state.sync_open_marker).
         for rius_open in "$rius_dir"/state/*.open; do
@@ -51,7 +64,7 @@ rius_hook_has_work() {
         # SessionStart may owe a notice: the once-ever install hint, or
         # "run /rius:login" for folders or sessions turned on before signing
         # in (path rules, or a /rius:on override in sessions/).
-        if [ "${1:-}" = "SessionStart" ]; then
+        if [ "$rius_event" = "SessionStart" ]; then
             [ -e "$rius_dir/install-notice-shown" ] || return 0
             [ -e "$rius_dir/config.json" ] && return 0
             for rius_override in "$rius_dir"/sessions/*; do
@@ -61,7 +74,12 @@ rius_hook_has_work() {
     done
     return 1
 }
-rius_hook_has_work "${1:-}" || exit 0
+if ! rius_hook_has_work "$@"; then
+    # Cursor reads every hook's stdout as its answer: "{}" is "no objection"
+    # (rius_cc/cursor_events.response_for).
+    [ "$rius_agent_dir" = .cursor ] && printf '{}'
+    exit 0
+fi
 
 # Guarded, not bare: a failed `.` would end this shell non-zero, which is
 # the one thing a hook may never do.

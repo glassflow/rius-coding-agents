@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/scripts/hook.sh\" --agent codex SessionStart",
-            "timeout": 30
+            "timeout": 10
           }
         ]
       }
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/scripts/hook.sh\" --agent codex UserPromptSubmit",
-            "timeout": 30
+            "timeout": 5
           }
         ]
       }
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/scripts/hook.sh\" --agent codex PostToolUse",
-            "timeout": 30
+            "timeout": 5
           }
         ]
       }
@@ -40,7 +40,7 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/scripts/hook.sh\" --agent codex Stop",
-            "timeout": 30
+            "timeout": 5
           }
         ]
       }
@@ -51,7 +51,7 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/scripts/hook.sh\" --agent codex SubagentStop",
-            "timeout": 30
+            "timeout": 5
           }
         ]
       }

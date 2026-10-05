@@ -49,10 +49,12 @@ fi
 # A repository can set PATH for every hook through its .claude/settings.json,
 # so an interpreter that lives in the project folder (or a PATH entry that is
 # relative, and so means "somewhere in the project") is never run. The
-# project folder is Claude Code's CLAUDE_PROJECT_DIR, else the cwd. When that
+# project folder is Claude Code's CLAUDE_PROJECT_DIR (Cursor's
+# CURSOR_PROJECT_DIR), else the cwd, which is Codex's session folder. When that
 # is the home folder or /, everything would be "inside", so the rule is off.
 rius_home=${HOME:-${USERPROFILE:-}}
-rius_project=$(cd -P -- "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P)
+rius_project=$(cd -P -- "${CLAUDE_PROJECT_DIR:-${CURSOR_PROJECT_DIR:-$PWD}}" \
+    2>/dev/null && pwd -P)
 rius_home_real=$(cd -P -- "${rius_home:-/}" 2>/dev/null && pwd -P)
 case "$rius_project" in /|"$rius_home_real") rius_project= ;; esac
 

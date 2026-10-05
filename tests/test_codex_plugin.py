@@ -5,6 +5,8 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import subprocess
 import sys
 
 import pytest
@@ -14,6 +16,7 @@ import rius_ctl
 from rius_cc import agent, codex_trust, config, login, state
 
 from tests import signed_in
+from tests.platforms import minimal_env, posix_only
 
 ROOT = pathlib.Path(__file__).parent.parent
 MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
@@ -293,3 +296,54 @@ def test_an_ephemeral_codex_session_starts_nothing(monkeypatch, tmp_path):
     assert _hook(monkeypatch, tmp_path, "SessionStart", payload) == []
     assert not (tmp_path / "home" / ".codex" / "rius" / "state").exists()
     assert not (tmp_path / "cx").exists()
+
+
+# --- the hook command, run the way Codex runs it --------------------------------
+
+def _plant(repo, marker):
+    """What a hostile repo could put in Codex's way: interpreters on a
+    PATH entry inside it, and modules for PYTHONPATH or the cwd."""
+    (repo / "bin").mkdir(parents=True)
+    for name in ("python3", "python"):
+        stub = repo / "bin" / name
+        stub.write_text("#!/bin/sh\ntouch %s\nexit 0\n" % marker)
+        stub.chmod(0o755)
+    touch = "open(%r, 'w').close()\n" % str(marker)
+    (repo / "rius_cc").mkdir()
+    (repo / "rius_cc" / "__init__.py").write_text(touch)
+    (repo / "sitecustomize.py").write_text(touch)
+
+
+@posix_only("Codex's hook commands run bash")
+def test_codex_runs_the_hook_command_with_no_shell_and_it_still_works(
+        tmp_path):
+    """Codex splits the command and executes it directly: no shell expands
+    anything, and the exec chain leaves Codex as hook.py's parent. Under
+    `python -I` hook.py must still find its own modules, and nothing the
+    repo planted may run."""
+    home, repo = tmp_path / "home", tmp_path / "repo"
+    marker = tmp_path / "planted-code-ran"
+    _plant(repo, marker)
+    with agent.using(agent.CODEX):
+        # A closed local port: nothing leaves this machine.
+        signed_in.sign_in(str(home), endpoint="http://127.0.0.1:9")
+        config.write_path_rules(str(home), {"enabled_paths": [str(repo)]})
+    payload = dict(_codex_payload("codex_session_start.json"),
+                   cwd=str(repo),
+                   transcript_path=str(repo / "rollout-x.jsonl"))
+    command = _hook_commands()["SessionStart"][0]
+    argv = shlex.split(command.replace("${PLUGIN_ROOT}", str(ROOT)))
+    env = minimal_env(HOME=str(home), PYTHONPATH=str(repo),
+                      PATH=os.pathsep.join([str(repo / "bin"),
+                                            os.environ["PATH"]]))
+    r = subprocess.run(argv, input=json.dumps(payload), capture_output=True,
+                       text=True, cwd=str(repo), env=env, timeout=30)
+    session_id = payload["session_id"]
+    with agent.using(agent.CODEX):
+        stop = state.session_file(session_id, str(home), ".heartbeat.stop")
+        open(stop, "w").close()
+        st = state.load(session_id, str(home))
+    assert r.returncode == 0, r.stderr
+    assert not marker.exists()
+    assert st.get("cc_pid") == os.getpid()
+    assert not (home / ".claude").exists()
