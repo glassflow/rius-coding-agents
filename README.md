@@ -176,6 +176,12 @@ Any other action prints its usage line and exits 0. Every command passes
 `--cwd` for you, so `enable-here`, `disable-here` and `status` always see the
 folder you are actually in.
 
+Only you can run these commands: Claude cannot invoke them on its own, so
+text in a repository cannot talk it into turning tracing on. Each action
+also accepts only its own flags and values (`/rius:login` takes just
+`--env production` or `--env staging`) and refuses anything else without
+changing anything.
+
 `/rius:status` is the important one. Because the default is off, a plugin
 that's installed correctly but simply not enabled for this folder looks
 identical, from the outside, to a plugin that's broken. `status` disambiguates

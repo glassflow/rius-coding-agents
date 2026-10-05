@@ -538,8 +538,7 @@ def test_login_prints_the_disclosure_url_and_code_but_not_the_device_code(
         "access to that workspace, including its admins, can read them.")
     assert "Open:  " + LINK_RESPONSE["connect_url"] in out
     assert "Code:  ABCD-EFGH" in out
-    assert "RIUS_LOGIN_PENDING: bash " in out
-    assert "login-wait --cwd /opt/proj" in out
+    assert rius_ctl.LOGIN_PENDING in out
     assert DEVICE_CODE not in out
 
 
@@ -603,7 +602,7 @@ def test_login_wait_under_a_dead_network_still_says_it_is_waiting(
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
     assert clock.t - 1000.0 <= login.WAIT_BUDGET_SECONDS + login.REQUEST_TIMEOUT_SECONDS
-    assert "Still waiting" in out and "RIUS_LOGIN_PENDING: bash " in out
+    assert "Still waiting" in out and rius_ctl.LOGIN_PENDING in out
     assert os.path.exists(login.pending_path(home))
 
 
@@ -616,7 +615,7 @@ def test_login_wait_still_waiting_repeats_the_pending_line(
     rius_ctl.dispatch(["login-wait", "--cwd", "/opt/proj"], home)
     out = capsys.readouterr().out
     assert "Still waiting" in out
-    assert "RIUS_LOGIN_PENDING: bash " in out and "login-wait --cwd /opt/proj" in out
+    assert rius_ctl.LOGIN_PENDING in out
     assert DEVICE_CODE not in out
 
 
@@ -806,7 +805,8 @@ def test_login_with_an_unknown_environment_says_so(tmp_path, server, capsys):
     fake = server()
     rius_ctl.dispatch(["login", "--env", "prod", "--cwd", "/p"], str(tmp_path))
     out = capsys.readouterr().out
-    assert "Rius login failed: Unknown environment 'prod'" in out
+    assert "`--env prod` is not accepted" in out
+    assert "production or staging" in out
     assert fake.calls == []
 
 

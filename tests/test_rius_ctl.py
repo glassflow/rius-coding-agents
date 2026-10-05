@@ -46,7 +46,7 @@ def test_on_then_status_reports_on(tmp_path):
 def test_enable_here_adds_a_path_rule(tmp_path):
     home = str(tmp_path)
     (tmp_path / ".claude" / "rius").mkdir(parents=True)
-    _run(["enable-here", "--session", "s1", "--cwd", "/opt/proj"], home,
+    _run(["enable-here", "--cwd", "/opt/proj"], home,
          {"RIUS_API_KEY": "glassflow_k"})
     rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
     assert "/opt/proj" in rules["enabled_paths"]
@@ -56,7 +56,7 @@ def test_enable_here_is_idempotent(tmp_path):
     home = str(tmp_path)
     (tmp_path / ".claude" / "rius").mkdir(parents=True)
     for _ in range(3):
-        _run(["enable-here", "--session", "s1", "--cwd", "/opt/proj"], home,
+        _run(["enable-here", "--cwd", "/opt/proj"], home,
              {"RIUS_API_KEY": "glassflow_k"})
     rules = json.load(open(str(tmp_path / ".claude" / "rius" / "config.json")))
     assert rules["enabled_paths"].count("/opt/proj") == 1
@@ -213,25 +213,48 @@ def test_the_catch_all_command_is_gone():
 
 
 @pytest.mark.parametrize("action", ALL_ACTIONS)
-def test_command_frontmatter_permits_the_launcher(action):
+def test_command_frontmatter_permits_only_its_own_action(action):
     front = _frontmatter(action)
     assert re.search(r"^description: \S", front, re.M), front
-    assert ("allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh:*)"
-            in front), front
+    assert ('Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s:*)'
+            % action in front), front
 
 
-@pytest.mark.parametrize("action", PLAIN_ACTIONS)
-def test_command_passes_its_action_and_the_arguments(action):
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_only_the_user_can_run_the_command(action):
+    """RIUS-1222: text in a repo must not be able to talk Claude into
+    enabling tracing or signing in."""
+    assert re.search(r"^disable-model-invocation: true$", _frontmatter(action),
+                     re.M), action
+
+
+def test_every_command_file_is_user_only():
+    for path in sorted(COMMANDS.glob("*.md")):
+        front = path.read_text().split("---")[1]
+        assert "\ndisable-model-invocation: true\n" in front, path.name
+
+
+NO_ARGUMENT_ACTIONS = ("enable-here", "disable-here", "logout")
+
+
+@pytest.mark.parametrize("action", NO_ARGUMENT_ACTIONS)
+def test_command_passes_its_action_and_no_typed_text(action):
     assert _command_line(action) == (
-        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s $ARGUMENTS '
-        '--cwd "$PWD"' % action)
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
+        % action)
+
+
+def test_login_passes_typed_text_as_one_single_quoted_word():
+    assert _command_line("login") == (
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login --cwd "$PWD" '
+        "-- '$ARGUMENTS'")
 
 
 @pytest.mark.parametrize("action", SESSION_ACTIONS)
 def test_session_commands_pass_the_session_id(action):
     assert _command_line(action) == (
         'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s '
-        '--session ${CLAUDE_SESSION_ID} $ARGUMENTS --cwd "$PWD"' % action)
+        '--session ${CLAUDE_SESSION_ID} --cwd "$PWD"' % action)
 
 
 @pytest.mark.parametrize("action", ALL_ACTIONS)
@@ -259,6 +282,16 @@ def test_login_command_tells_claude_to_wait_in_the_background():
         assert needle in body, needle
 
 
+LOGIN_WAIT = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login-wait'
+
+
+def test_login_names_a_fixed_wait_command_instead_of_one_from_the_output():
+    text = _command_file("login").read_text()
+    assert "`%s`" % LOGIN_WAIT in text
+    assert "follows `RIUS_LOGIN_PENDING:`" not in text
+    assert "Bash(%s)" % LOGIN_WAIT in _frontmatter("login")
+
+
 def test_slash_command_line_runs_end_to_end(tmp_path):
     """Run the literal line from the command file, not an approximation."""
     home = tmp_path / "home"
@@ -266,7 +299,7 @@ def test_slash_command_line_runs_end_to_end(tmp_path):
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
            "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k",
            "CLAUDE_SESSION_ID": "s-e2e"}
-    line = _command_line("status").replace("$ARGUMENTS", "")
+    line = _command_line("status")
     r = subprocess.run([BASH, "-c", line], cwd=str(tmp_path),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -287,7 +320,7 @@ def test_enable_here_command_line_enables_the_folder_the_hooks_see(tmp_path):
     proj.mkdir()
     env = {"HOME": str(home), "PATH": os.environ["PATH"],
            "CLAUDE_PLUGIN_ROOT": str(ROOT), "RIUS_API_KEY": "glassflow_k"}
-    line = _command_line("enable-here").replace("$ARGUMENTS", "")
+    line = _command_line("enable-here")
     r = subprocess.run([BASH, "-c", line], cwd=str(proj),
                        capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
