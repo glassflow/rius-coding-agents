@@ -1,5 +1,7 @@
 """exporter.run_cursor: rebuild the conversation from its spool, send only
 what changed since the last accepted export, close what is left open."""
+import os
+
 import pytest
 
 import exporter
@@ -169,3 +171,53 @@ def test_claude_code_runs_never_take_the_cursor_path(tmp_path, monkeypatch):
                         lambda *a: pytest.fail("cursor path taken"))
     with agent.using(agent.CLAUDE_CODE):
         assert exporter.run("Stop", {}, {}, str(tmp_path)) == 0
+
+
+def _age(path, days):
+    old = os.path.getmtime(path) - days * 24 * 3600
+    os.utime(path, (old, old))
+
+
+def _spool_files(sdir):
+    return sorted(os.listdir(sdir))
+
+
+def test_a_spool_idle_past_retention_is_deleted(tmp_path):
+    sdir = cursor_export.spool_dir(str(tmp_path))
+    _spool_until(tmp_path, "docs_session")
+    for name in _spool_files(sdir):
+        _age(os.path.join(sdir, name), 8)
+    assert cursor_export.prune(sdir, []) > 0
+    assert _spool_files(sdir) == []
+
+
+def test_a_recent_spool_is_kept(tmp_path):
+    sdir = cursor_export.spool_dir(str(tmp_path))
+    _spool_until(tmp_path, "docs_session")
+    before = _spool_files(sdir)
+    assert cursor_export.prune(sdir, []) == 0
+    assert _spool_files(sdir) == before
+
+
+def test_an_open_trace_keeps_its_spool_and_its_subagents(tmp_path):
+    sdir = cursor_export.spool_dir(str(tmp_path))
+    for payload in _spool_until(tmp_path, "docs_session"):
+        if payload.get("hook_event_name") == "subagentStart":
+            cursor_export.link_subagent(sdir, payload["subagent_id"], CID)
+    for name in _spool_files(sdir):
+        _age(os.path.join(sdir, name), 30)
+    before = _spool_files(sdir)
+    assert cursor_export.prune(sdir, [CID]) == 0
+    assert _spool_files(sdir) == before
+
+
+def test_session_start_prunes_old_spools(tmp_path, sent):
+    sdir = cursor_export.spool_dir(str(tmp_path))
+    _spool_until(tmp_path, "docs_session")
+    for name in _spool_files(sdir):
+        _age(os.path.join(sdir, name), 8)
+    other = "c0ffee00-0000-4000-8000-000000000002"
+    cursor_events.record({"conversation_id": other,
+                          "hook_event_name": "sessionStart"}, sdir, True, 100)
+    _run(tmp_path, "sessionStart", cid=other)
+    assert _spool_files(sdir) == [other + cursor_events.SPOOL_SUFFIX]

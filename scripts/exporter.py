@@ -593,8 +593,11 @@ def run_cursor(event: str, payload: dict, env: Mapping[str, str],
         if not cfg.api_key:
             return 0
         result = _export_cursor(event, cfg, conversation_id, home)
-        if event == "sessionStart" and cfg.enabled:
-            sweep_stale_cursor(cfg, conversation_id, home)
+        if event == "sessionStart":
+            if cfg.enabled:
+                sweep_stale_cursor(cfg, conversation_id, home)
+            cursor_export.prune(cursor_export.spool_dir(home),
+                                state.open_marked_sessions(home))
         return result
     except BaseException as exc:  # never raise out of the exporter
         try:

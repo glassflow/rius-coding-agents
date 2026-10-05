@@ -14,7 +14,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, Iterable, List, Optional
 
 from . import agent, cursor_events, cursor_spans
 
@@ -28,6 +29,12 @@ EXPORT_EVENTS = ("sessionStart", "stop", "subagentStop", "sessionEnd")
 FINAL_EVENTS = ("stop", "sessionEnd")
 TOOL_DONE_EVENTS = ("postToolUse", "postToolUseFailure")
 EXPORT_EVERY_N_TOOLS = 20
+
+# With capture on, a spool holds prompts and tool output, so it is deleted
+# once its conversation has been idle this long and its trace is closed.
+SPOOL_RETENTION_S = 7 * 24 * 3600
+_SPOOL_FILE_SUFFIXES = (cursor_events.SPOOL_SUFFIX, PARENT_SUFFIX,
+                        TICKS_SUFFIX)
 
 _PENDING, _FINISHED = "p:", "f:"
 
@@ -75,6 +82,45 @@ def tick(sdir: str, conversation_id: str) -> int:
     finally:
         os.close(fd)
     return os.path.getsize(path)
+
+
+def _stem(sdir: str, conversation_id: str) -> str:
+    path = cursor_events.spool_path(sdir, conversation_id)
+    return os.path.basename(path)[:-len(cursor_events.SPOOL_SUFFIX)]
+
+
+def _split_spool_name(name: str) -> Optional[str]:
+    for suffix in _SPOOL_FILE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return None
+
+
+def prune(sdir: str, open_ids: Iterable[str],
+          now_s: Optional[float] = None) -> int:
+    """Delete the spool files of conversations idle longer than
+    SPOOL_RETENTION_S, except those whose trace is still open (`open_ids`):
+    the stale sweep still needs their events to close it. Returns how many
+    files went."""
+    cutoff = (time.time() if now_s is None else now_s) - SPOOL_RETENTION_S
+    keep = {_stem(sdir, cid) for cid in open_ids}
+    try:
+        names = os.listdir(sdir)
+    except OSError:
+        return 0
+    removed = 0
+    for name in names:
+        stem = _split_spool_name(name)
+        if stem is None or _stem(sdir, root_conversation(sdir, stem)) in keep:
+            continue
+        path = os.path.join(sdir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def export_due(event: str, tools_done: int = 0) -> bool:

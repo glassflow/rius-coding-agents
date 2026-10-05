@@ -47,7 +47,9 @@ keeps prompts, answers, and tool input and output out of the spans.
 Each hook appends the event to a local spool at
 `~/.cursor/rius/spool/<conversation>.jsonl` (mode 0600). With capture off,
 no content is ever written to the spool. Your email and transcript paths are
-never written there.
+never written there. A spool is deleted once its conversation has been idle
+for 7 days and its trace is closed; the cleanup runs when a traced chat
+starts.
 
 ## Install
 
