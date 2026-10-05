@@ -209,4 +209,25 @@ def read_conversation(spool_dir: str, conversation_id: str) -> List[Dict[str, An
         pending += [(str(e["subagent_id"]), depth + 1) for e in own
                     if e.get("event") == "subagentStart" and e.get("subagent_id")]
     events.sort(key=lambda e: e["ts"])
-    return events
+    return _without_echoes(events)
+
+
+# The plugin's hooks and the same hooks installed into hooks.json by
+# `rius_ctl install-hooks` both fire once a CLI runs plugin hooks too.
+ECHO_WINDOW_NS = 2 * 10**9
+
+
+def _without_echoes(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop an event that repeats an earlier one, all but its time, within
+    ECHO_WINDOW_NS: the same hook run twice, not two things happening."""
+    last_seen: Dict[str, int] = {}
+    out = []
+    for event in events:
+        body = json.dumps({k: v for k, v in event.items() if k != "ts"},
+                          sort_keys=True, default=str)
+        previous = last_seen.get(body)
+        last_seen[body] = event["ts"]
+        if previous is not None and event["ts"] - previous <= ECHO_WINDOW_NS:
+            continue
+        out.append(event)
+    return out

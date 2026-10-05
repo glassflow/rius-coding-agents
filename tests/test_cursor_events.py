@@ -147,6 +147,27 @@ def test_read_conversation_merges_subagent_spools_in_time_order(tmp_path):
     assert {e["conversation_id"] for e in grep} == {"5ub00000-0000-4000-8000-000000000002"}
 
 
+def _record_at(tmp_path, payload, ts):
+    cursor_events.record(payload, str(tmp_path), True, 1000, clock=lambda: ts)
+
+
+def test_a_hook_installed_twice_counts_once(tmp_path):
+    # The plugin's hook and the same hook from `install-hooks` both fire.
+    answer = _payload(hook_event_name="afterAgentResponse", text="done")
+    _record_at(tmp_path, answer, BASE_NS)
+    _record_at(tmp_path, answer, BASE_NS + 40 * 10**6)
+    events = cursor_events.read_conversation(str(tmp_path), "conv-1")
+    assert [e["ts"] for e in events] == [BASE_NS]
+
+
+def test_the_same_event_later_is_a_new_event(tmp_path):
+    answer = _payload(hook_event_name="afterAgentResponse", text="ok")
+    _record_at(tmp_path, answer, BASE_NS)
+    _record_at(tmp_path, answer, BASE_NS + 60 * 10**9)
+    events = cursor_events.read_conversation(str(tmp_path), "conv-1")
+    assert len(events) == 2
+
+
 @pytest.mark.parametrize("event", ["sessionStart", "preToolUse", "beforeSubmitPrompt",
                                    "stop", "subagentStop", "subagentStart"])
 def test_the_hook_answer_never_blocks_or_steers(event):
