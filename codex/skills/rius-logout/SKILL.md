@@ -6,8 +6,9 @@ description: Sign out of Rius on this machine and revoke the stored key. Use whe
 # rius-logout
 
 This file is `<plugin root>/codex/skills/rius-logout/SKILL.md`; the plugin root is
-the directory three levels above it. Below, `<plugin root>` means that absolute
-path.
+that path with `/codex/skills/rius-logout/SKILL.md` removed from its end, so
+`/x/rius/0.6.0/codex/skills/rius-logout/SKILL.md` gives `/x/rius/0.6.0`.
+Below, `<plugin root>` means that absolute path.
 
 Run this command with the shell tool, from the current working directory:
 

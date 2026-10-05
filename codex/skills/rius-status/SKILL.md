@@ -6,8 +6,9 @@ description: Show whether Rius is tracing this Codex session and folder, and why
 # rius-status
 
 This file is `<plugin root>/codex/skills/rius-status/SKILL.md`; the plugin root is
-the directory three levels above it. Below, `<plugin root>` means that absolute
-path.
+that path with `/codex/skills/rius-status/SKILL.md` removed from its end, so
+`/x/rius/0.6.0/codex/skills/rius-status/SKILL.md` gives `/x/rius/0.6.0`.
+Below, `<plugin root>` means that absolute path.
 
 Run this command with the shell tool, from the current working directory:
 

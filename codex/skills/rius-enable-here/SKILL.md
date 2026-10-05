@@ -6,8 +6,9 @@ description: Trace this folder and everything under it with Rius. Use when the u
 # rius-enable-here
 
 This file is `<plugin root>/codex/skills/rius-enable-here/SKILL.md`; the plugin root is
-the directory three levels above it. Below, `<plugin root>` means that absolute
-path.
+that path with `/codex/skills/rius-enable-here/SKILL.md` removed from its end, so
+`/x/rius/0.6.0/codex/skills/rius-enable-here/SKILL.md` gives `/x/rius/0.6.0`.
+Below, `<plugin root>` means that absolute path.
 
 Run this command with the shell tool, from the current working directory:
 

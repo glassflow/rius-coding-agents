@@ -6,8 +6,9 @@ description: Turn Rius tracing off for this Codex session only. Use when the use
 # rius-off
 
 This file is `<plugin root>/codex/skills/rius-off/SKILL.md`; the plugin root is
-the directory three levels above it. Below, `<plugin root>` means that absolute
-path.
+that path with `/codex/skills/rius-off/SKILL.md` removed from its end, so
+`/x/rius/0.6.0/codex/skills/rius-off/SKILL.md` gives `/x/rius/0.6.0`.
+Below, `<plugin root>` means that absolute path.
 
 Run this command with the shell tool, from the current working directory:
 
