@@ -160,6 +160,12 @@ def _handle_export_failure(session_id, home, cfg, built_state, new_offset,
     return 0
 
 
+def _present(attrs: dict) -> dict:
+    """An unknown resource value (no git repo, no CC version yet) is left out,
+    so it stays absent rather than arriving as an empty string."""
+    return {k: v for k, v in attrs.items() if v is not None and v != ""}
+
+
 def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
           on_success=None) -> int:
     """Export `out` (if any), then persist the state and the new offset.
@@ -167,7 +173,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
     `on_success` runs only once the spans are accepted (or there were none).
     """
     if out:
-        body = otlp.encode(resource_attrs, out)
+        body = otlp.encode(_present(resource_attrs), out)
         status = otlp.export(cfg.endpoint, cfg.api_key, body)
         _log(home, cfg, "session %s: exported %d spans, status=%s"
              % (session_id, len(out), status))

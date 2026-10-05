@@ -416,3 +416,50 @@ def test_a_transient_failure_rewinds_the_subagent_offsets(home, captured,
     assert st["offset"] == 0
     assert st["sub_offsets"] == {}
     assert st["consecutive_export_failures"] == 1
+
+
+
+def _transcript_outside_git(tmp_path, fixtures_dir):
+    lines = []
+    for line in (fixtures_dir / "simple.jsonl").read_text().splitlines():
+        record = json.loads(line)
+        record.pop("gitBranch", None)
+        lines.append(json.dumps(record))
+    path = tmp_path / "no_git.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+def _resource_attrs_sent(monkeypatch, home, transcript, events):
+    seen = []
+    real_encode = exporter.otlp.encode
+    monkeypatch.setattr(exporter.otlp, "encode",
+                        lambda attrs, out: seen.append(dict(attrs)) or real_encode(attrs, out))
+    monkeypatch.setattr(exporter.otlp, "export", lambda *_a, **_kw: 200)
+    sid = "12121212-1212-1212-1212-121212121212"
+    for event in events:
+        payload = {"session_id": sid, "transcript_path": transcript,
+                   "cwd": "/tmp/proj", "hook_event_name": event}
+        exporter.run(event, payload, ENV, home, "inst-1")
+    return seen
+
+
+def test_unknown_resource_values_are_left_out_not_sent_empty(
+        home, tmp_path, fixtures_dir, monkeypatch):
+    """A folder outside git has no branch: the key is absent, not "", or the
+    console's attribute catalog fills with empty values."""
+    seen = _resource_attrs_sent(monkeypatch, home,
+                                _transcript_outside_git(tmp_path, fixtures_dir),
+                                ("PostToolUse", "SessionEnd"))
+    assert len(seen) >= 2
+    for attrs in seen:
+        assert "" not in attrs.values() and None not in attrs.values()
+        assert "cc.git_branch" not in attrs
+        assert attrs["service.instance.id"] == "inst-1"
+
+
+def test_known_resource_values_are_still_sent(home, fixtures_dir, monkeypatch):
+    seen = _resource_attrs_sent(monkeypatch, home,
+                                str(fixtures_dir / "simple.jsonl"), ("PostToolUse",))
+    assert seen[0]["cc.git_branch"] == "main"
+    assert seen[0]["cc.cwd"] == "/tmp/proj"
