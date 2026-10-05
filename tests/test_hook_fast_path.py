@@ -182,7 +182,8 @@ def _resolve_python(tmp_path, xcode_select_exit):
         stub = bindir / name
         stub.write_text("#!/bin/sh\n%s\n" % body)
         stub.chmod(0o755)
-    script = '. "%s"; printf "%%s" "$rius_py"' % FIND_PYTHON_SH
+    script = 'dir="%s"; . "$dir/_find_python.sh"; printf "%%s" "$rius_py"' % (
+        os.path.dirname(FIND_PYTHON_SH))
     r = subprocess.run([BASH, "-c", script], capture_output=True, text=True,
                        timeout=30, env={"PATH": "%s:/usr/bin:/bin" % bindir})
     return r.stdout

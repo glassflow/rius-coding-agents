@@ -51,9 +51,16 @@ fi
 # relative, and so means "somewhere in the project") is never run. The
 # project folder is Claude Code's CLAUDE_PROJECT_DIR, else the cwd. When that
 # is the home folder or /, everything would be "inside", so the rule is off.
-rius_home=${HOME:-${USERPROFILE:-}}
+# The home folder is the OS's (_os_home.sh), never $HOME, which the same
+# settings file could point at the project to switch the rule off.
+if [ -z "${rius_os_home_resolved:-}" ] && [ -n "${dir:-}" ] \
+        && [ -r "$dir/_os_home.sh" ]; then
+    . "$dir/_os_home.sh"
+fi
+rius_home=${rius_os_home:-}
 rius_project=$(cd -P -- "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P)
-rius_home_real=$(cd -P -- "${rius_home:-/}" 2>/dev/null && pwd -P)
+rius_home_real=
+[ -n "$rius_home" ] && rius_home_real=$(cd -P -- "$rius_home" 2>/dev/null && pwd -P)
 case "$rius_project" in /|"$rius_home_real") rius_project= ;; esac
 
 rius_real_path() {
@@ -112,7 +119,8 @@ rius_search_path() {
 }
 
 # An interpreter the user pinned: one absolute path on the first line of
-# ~/.claude/rius/python. Tried before PATH, under the same rules.
+# ~/.claude/rius/python. Tried before PATH, under the same rules. No pin is
+# read when the OS home could not be resolved.
 rius_pin_file="$rius_home/.claude/rius/python"
 rius_pinned=
 if [ -n "$rius_home" ] && [ -r "$rius_pin_file" ]; then
