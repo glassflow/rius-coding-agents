@@ -47,8 +47,9 @@ CI enforces most of these, and a PR that breaks one won't merge.
 - **Hooks never break Claude Code.** Every hook exits 0. Failures go to
   `~/.claude/rius/log/`, never to the user's session.
 - **Default off, content optional.** Nothing is sent for a folder that
-  isn't enabled, and `RIUS_CAPTURE_CONTENT=false` has to drop every content
-  field, including in error paths.
+  isn't enabled, and structure only (the default for a folder) has to drop
+  every content field, including in error paths. Content that is sent goes
+  through `scripts/rius_cc/scrub.py` first.
 - **The environment only turns things off.** A cloned repo's
   `.claude/settings.json` reaches every hook, so nothing read from the
   environment may enable tracing, raise capture, or pick the key or its

@@ -20,5 +20,6 @@ If a line starts with `RIUS_LOGIN_PENDING:`, sign-in is not finished:
    `RIUS_LOGIN_PENDING:` line. If the output says `Still waiting`, run the
    command from its `RIUS_LOGIN_PENDING:` line again the same way, in the
    background, and keep doing so until it prints something else.
-4. If it printed `Connected as`, offer to run `/rius:enable-here` for the
-   current folder. Do not run it unless the user says yes.
+4. If it printed `Connected as`, tell the user they can run
+   `/rius:enable-here` in the folder they want traced. It is theirs to run:
+   it chooses what that folder sends, so do not run it yourself.

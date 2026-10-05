@@ -94,9 +94,10 @@ STILL_OFF = ("Still OFF: `%s` is disabled. Run `/rius:enable-here` in that "
              "folder instead.")
 
 
-def _move_path(home, cwd, to_key, from_key):
+def _move_path(home, cwd, to_key, from_key, with_content=None):
     """Any other spelling of `cwd` goes, from both lists: a rule written
-    through a symlink before 0.4.4 never matched what the hooks see."""
+    through a symlink before 0.4.4 never matched what the hooks see.
+    An enable records whether the folder sends content."""
     rules = config.read_path_rules(home)
     rules[from_key] = [p for p in config.rule_list(rules, from_key)
                        if not config.same_folder(p, cwd)]
@@ -106,7 +107,21 @@ def _move_path(home, cwd, to_key, from_key):
         target.append(cwd)
     rules[to_key] = target
     rules["disabled_paths"] = _resolved_disables(rules["disabled_paths"])
+    choices = _content_choices(rules, cwd, with_content)
+    rules.pop(config.CONTENT_CHOICES_KEY, None)
+    if choices:
+        rules[config.CONTENT_CHOICES_KEY] = choices
     config.write_path_rules(home, rules)
+
+
+def _content_choices(rules, cwd, with_content):
+    """Choices for the enable rules that are left, plus this one's."""
+    enabled = config.rule_list(rules, "enabled_paths")
+    choices = {rule: config.content_choice(rules, rule) for rule in enabled}
+    if with_content is not None:
+        choices[cwd] = with_content
+    return {rule: choice for rule, choice in choices.items()
+            if choice is not None}
 
 
 def _resolved_disables(disables):
@@ -126,31 +141,35 @@ TOO_BROAD = ("Not changed: `%s` is too broad for a rule (the filesystem or a "
              "drive root, or a *, ? or [ right below it).")
 
 
-def _enable_here(cwd, home):
+def _enable_here(cwd, home, with_content):
     cwd = config.resolved(cwd)
     if not config.is_usable_rule(cwd):
         print(TOO_BROAD % cwd)
         return
-    _move_path(home, cwd, "enabled_paths", "disabled_paths")
+    _move_path(home, cwd, "enabled_paths", "disabled_paths", with_content)
     match = config.matching_rule(cwd, home)
     if match and not match[1]:
         print(STILL_OFF % match[0])
     else:
-        print(_enabled_disclosure(cwd, home))
+        print(_enabled_disclosure(cwd, home, with_content))
 
 
 SENDS_CONTENT = ("Sessions here %s prompts, replies, the contents of files "
-                 "Claude reads and command output to %s.")
-SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing) "
-                   "to %s; RIUS_CAPTURE_CONTENT=false withholds prompts, "
-                   "replies, file contents and command output.")
-STOP_WITH_CONTENT = ("Set RIUS_CAPTURE_CONTENT=false to send structure only "
-                     "(models, tokens, timing), or run /rius:disable-here to "
-                     "stop.")
-STOP_WITHOUT_CONTENT = "Run /rius:disable-here to stop."
+                 "Claude reads and command output to %s, with the secrets "
+                 "Rius recognises removed first.")
+SENDS_STRUCTURE = ("Sessions here %s structure only (models, tokens, timing, "
+                   "tool names) to %s: no prompts, replies, file contents or "
+                   "command output.")
+STOP_WITH_CONTENT = ("Run /rius:enable-here to send structure only, or "
+                     "/rius:disable-here to stop.")
+STOP_WITHOUT_CONTENT = ("Structure only is recommended. To include content "
+                        "for this folder, run /rius:enable-here --with-content. "
+                        "Run /rius:disable-here to stop.")
+ENV_KEEPS_CONTENT_OFF = ("RIUS_CAPTURE_CONTENT=false in your environment keeps "
+                         "content off here.")
 
 
-def _enabled_disclosure(cwd, home):
+def _enabled_disclosure(cwd, home, with_content):
     """RIUS-969: enabling a folder is the consent act, so say what it will
     upload, where to, and how to stop -- and only what is true right now."""
     cfg = config.resolve("", cwd, os.environ, home)
@@ -159,9 +178,13 @@ def _enabled_disclosure(cwd, home):
     else:
         verb = "will send"
         dest = "the workspace you pick once you sign in with /rius:login"
-    sends, stop = ((SENDS_CONTENT, STOP_WITH_CONTENT) if cfg.capture_content
-                   else (SENDS_STRUCTURE, STOP_WITHOUT_CONTENT))
-    return "\n".join([_enabled_scope(cwd, home), sends % (verb, dest), stop])
+    if cfg.capture_content:
+        lines = [SENDS_CONTENT % (verb, dest), STOP_WITH_CONTENT]
+    elif with_content:
+        lines = [SENDS_STRUCTURE % (verb, dest), ENV_KEEPS_CONTENT_OFF]
+    else:
+        lines = [SENDS_STRUCTURE % (verb, dest), STOP_WITHOUT_CONTENT]
+    return "\n".join([_enabled_scope(cwd, home)] + lines)
 
 
 def _enabled_scope(cwd, home):
@@ -231,6 +254,9 @@ def _print_status(session_id, cwd, home, inferred=False):
     if cfg.key_source:
         print("Key from: %s" % cfg.key_source)
     _print_rule(cwd, home)
+    print(_content_line(cfg))
+    if cfg.unchosen_rule:
+        print(UNCHOSEN_RULE % cfg.unchosen_rule)
     for rule, enables in (config.symlinked_rules(typed_cwd, home)
                           if typed_cwd else []):
         verb = "enable" if enables else "disable"
@@ -251,6 +277,17 @@ def _print_status(session_id, cwd, home, inferred=False):
     if (cfg.enabled and not stopped and session_id
             and not os.path.exists(state.state_path(session_id, home))):
         print(NO_HOOK_RAN)
+
+
+CONTENT_ON = "Content: prompts, replies, file contents and command output"
+CONTENT_OFF = "Content: none (structure only)"
+UNCHOSEN_RULE = ("Rule `%s` predates the content choice, so it still sends "
+                 "content. Pick one: /rius:enable-here (structure only, "
+                 "recommended) or /rius:enable-here --with-content.")
+
+
+def _content_line(cfg):
+    return CONTENT_ON if cfg.capture_content else CONTENT_OFF
 
 
 STALE_RULE = ("Rule `%s` %ss nothing: Claude Code calls that folder %s. "
@@ -441,7 +478,7 @@ def dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        _enable_here(cwd or os.getcwd(), home)
+        _enable_here(cwd or os.getcwd(), home, "--with-content" in argv)
     elif action == "disable-here":
         _disable_here(cwd or os.getcwd(), home)
     elif action == "status":

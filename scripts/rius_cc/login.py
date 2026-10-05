@@ -69,9 +69,10 @@ DEFAULT_ENVIRONMENT = "production"
 ENVIRONMENT_VAR = "RIUS_ENV"
 
 DISCLOSURE = (
-    "Folders you enable send full sessions (prompts, replies, file contents, "
-    "command output) to the workspace you pick. Everyone with access to that "
-    "workspace, including its admins, can read them.")
+    "Folders you enable send their session structure (models, tokens, "
+    "timing) to the workspace you pick, and prompts, replies, file contents "
+    "and command output only where you enable with --with-content. Everyone "
+    "with access to that workspace, including its admins, can read them.")
 
 LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
 NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
