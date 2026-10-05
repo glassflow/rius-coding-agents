@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, platform_compat  # noqa: E402
+from rius_cc import agent, config, platform_compat  # noqa: E402
 
 
 def headers(env, home):
@@ -25,6 +25,8 @@ def headers(env, home):
 
 def main():
     try:
+        profile, _ = agent.from_argv(sys.argv[1:], os.environ)
+        agent.activate(profile)
         out = headers(os.environ, platform_compat.home_dir(os.environ))
     except Exception:  # a traceback on stdout is not JSON; fail closed
         out = {}

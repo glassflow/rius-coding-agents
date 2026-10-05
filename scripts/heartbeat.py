@@ -67,7 +67,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import platform_compat  # noqa: E402
+from rius_cc import agent, platform_compat  # noqa: E402
 
 PAYLOAD_VERSION = 1
 OPEN_TRACES_CAP = 32
@@ -147,7 +147,7 @@ class Pinger:
         self._log = log or (lambda _msg: None)
 
     def _state_dir(self) -> str:
-        d = os.path.join(self.home, ".claude", "rius", "state")
+        d = agent.active().state_dir(self.home)
         os.makedirs(d, exist_ok=True)
         return d
 
@@ -241,12 +241,14 @@ class Pinger:
 
 
 def main() -> None:
-    if len(sys.argv) < 5:
+    profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+    agent.activate(profile)
+    if len(argv) < 4:
         return
-    session_id, cwd, home, watch_pid_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    session_id, cwd, home, watch_pid_s = argv[0], argv[1], argv[2], argv[3]
     # hook.py mints the instance id before spawning anything and passes it
     # here; state is only a fallback (a hook from an older install, say).
-    argv_instance_id = sys.argv[5] if len(sys.argv) > 5 else ""
+    argv_instance_id = argv[4] if len(argv) > 4 else ""
     try:
         watch_pid = int(watch_pid_s)
     except ValueError:

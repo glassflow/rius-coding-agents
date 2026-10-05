@@ -73,8 +73,8 @@ jobs:
           sys.path.insert(0, "scripts")
           for mod in ("rius_cc.proto", "rius_cc.transcript", "rius_cc.spans",
                       "rius_cc.config", "rius_cc.state", "rius_cc.otlp",
-                      "rius_cc.subagents", "exporter", "heartbeat", "hook",
-                      "rius_ctl"):
+                      "rius_cc.subagents", "rius_cc.agent", "exporter",
+                      "heartbeat", "hook", "rius_ctl"):
               importlib.import_module(mod)
           print("%d modules parse and import on %s" % (len(files), sys.version.split()[0]))
           PY

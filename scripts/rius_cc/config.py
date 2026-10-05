@@ -14,13 +14,13 @@ import os
 import re
 from typing import Mapping, Optional, Tuple
 
-from . import login
+from . import agent, login
 from .platform_compat import IS_WINDOWS
 
 DEFAULT_ENDPOINT = "https://ingest.eu.console.rius-glassflow.com"
 # Must match the default in .mcp.json, which cannot read this module.
 DEFAULT_MCP_URL = login.ENVIRONMENTS[login.DEFAULT_ENVIRONMENT]["mcp_url"]
-DEFAULT_SERVICE_NAME = "claude-code"
+DEFAULT_SERVICE_NAME = agent.CLAUDE_CODE.service_name
 DEFAULT_MAX_ATTR_BYTES = 32768
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -51,7 +51,7 @@ class Config:
 
 
 def _rius_dir(home: str) -> str:
-    return os.path.join(home, ".claude", "rius")
+    return agent.active().rius_dir(home)
 
 
 def _sessions_dir(home: str) -> str:
@@ -285,7 +285,7 @@ def _path_rules_decision(cwd: str, home: str):
 
 
 def _max_attr_bytes(env: Mapping[str, str]) -> int:
-    raw = env.get("RIUS_CLAUDE_MAX_ATTR_BYTES")
+    raw = env.get(agent.active().env_var("MAX_ATTR_BYTES"))
     if raw is None:
         return DEFAULT_MAX_ATTR_BYTES
     try:
@@ -362,12 +362,13 @@ def misdirected_mcp_url(env: Mapping[str, str], home: str) -> Optional[str]:
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
     api_key, endpoint, key_source, workspace_name = _credential(env, home)
-    service_name = env.get("RIUS_SERVICE_NAME", DEFAULT_SERVICE_NAME)
+    profile = agent.active()
+    service_name = env.get("RIUS_SERVICE_NAME", profile.service_name)
     capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT"))
     if capture_content is None:
         capture_content = True
     max_attr_bytes = _max_attr_bytes(env)
-    debug = bool(_parse_bool_env(env.get("RIUS_CLAUDE_DEBUG")))
+    debug = bool(_parse_bool_env(env.get(profile.env_var("DEBUG"))))
 
     enabled = False
     reason = "off: no path rule matches %s, and the default is off" % cwd
@@ -377,11 +378,11 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         enabled = session_override
         reason = "on: session override" if enabled else "off: session override"
     else:
-        env_decision = _parse_bool_env(env.get("RIUS_CLAUDE_ENABLED"))
+        enabled_var = profile.env_var("ENABLED")
+        env_decision = _parse_bool_env(env.get(enabled_var))
         if env_decision is not None:
             enabled = env_decision
-            reason = ("on: RIUS_CLAUDE_ENABLED" if enabled
-                       else "off: RIUS_CLAUDE_ENABLED")
+            reason = ("on: " if enabled else "off: ") + enabled_var
         else:
             path_decision, path_reason = _path_rules_decision(cwd, home)
             if path_decision is not None:

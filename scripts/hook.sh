@@ -61,7 +61,17 @@ fi
 # land under a different root than the plugin's own logs. It is a last-
 # resort message written when nothing else can run; a second location for
 # it is a far smaller problem than no message at all.
-log_dir="${HOME:-$USERPROFILE}/.claude/rius/log"
+# Same for the per-agent homes in rius_cc/agent.py.
+event=$1
+agent_home="${HOME:-$USERPROFILE}/.claude"
+if [ "$1" = "--agent" ]; then
+    event=$3
+    case "$2" in
+        codex)  agent_home="${CODEX_HOME:-${HOME:-$USERPROFILE}/.codex}" ;;
+        cursor) agent_home="${HOME:-$USERPROFILE}/.cursor" ;;
+    esac
+fi
+log_dir="$agent_home/rius/log"
 if [ -n "$dir" ]; then
     reason="no Python interpreter found on PATH (tried: $rius_candidates).
 Install Python 3.9+ and make sure one of those names is on PATH."
@@ -70,7 +80,7 @@ else
 directory. Claude Code should invoke it by path via \${CLAUDE_PLUGIN_ROOT}."
 fi
 mkdir -p "$log_dir" 2>/dev/null && cat >>"$log_dir/bootstrap.log" 2>/dev/null <<EOF
-$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) rius hook "$1": $reason
+$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) rius hook "$event": $reason
 The Rius plugin cannot run and is tracing nothing.
 EOF
 exit 0

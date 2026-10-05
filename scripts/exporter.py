@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Mapping
 
-from rius_cc import (config, continuation, log as rius_log, otlp,
+from rius_cc import (agent, config, continuation, log as rius_log, otlp,
                      platform_compat, spans, state, subagents, transcript)
 
 
@@ -262,6 +262,17 @@ def _on_shipped(session_id, home, st, saves):
     return done
 
 
+def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
+    prefix = agent.active().attr_prefix
+    return {
+        "service.name": cfg.service_name,
+        "service.instance.id": instance_id,
+        prefix + "version": version,
+        prefix + "cwd": cwd,
+        prefix + "git_branch": git_branch,
+    }
+
+
 def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
                  end_ns) -> int:
     """Close every open span of the session, with no content, reading
@@ -278,13 +289,7 @@ def _close_trace(st, cfg, session_id, cwd, transcript_path, home,
                                         end_ns, final=True)
     out += adopted
     out += spans.finalize_session(st, ctx, end_ns)
-    resource_attrs = {
-        "service.name": cfg.service_name,
-        "service.instance.id": st.get("instance_id") or "",
-        "cc.version": "",
-        "cc.cwd": cwd,
-        "cc.git_branch": "",
-    }
+    resource_attrs = _resource_attrs(cfg, st.get("instance_id") or "", cwd)
     return _ship(out, resource_attrs, st, st.get("offset", 0), session_id,
                  home, cfg, on_success=_on_shipped(session_id, home, st, saves))
 
@@ -493,13 +498,8 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                      % (session_id, exc), force=True)
             out += spans.finalize_session(st, ctx, now_ns)
 
-        resource_attrs = {
-            "service.name": cfg.service_name,
-            "service.instance.id": instance_id,
-            "cc.version": first_cc_version,
-            "cc.cwd": first_cwd,
-            "cc.git_branch": first_git_branch,
-        }
+        resource_attrs = _resource_attrs(cfg, instance_id, first_cwd,
+                                         first_cc_version, first_git_branch)
         return _ship(out, resource_attrs, st, new_offset, session_id,
                      home, cfg,
                      on_success=_on_shipped(session_id, home, st, saves))
@@ -545,8 +545,10 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
 
 def main() -> None:
     try:
-        payload_path = sys.argv[1]
-        instance_id = sys.argv[2] if len(sys.argv) > 2 else ""
+        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        agent.activate(profile)
+        payload_path = argv[0]
+        instance_id = argv[1] if len(argv) > 1 else ""
         with open(payload_path) as fh:
             wrapper = json.load(fh)
         event = wrapper.get("event")

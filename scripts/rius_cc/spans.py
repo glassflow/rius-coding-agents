@@ -11,13 +11,13 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from . import context_sizes
+from . import agent, context_sizes
 
-PROVIDER_NAME = "anthropic"
+PROVIDER_NAME = agent.CLAUDE_CODE.provider
 
 # The root span's name is the trace's title in the console. It is the
 # session's own name when Claude Code has one and capture is on, else this.
-DEFAULT_ROOT_NAME = "claude-code session"
+DEFAULT_ROOT_NAME = agent.CLAUDE_CODE.root_name
 
 # Claude Code caps a session name at 200 characters; so does the plugin, for
 # a transcript written by a version that did not.

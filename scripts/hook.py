@@ -85,7 +85,8 @@ def _spawn_stderr(cfg, home: str):
     if not getattr(cfg, "debug", False):
         return subprocess.DEVNULL, None
     try:
-        log_dir = os.path.join(home, ".claude", "rius", "log")
+        from rius_cc import agent
+        log_dir = agent.active().log_dir(home)
         os.makedirs(log_dir, exist_ok=True)
         fh = open(os.path.join(log_dir, "spawn.log"), "a")
         return fh, fh
@@ -95,18 +96,23 @@ def _spawn_stderr(cfg, home: str):
 
 def main() -> None:
     try:
-        event = sys.argv[1] if len(sys.argv) > 1 else ""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from rius_cc import agent
+
+        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        agent.activate(profile)
+        event = argv[0] if argv else ""
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict) or not payload.get("session_id"):
             return
 
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from rius_cc import (config, continuation, foreign_agent,
                              platform_compat, state)
 
         home = platform_compat.home_dir(os.environ)
-        if foreign_agent.is_foreign(payload, os.environ, home):
+        if (profile.name == agent.CLAUDE_CODE.name
+                and foreign_agent.is_foreign(payload, os.environ, home)):
             return
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
@@ -157,7 +163,8 @@ def main() -> None:
         try:
             exporter = os.path.join(script_dir, "exporter.py")
             subprocess.Popen(
-                [sys.executable, exporter, path, instance_id],
+                [sys.executable, exporter, path, instance_id]
+                + agent.child_argv(profile),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
@@ -172,7 +179,7 @@ def main() -> None:
                 heartbeat = os.path.join(script_dir, "heartbeat.py")
                 subprocess.Popen(
                     [sys.executable, heartbeat, session_id, cwd, home,
-                     str(cc_pid), instance_id],
+                     str(cc_pid), instance_id] + agent.child_argv(profile),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr,

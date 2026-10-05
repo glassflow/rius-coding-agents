@@ -4,6 +4,7 @@
 Actions: on | off | clear | enable-here | disable-here | status | login |
          login-wait | logout
 Flags:   --session <id>   --cwd <path>   --env <name> (login only)
+         --agent <claude-code|codex|cursor> (default claude-code)
 
 `on`, `off` and `clear` write a per-session override and therefore REFUSE
 to run without an explicit `--session`: guessing the session (from the most
@@ -18,12 +19,14 @@ verbatim), the redacted key, the endpoint and, when known, spans
 exported so far. Every action exits 0, including an unknown one, which
 prints usage.
 """
+import contextlib
+import io
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import config, login, platform_compat, state  # noqa: E402
+from rius_cc import agent, config, login, platform_compat, state  # noqa: E402
 
 USAGE = (
     "Usage: rius_ctl.py "
@@ -78,7 +81,7 @@ def _parse_args(argv):
 
 def _most_recent_session(home):
     """Resolve a session id from the most recently modified state file."""
-    d = os.path.join(home, ".claude", "rius", "state")
+    d = agent.active().state_dir(home)
     try:
         entries = [f for f in os.listdir(d) if f.endswith(".json")]
     except OSError:
@@ -411,6 +414,30 @@ def _run_account_action(action, home, cwd, env_flag):
 
 
 def dispatch(argv, home):
+    try:
+        profile, argv = agent.from_argv(argv, os.environ)
+    except agent.UnknownAgent as exc:
+        print("Rius: %s." % exc)
+        return
+    with agent.using(profile), _localized_stdout(profile):
+        _dispatch(argv, home)
+
+
+@contextlib.contextmanager
+def _localized_stdout(profile):
+    """Every message names Claude Code's commands; reword them once, here."""
+    if profile is agent.CLAUDE_CODE:
+        yield
+        return
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            yield
+    finally:
+        sys.stdout.write(profile.localize(out.getvalue()))
+
+
+def _dispatch(argv, home):
     action, session_id, cwd, env_flag = _parse_args(argv)
 
     if action in ("login", "login-wait", "logout"):
