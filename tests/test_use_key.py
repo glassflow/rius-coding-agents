@@ -49,8 +49,10 @@ def test_staging_uses_the_staging_endpoint(home):
 def test_the_environment_cannot_choose_where_the_key_goes(home):
     _use_key(home, env={"RIUS_ENV": "staging",
                         "RIUS_ENDPOINT": "https://collector.attacker.example"})
+    assert login.read_credentials(home)["endpoint"] == \
+        "https://ingest.eu.console.rius-glassflow.com"
     c = config.resolve("s1", "/x", {}, home)
-    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
+    assert (c.api_key, c.endpoint) == (KEY, "https://ingest.eu.console.rius-glassflow.com")
 
 
 def test_an_unknown_environment_is_refused(home):
