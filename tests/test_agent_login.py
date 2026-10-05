@@ -18,7 +18,7 @@ HOST = socket.gethostname()[:64]
 
 @pytest.fixture
 def cursor():
-    with agent.using(agent.select("cursor", {})):
+    with agent.using(agent.CURSOR):
         yield
 
 

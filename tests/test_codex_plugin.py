@@ -193,6 +193,22 @@ def test_status_reports_hook_trust_and_mcp_sign_in(codex_env, capsys):
     assert "/mcp" not in out
 
 
+def test_status_reads_hook_trust_from_codex_home_but_writes_nothing_there(
+        codex_env, tmp_path, capsys):
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text("".join(
+        '[hooks.state."rius@m:codex/hooks.json:%s:0:0"]\n'
+        'trusted_hash = "x"\n' % e
+        for e in codex_trust.expected_events(str(ROOT))))
+    rius_ctl.dispatch(["enable-here", "--agent", "codex", "--cwd", "/tmp"],
+                      codex_env)
+    rius_ctl.dispatch(["status", "--agent", "codex", "--cwd", "/tmp"],
+                      codex_env)
+    assert "Hooks: approved in /hooks (5 of 5)" in capsys.readouterr().out
+    assert sorted(os.listdir(str(codex_home))) == ["config.toml"]
+
+
 def test_claude_code_status_is_unchanged(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("RIUS_API_KEY", raising=False)
     rius_ctl.dispatch(["status", "--cwd", "/tmp"], str(tmp_path))
@@ -227,7 +243,7 @@ def _hook(monkeypatch, tmp_path, event, payload, ppid=4242):
             calls.append(list(cmd))
 
     env = {"HOME": str(tmp_path / "home"), "CODEX_HOME": str(tmp_path / "cx")}
-    with agent.using(agent.select("codex", env)):
+    with agent.using(agent.CODEX):
         signed_in.sign_in(env["HOME"])
         config.write_path_rules(env["HOME"], {"enabled_paths": [payload["cwd"]]})
     monkeypatch.setattr(hook_mod.subprocess, "Popen", FakePopen)
@@ -259,7 +275,7 @@ def test_codex_session_start_watches_the_codex_process(monkeypatch, tmp_path):
     calls = _hook(monkeypatch, tmp_path, "SessionStart", payload)
     assert len(calls) == 2
     home = str(tmp_path / "home")
-    with agent.using(agent.select("codex", {"CODEX_HOME": str(tmp_path / "cx")})):
+    with agent.using(agent.CODEX):
         assert state.load(payload["session_id"], home)["cc_pid"] == 4242
     heartbeat = next(c for c in calls if c[2].endswith("heartbeat.py"))
     assert heartbeat[6] == "4242"
@@ -268,7 +284,7 @@ def test_codex_session_start_watches_the_codex_process(monkeypatch, tmp_path):
 def test_an_orphaned_codex_hook_watches_nothing(monkeypatch, tmp_path):
     payload = _codex_payload("codex_session_start.json")
     _hook(monkeypatch, tmp_path, "SessionStart", payload, ppid=1)
-    with agent.using(agent.select("codex", {"CODEX_HOME": str(tmp_path / "cx")})):
+    with agent.using(agent.CODEX):
         st = state.load(payload["session_id"], str(tmp_path / "home"))
     assert st["cc_pid"] == 0
 
@@ -277,4 +293,5 @@ def test_an_ephemeral_codex_session_starts_nothing(monkeypatch, tmp_path):
     payload = dict(_codex_payload("codex_session_start.json"),
                    transcript_path=None)
     assert _hook(monkeypatch, tmp_path, "SessionStart", payload) == []
-    assert not (tmp_path / "cx" / "rius" / "state").exists()
+    assert not (tmp_path / "home" / ".codex" / "rius" / "state").exists()
+    assert not (tmp_path / "cx").exists()

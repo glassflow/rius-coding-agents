@@ -340,8 +340,9 @@ Then, in Codex:
    trusted.
 
 Tracing is off by default and the content rules above apply unchanged.
-Codex keeps its own login, key and settings in `${CODEX_HOME:-~/.codex}/rius`,
-separate from Claude Code's. See [docs/codex.md](docs/codex.md) for details,
+Codex keeps its own login, key and settings in `~/.codex/rius`, separate
+from Claude Code's, and always under your home folder, whatever
+`CODEX_HOME` says. See [docs/codex.md](docs/codex.md) for details,
 the MCP sign-in and the known gaps.
 
 ## Cursor (beta)

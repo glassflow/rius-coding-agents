@@ -9,8 +9,8 @@ This file is `<plugin root>/codex/skills/rius-login/SKILL.md`; the plugin root i
 the directory three levels above it. Below, `<plugin root>` means that absolute
 path.
 
-Both commands below call the Rius server and write the key under `$CODEX_HOME`
-(default `~/.codex`), outside the workspace. Run each with escalated sandbox
+Both commands below call the Rius server and write the key under
+`~/.codex/rius`, outside the workspace. Run each with escalated sandbox
 permissions (`sandbox_permissions: "require_escalated"`), with the
 justification "Rius sign-in needs the network and writes ~/.codex/rius".
 

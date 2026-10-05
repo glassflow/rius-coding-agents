@@ -102,7 +102,7 @@ def main() -> None:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from rius_cc import agent
 
-        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        profile, argv = agent.from_argv(sys.argv[1:])
         agent.activate(profile)
         event = argv[0] if argv else ""
         raw = sys.stdin.read()

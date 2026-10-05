@@ -100,7 +100,7 @@ agent_home="${HOME:-$USERPROFILE}/.claude"
 if [ "$1" = "--agent" ]; then
     event=$3
     case "$2" in
-        codex)  agent_home="${CODEX_HOME:-${HOME:-$USERPROFILE}/.codex}" ;;
+        codex)  agent_home="${HOME:-$USERPROFILE}/.codex" ;;
         cursor) agent_home="${HOME:-$USERPROFILE}/.cursor" ;;
     esac
 fi

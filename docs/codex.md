@@ -38,9 +38,8 @@ Ask Codex to run the skills (type `$` to pick one, or ask in plain words):
 | `$rius:rius-status` | What is on, why, the key, the hooks |
 | `$rius:rius-logout` | Remove and revoke the stored key |
 
-Login, logout and the enable/disable skills write to
-`${CODEX_HOME:-~/.codex}/rius/`, outside the workspace, and login needs the
-network. In the default sandbox Codex asks you to approve an escalation for
+Login, logout and the enable/disable skills write to `~/.codex/rius/`,
+outside the workspace, and login needs the network. In the default sandbox Codex asks you to approve an escalation for
 each of them.
 
 If the sandbox will not allow it, run the same command in a terminal:
@@ -51,6 +50,14 @@ bash ~/.codex/plugins/cache/rius-coding-agents/rius/<version>/scripts/rius_ctl.s
 
 It prints a URL and a code. Approve in the browser, then run the
 `login-wait` command it prints.
+
+Rius keeps its Codex key, settings and state in `~/.codex/rius/` under
+your home folder as the operating system reports it, even when
+`CODEX_HOME` points somewhere else. A repository can set environment
+variables for Codex's hooks and commands, so `CODEX_HOME` (like `HOME`)
+cannot be allowed to choose where the key is read from or which folders
+are traced. Rius still reads `$CODEX_HOME/config.toml`, only to count the
+approved hooks in `$rius:rius-status`.
 
 Codex keeps its own key, separate from Claude Code's. Logging out of one does
 not sign out the other. `RIUS_API_KEY` in the environment still beats the
@@ -106,7 +113,7 @@ bearer_token_env_var = "RIUS_API_KEY"
 | Variable | Effect |
 |---|---|
 | `RIUS_CODEX_ENABLED` | `true`/`false` overrides the folder rules |
-| `RIUS_CODEX_DEBUG` | logs to `${CODEX_HOME:-~/.codex}/rius/log/` |
+| `RIUS_CODEX_DEBUG` | logs to `~/.codex/rius/log/` |
 | `RIUS_CODEX_MAX_ATTR_BYTES` | cap on each content attribute (default 32768) |
 | `RIUS_API_KEY`, `RIUS_ENDPOINT` | same as for Claude Code |
 | `RIUS_CAPTURE_CONTENT`, `RIUS_SERVICE_NAME` | shared with Claude Code |

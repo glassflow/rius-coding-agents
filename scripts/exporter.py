@@ -729,7 +729,7 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
 
 def main() -> None:
     try:
-        profile, argv = agent.from_argv(sys.argv[1:], os.environ)
+        profile, argv = agent.from_argv(sys.argv[1:])
         agent.activate(profile)
         payload_path = argv[0]
         instance_id = argv[1] if len(argv) > 1 else ""

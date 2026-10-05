@@ -26,8 +26,8 @@ HOUR_NS = 3600 * 10**9
 
 @pytest.fixture
 def codex_home(tmp_path):
-    home = tmp_path / "codex-home"
-    with agent.using(agent.select("codex", {"CODEX_HOME": str(home)})):
+    home = tmp_path / ".codex"
+    with agent.using(agent.CODEX):
         signed_in.sign_in(str(tmp_path))
         config.write_path_rules(str(tmp_path), {"enabled_paths": ["/tmp"]})
         yield home
@@ -165,7 +165,7 @@ def test_reading_in_steps_sends_what_one_read_sends(codex_home, tmp_path,
     growing = other / rollouts[PARENT].name
     shutil.copy(str(rollouts[CHILD]), str(other / rollouts[CHILD].name))
     del sent[:]
-    with agent.using(agent.select("codex", {"CODEX_HOME": str(other)})):
+    with agent.using(agent.CODEX):
         signed_in.sign_in(str(other))
         config.write_path_rules(str(other), {"enabled_paths": ["/tmp"]})
         for cut in (5, 20, len(lines)):

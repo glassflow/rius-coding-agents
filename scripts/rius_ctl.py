@@ -475,7 +475,10 @@ def _querying_traces_lines(creds, home):
 
 
 def _codex_home(home):
-    return os.path.dirname(agent.active().rius_dir(home))
+    """Codex's own home, for reading which hooks it trusts. Only Rius's
+    files stay under the OS home whatever CODEX_HOME says; this is a read
+    for a status line."""
+    return os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
 
 
 def _querying_traces_line(creds):
@@ -624,7 +627,7 @@ def _run_account_action(action, home, cwd, env_flag):
 
 def dispatch(argv, home):
     try:
-        profile, argv = agent.from_argv(argv, os.environ)
+        profile, argv = agent.from_argv(argv)
     except agent.UnknownAgent as exc:
         print("Rius: %s." % exc)
         return
