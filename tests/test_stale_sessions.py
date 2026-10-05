@@ -14,14 +14,15 @@ import pytest
 
 import exporter
 from rius_cc import config, spans, state
+from tests.signed_in import sign_in
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 DEAD = "22222222-2222-2222-2222-222222222222"
 NEW = "33333333-3333-3333-3333-333333333333"
 KEY = "gf_deadbeefcafe0123.sig"
-ENV = {"RIUS_API_KEY": KEY, "RIUS_ENDPOINT": "https://ingest.test"}
-OTHER_ENV = {"RIUS_API_KEY": "gf_otherworkspace99.sig",
-             "RIUS_ENDPOINT": "https://ingest.test"}
+# The /rius:login a session runs under.
+LOGIN = {"api_key": KEY}
+OTHER_LOGIN = {"api_key": "gf_otherworkspace99.sig"}
 CONTENT_KEYS = ("input.value", "output.value")
 HOUR_NS = 3600 * 10**9
 
@@ -64,21 +65,22 @@ def _transcript(tmp_path, session_id, n_lines):
     return path
 
 
-def _run(event, session_id, path, home, env=ENV):
+def _run(event, session_id, path, home, signed_in=LOGIN):
+    sign_in(home, **signed_in)
     payload = {"session_id": session_id, "transcript_path": str(path),
                "cwd": "/tmp/proj", "hook_event_name": event}
-    return exporter.run(event, payload, env, home)
+    return exporter.run(event, payload, {}, home)
 
 
-def _kill_mid_tool(tmp_path, home, env=ENV):
+def _kill_mid_tool(tmp_path, home, signed_in=LOGIN):
     """A session that exports its open spans and is never heard from again."""
     path = _transcript(tmp_path, DEAD, 2)
-    _run("PostToolUse", DEAD, path, home, env)
+    _run("PostToolUse", DEAD, path, home, signed_in)
     return path
 
 
-def _start_another(tmp_path, home, env=ENV):
-    _run("SessionStart", NEW, _transcript(tmp_path, NEW, 0), home, env)
+def _start_another(tmp_path, home, signed_in=LOGIN):
+    _run("SessionStart", NEW, _transcript(tmp_path, NEW, 0), home, signed_in)
 
 
 def _for(batches, session_id):
@@ -144,13 +146,13 @@ def test_the_closing_spans_carry_no_content(home, sent, tmp_path):
 
 
 def test_a_trace_opened_with_another_key_is_left_alone(home, sent, tmp_path):
-    _kill_mid_tool(tmp_path, home, env=OTHER_ENV)
+    _kill_mid_tool(tmp_path, home, signed_in=OTHER_LOGIN)
     before = len(_for(sent, DEAD))
 
-    _start_another(tmp_path, home, env=ENV)
+    _start_another(tmp_path, home, signed_in=LOGIN)
 
     assert len(_for(sent, DEAD)) == before
-    assert all(key == OTHER_ENV["RIUS_API_KEY"]
+    assert all(key == OTHER_LOGIN["api_key"]
                for _r, _s, key in _for(sent, DEAD))
     assert _marker(home, DEAD), "another key's session may still close it"
 
@@ -161,7 +163,7 @@ def test_the_same_key_against_another_endpoint_is_another_key(home, sent,
     before = len(_for(sent, DEAD))
 
     _start_another(tmp_path, home,
-                   env=dict(ENV, RIUS_ENDPOINT="https://elsewhere.test"))
+                   signed_in=dict(LOGIN, endpoint="https://elsewhere.rius-glassflow.com"))
 
     assert len(_for(sent, DEAD)) == before
 
@@ -170,7 +172,8 @@ def test_a_session_seen_within_the_cap_is_left_open(home, sent, tmp_path):
     _kill_mid_tool(tmp_path, home)
     last_ns = state.load(DEAD, home)["last_ns"]
     before = len(sent)
-    cfg = config.resolve(NEW, "/tmp/proj", ENV, home)
+    sign_in(home, **LOGIN)
+    cfg = config.resolve(NEW, "/tmp/proj", {}, home)
 
     exporter.sweep_stale(cfg, NEW, home, now_ns=last_ns + 11 * HOUR_NS)
     assert len(sent) == before
@@ -287,14 +290,14 @@ def test_the_trace_stays_with_the_key_that_opened_it(home, sent, tmp_path):
     with open(path, "a") as fh:
         fh.write((FIXTURES / "tool_call.jsonl").read_text().splitlines()[2]
                  + "\n")
-    _run("PostToolUse", DEAD, path, home, OTHER_ENV)
-    assert _for(sent, DEAD)[-1][2] == OTHER_ENV["RIUS_API_KEY"]
+    _run("PostToolUse", DEAD, path, home, OTHER_LOGIN)
+    assert _for(sent, DEAD)[-1][2] == OTHER_LOGIN["api_key"]
     before = len(_for(sent, DEAD))
 
-    _start_another(tmp_path, home, env=OTHER_ENV)
+    _start_another(tmp_path, home, signed_in=OTHER_LOGIN)
     assert len(_for(sent, DEAD)) == before
 
-    _start_another(tmp_path, home, env=ENV)
+    _start_another(tmp_path, home, signed_in=LOGIN)
     _resource, _closing, key = _for(sent, DEAD)[-1]
     assert key == KEY
     assert _left_pending(_for(sent, DEAD)) == []

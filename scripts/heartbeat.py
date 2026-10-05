@@ -17,7 +17,7 @@ Contract (payload v1), verified against the Rius Python SDK
 
 - ``POST <endpoint>/v1/heartbeat`` -- JSON, unlike the protobuf-only
   ``/v1/traces``. URL is built as ``endpoint.rstrip("/") + "/v1/heartbeat"``;
-  ``RIUS_ENDPOINT`` is a bare base URL with no path.
+  the endpoint is a bare base URL with no path.
 - Keys exactly: v, instance_id, agent_name, sent_at, sdk_language,
   sdk_version, open_traces, open_trace_count. ``sent_at`` is RFC3339 UTC with
   millisecond precision and a ``Z`` suffix. ``open_traces`` is capped at 32

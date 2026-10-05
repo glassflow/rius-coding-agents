@@ -14,7 +14,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 import hook as hook_mod  # noqa: E402
 from tests.platforms import (BASH, IS_WINDOWS, PYTHON_FOR_SH, SH,  # noqa: E402
                              TOOLS_WITHOUT_PYTHON, minimal_env, posix_only)
-from rius_cc import config, state  # noqa: E402
+from rius_cc import config, login, state  # noqa: E402
+from tests.signed_in import sign_in  # noqa: E402
 
 HOOK = str(pathlib.Path(__file__).parent.parent / "scripts" / "hook.py")
 
@@ -86,11 +87,8 @@ def _enabled_env(tmp_path):
     with open(config.path_rules_path(str(home)), "w") as fh:
         json.dump({"enabled_paths": [str(tmp_path)]}, fh)
     env = dict(os.environ)
-    env.update({
-        "HOME": str(home),
-        "RIUS_API_KEY": "glassflow_k",
-        "RIUS_ENDPOINT": "https://ingest.test",
-    })
+    env.update({"HOME": str(home)})
+    sign_in(home)
     return env, str(home)
 
 
@@ -711,7 +709,7 @@ def _disabled_env_with_open_trace(tmp_path, sid, open_trace=True, key=True):
     if open_trace:
         state.save(sid, home, {"root_started": True, "instance_id": "i-1"})
     if not key:
-        env.pop("RIUS_API_KEY")
+        login.clear_credentials(home)
     return env, home
 
 

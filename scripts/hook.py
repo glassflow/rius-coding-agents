@@ -102,12 +102,16 @@ def main() -> None:
             return
 
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rius_cc import config, continuation, platform_compat, state
+        from rius_cc import config, continuation, log, platform_compat, state
 
         home = platform_compat.home_dir(os.environ)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         cfg = config.resolve(session_id, cwd, os.environ, home)
+        if event == "SessionStart":
+            for note in cfg.ignored_env:
+                log.write(home, cfg, "session %s: %s" % (session_id, note),
+                          force=True)
         if event == "SessionStart" and cfg.api_key:
             # A conversation Claude Code moved to this new id is taken over
             # HERE, before anything is spawned: the old id's pinger is told

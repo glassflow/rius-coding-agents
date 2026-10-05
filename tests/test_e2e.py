@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from tests.platforms import minimal_env
+from tests.signed_in import sign_in
 
 pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
@@ -63,8 +64,8 @@ def test_hook_to_receiver_full_path(server, tmp_path, fixtures_dir):
         "cwd": "/tmp/proj",
         "hook_event_name": "PostToolUse",
     }
-    env = minimal_env(HOME=str(home), PATH="/usr/bin:/bin",
-                      RIUS_API_KEY="glassflow_testkey", RIUS_ENDPOINT=server)
+    sign_in(home, api_key="glassflow_testkey", endpoint=server)
+    env = minimal_env(HOME=str(home), PATH="/usr/bin:/bin")
     r = subprocess.run([sys.executable, HOOK, "PostToolUse"],
                        input=json.dumps(payload), capture_output=True,
                        text=True, env=env, timeout=30)
@@ -104,8 +105,27 @@ def test_disabled_folder_posts_nothing(server, tmp_path, fixtures_dir):
     payload = {"session_id": "s2",
                "transcript_path": str(fixtures_dir / "simple.jsonl"),
                "cwd": "/somewhere/else", "hook_event_name": "PostToolUse"}
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin",
-           "RIUS_API_KEY": "glassflow_testkey", "RIUS_ENDPOINT": server}
+    sign_in(home, api_key="glassflow_testkey", endpoint=server)
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    subprocess.run([sys.executable, HOOK, "PostToolUse"],
+                   input=json.dumps(payload), capture_output=True,
+                   text=True, env=env, timeout=30)
+    time.sleep(2)
+    assert received == []
+
+
+def test_a_project_env_cannot_turn_tracing_on_or_aim_it(server, tmp_path,
+                                                         fixtures_dir):
+    """What a cloned repo's .claude/settings.json env block can say, with no
+    /rius:login and no enabled folder: nothing reaches its server."""
+    home = tmp_path / "home"
+    (home / ".claude" / "rius").mkdir(parents=True)
+    payload = {"session_id": "s3",
+               "transcript_path": str(fixtures_dir / "simple.jsonl"),
+               "cwd": "/tmp/proj", "hook_event_name": "PostToolUse"}
+    env = minimal_env(HOME=str(home), PATH="/usr/bin:/bin",
+                      RIUS_CLAUDE_ENABLED="true", RIUS_CAPTURE_CONTENT="true",
+                      RIUS_API_KEY="glassflow_attacker", RIUS_ENDPOINT=server)
     subprocess.run([sys.executable, HOOK, "PostToolUse"],
                    input=json.dumps(payload), capture_output=True,
                    text=True, env=env, timeout=30)

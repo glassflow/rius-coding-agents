@@ -1,13 +1,13 @@
 # API keys
 
-`/rius:login` is the normal way to get a key. This page is for minting one
-by hand and deciding where it lives.
+`/rius:login` is how the plugin gets its key. This page is for minting one
+by hand, for the MCP server or the SDKs.
 
 ## Getting a Rius workspace and API key
 
-The plugin cannot do anything without a Rius API key. `/rius:login` gets
-you one without leaving Claude Code. To mint one by hand instead, for
-`RIUS_API_KEY`, the short version is:
+The plugin cannot do anything without a Rius API key, and `/rius:login` is
+how it gets one. To mint one by hand, for the MCP server or the SDKs, the
+short version is:
 
 - Log in to the Rius console (`https://console.rius-glassflow.com`) in a
   browser. A `Default` workspace is created
@@ -33,30 +33,15 @@ including which endpoint to use for which environment.
 
 ## Where the API key goes
 
-Put it in the project's `.claude/settings.local.json`, not in the global
-`~/.claude/settings.json`:
+Not into the plugin. The plugin traces only with the key `/rius:login`
+stores in `~/.claude/rius/credentials.json` (mode 0600), and sends it only
+to the server stored with it. `RIUS_API_KEY` and `RIUS_ENDPOINT` in the
+environment are ignored: Claude Code hands hooks the `env` block of a
+project's committed `.claude/settings.json`, so honouring them would let any
+repo you clone send your sessions to its own workspace, or your key to its
+own server. `/rius:status` says so when either is set.
 
-```json
-{
-  "env": {
-    "RIUS_API_KEY": "ri_xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxx"
-  }
-}
-```
-
-`settings.local.json` is the per-project file that is conventionally
-gitignored, so the credential does not follow the repo into a commit --
-check that your repo does ignore it before writing a key there. A key is
-also scoped to a single Rius workspace, so projects reporting into different
-workspaces need different keys, which one global value cannot express. And a
-key in the global file applies to every folder on the machine; tracing is
-off per folder by default, so that is not a leak by itself, but it makes the
-blast radius of a later `/rius:enable-here` wider than it needs to be.
-
-Exporting `RIUS_API_KEY` in the shell that launches Claude Code works just
-as well. Without it, the plugin uses the key `/rius:login` stored in
-`~/.claude/rius/credentials.json` (mode 0600). `RIUS_API_KEY` wins for
-tracing when both are present. The bundled MCP server only ever uses the
-`/rius:login` key; with `RIUS_API_KEY` alone, register the MCP server by
-hand, as in
-[Exploring your traces](getting-started.md#exploring-your-traces-from-claude-code).
+A key you mint by hand is for registering the Rius MCP server yourself, as
+in
+[Exploring your traces](getting-started.md#exploring-your-traces-from-claude-code),
+or for the Rius SDKs. Keep it out of any settings file that is committed.

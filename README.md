@@ -149,9 +149,8 @@ default-off behavior exists so that installing the plugin can never silently
 start uploading a repo nobody has thought about -- see
 [What gets sent](#what-gets-sent----read-this-before-enabling-anything).
 
-You also need a key: `/rius:login`, or `RIUS_API_KEY` (see
-[Settings](#settings)). Without one, tracing stays off regardless of any
-other setting.
+You also need a key, from `/rius:login`. Without one, tracing stays off
+regardless of any other setting.
 
 ## `/rius:*` commands
 
@@ -190,7 +189,7 @@ versus
 
 ```
 Rius tracing: off
-Reason: off: no API key: run `/rius:login` (or set RIUS_API_KEY)
+Reason: off: no API key: run `/rius:login`
 ```
 
 Those are different problems (folder not enabled vs. missing key), and the
@@ -205,19 +204,29 @@ getting started guide maps those reasons onto fixes, along with the
 
 ## Settings
 
-All settings are environment variables, read from the environment Claude Code
-passes to hook processes (which includes values from `~/.claude/settings.json`
-and project `.claude/settings.json`/`settings.local.json`).
+What is traced, with which key and where to, is decided only by things you
+do yourself: `/rius:login`, `/rius:enable-here`, `/rius:disable-here`,
+`/rius:on` and `/rius:off`, all stored under `~/.claude/rius/`.
+
+The settings below are environment variables, read from the environment
+Claude Code passes to hook processes. That environment includes the `env`
+block of a project's `.claude/settings.json`, which is committed with the
+repo, so any repo you clone can set them. That is why the environment can
+only turn things **off**: it cannot turn tracing on, turn content capture
+back on, or choose the key or the server the key is sent to.
+
+`RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored. The key comes only from
+`/rius:login`, and it is only ever sent to the server stored with it, which
+must be an `https` Rius host. When a setting is ignored, `/rius:status` says
+so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RIUS_API_KEY` | unset | Wins over the key `/rius:login` stored, for tracing. With neither, tracing is disabled regardless of every other setting. The bundled MCP server never sees it: Claude Code withholds credential-named variables from a plugin's `headersHelper`. |
-| `RIUS_ENDPOINT` | `https://ingest.eu.console.rius-glassflow.com` | Base URL only, no path. The plugin appends `/v1/traces` and `/v1/heartbeat` itself. A key from `/rius:login` brings its own. |
 | `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
 | `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
 | `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
-| `RIUS_CLAUDE_ENABLED` | unset | Per-folder on/off override, normally set via `.claude/settings.json` or `settings.local.json` rather than by hand. |
-| `RIUS_CAPTURE_CONTENT` | `true` | `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description, the session's name (the trace is titled `claude-code session` instead) and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
+| `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
+| `RIUS_CAPTURE_CONTENT` | `true` | Can only lower capture. `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description, the session's name (the trace is titled `claude-code session` instead) and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
@@ -228,10 +237,10 @@ invisible to everyone, forever; a log line is the only thing that isn't.
 Normal operation writes nothing there unless debug is on.
 
 Resolution order (first decision wins): a per-session `/rius:on`/`/rius:off`
-override, then `RIUS_CLAUDE_ENABLED` from the environment, then the path rules
-in `~/.claude/rius/config.json`, then the global default of off. If
-`RIUS_API_KEY` is unset, tracing is forced off no matter what the above
-resolves to.
+override, then `RIUS_CLAUDE_ENABLED=false` from the environment, then the
+path rules in `~/.claude/rius/config.json` (a disabled folder beats any
+enabled parent), then the global default of off. Without a `/rius:login`
+key, tracing is forced off no matter what the above resolves to.
 
 ## Your own API key
 
@@ -283,8 +292,9 @@ can send to Rius over OTLP.
 
 - Zero runtime dependencies: the plugin is Python standard library only,
   nothing is pulled from PyPI at install or run time.
-- Span exports go only to the configured `RIUS_ENDPOINT` (or the endpoint
-  stored with the `/rius:login` key). `/rius:login`, `/rius:logout` and a
+- Span exports go only to the endpoint stored with the `/rius:login` key,
+  and only when it is an `https` Rius host. `/rius:login` refuses to store a
+  key for any other server. `/rius:login`, `/rius:logout` and a
   re-login's revoke of the previous key also call the sign-in host
   (`connect.console.rius-glassflow.com`, or
   `connect.staging.rius.glassflow.xyz` on staging), and the bundled MCP

@@ -208,6 +208,8 @@ def _print_status(session_id, cwd, home, inferred=False):
     stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
     print("Rius tracing: %s" % ("on" if cfg.enabled and not stopped else "off"))
     print("Reason: %s" % cfg.reason)
+    for note in cfg.ignored_env:
+        print(note)
     if stopped:
         print(STOPPED_NOTE)
     print(_cwd_line(typed_cwd))
@@ -290,9 +292,6 @@ def _print_account(home, creds):
 def _mcp_key_line(home):
     if login.read_credentials(home):
         return "MCP key: /rius:login"
-    if os.environ.get("RIUS_API_KEY"):
-        return ("MCP key: none. Claude Code does not pass RIUS_API_KEY to the "
-                "bundled MCP server; run /rius:login to query your traces.")
     return "MCP key: none; run /rius:login to query your traces."
 
 
@@ -358,10 +357,6 @@ def _login_wait(home, cwd):
     moved = _moved_folders_warning(home, previous, creds)
     if moved:
         print(moved)
-    if os.environ.get("RIUS_API_KEY"):
-        print("NOTE: RIUS_API_KEY is set in your environment and still wins "
-              "over this key for tracing. Unset it to trace with the new one. "
-              "The bundled MCP server uses the new key either way.")
 
 
 def _in_org(creds):

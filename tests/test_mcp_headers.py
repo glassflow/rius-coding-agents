@@ -18,18 +18,15 @@ def _headers(home, env=None):
 
 def test_stored_login_key_becomes_the_bearer(tmp_path):
     login._write_private(login.credentials_path(str(tmp_path)),
-                         {"api_key": "ri_stored", "endpoint": "https://x"})
+                         {"api_key": "ri_stored", "endpoint": "https://x.rius-glassflow.com"})
     assert _headers(str(tmp_path)) == {"Authorization": "Bearer ri_stored"}
 
 
-def test_env_key_wins_as_it_does_for_tracing(tmp_path):
-    # Unit-level only: under Claude Code a plugin's headersHelper runs without
-    # credential-named variables, so RIUS_API_KEY never reaches the script and
-    # the stored key is what the bundled server actually uses.
+def test_an_env_key_is_ignored_as_it_is_for_tracing(tmp_path):
     login._write_private(login.credentials_path(str(tmp_path)),
-                         {"api_key": "ri_stored", "endpoint": "https://x"})
+                         {"api_key": "ri_stored", "endpoint": "https://x.rius-glassflow.com"})
     assert _headers(str(tmp_path), {"RIUS_API_KEY": "ri_env"}) == {
-        "Authorization": "Bearer ri_env"}
+        "Authorization": "Bearer ri_stored"}
 
 
 def test_no_key_is_an_empty_object_not_prose(tmp_path):

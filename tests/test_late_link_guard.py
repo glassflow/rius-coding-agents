@@ -16,10 +16,11 @@ import pytest
 
 import exporter
 from rius_cc import config, continuation, spans, state
+from tests.signed_in import sign_in
 
 OLD = "aaaaaaaa-0000-0000-0000-000000000001"
 NEW = "bbbbbbbb-0000-0000-0000-000000000002"
-ENV = {"RIUS_API_KEY": "glassflow_k", "RIUS_ENDPOINT": "https://ingest.test"}
+ENV = {}
 SECRET = "the plan we must not upload"
 
 
@@ -27,6 +28,7 @@ SECRET = "the plan we must not upload"
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
+    sign_in(h)
     with open(config.path_rules_path(str(h)), "w") as fh:
         json.dump({"enabled_paths": ["/tmp"]}, fh)       # capture is ON here
     return str(h)
