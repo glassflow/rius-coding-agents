@@ -17,11 +17,17 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   - `RIUS_CAPTURE_CONTENT` can only lower capture.
   - `RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored. The plugin traces only
     with the `/rius:login` key, and sends it only to the server stored with
-    it, which must be an `https` Rius host. `/rius:login` refuses to store
+    it, which must be `https` on one of the hosts Rius runs for that
+    environment. `/rius:login` refuses to store
     a key whose ingest or MCP server is not one. If you used
     `RIUS_API_KEY`, run `/rius:login`, or store a console key with
     `rius_ctl.sh use-key [--env staging]`, which reads it from stdin and
     takes the endpoint from the environment you name.
+  - The plugin finds your home folder from the operating system, not
+    `HOME` or `USERPROFILE`, which a repo could point at a folder it ships
+    with its own key and path rules.
+  - `RIUS_CLAUDE_MAX_ATTR_BYTES` can only lower the cap, and
+    `RIUS_SERVICE_NAME` must be a short plain name.
   - `/rius:status` prints one line for each setting that is ignored, and
     the session's start logs it in `~/.claude/rius/log/`. (#37)
 

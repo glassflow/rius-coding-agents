@@ -94,6 +94,8 @@ def test_an_env_key_alone_sends_nothing(home):
     "http://ingest.eu.console.rius-glassflow.com",
     "https://rius-glassflow.com.attacker.example",
     "https://evilrius-glassflow.com",
+    "https://attacker-tenant.rius-glassflow.com",     # not a host we run
+    "https://ingest.eu.console.rius-glassflow.com.",
     "https://ingest.rius-glassflow.com@attacker.example",
     "https://user@ingest.rius-glassflow.com",
     "https://ingest.staging.rius.glassflow.xyz",   # production key, staging host
@@ -172,3 +174,22 @@ def test_session_start_logs_ignored_settings_once(home, tmp_path):
     assert text.count(config.IGNORED_ENABLE) == 1
     assert "attackerkey" not in text
 
+
+
+# --- the size cap and the label -----------------------------------------------
+
+@pytest.mark.parametrize("raw, cap", [
+    ("100", 100), ("999999999", config.DEFAULT_MAX_ATTR_BYTES),
+    ("0", config.DEFAULT_MAX_ATTR_BYTES), ("-5", config.DEFAULT_MAX_ATTR_BYTES),
+    ("lots", config.DEFAULT_MAX_ATTR_BYTES)])
+def test_the_env_can_only_lower_the_size_cap(home, raw, cap):
+    c = config.resolve("s1", "/repo", {"RIUS_CLAUDE_MAX_ATTR_BYTES": raw}, home)
+    assert c.max_attr_bytes == cap
+
+
+@pytest.mark.parametrize("raw, name", [
+    ("cc-dev.1_x", "cc-dev.1_x"), ("a" * 65, "claude-code"),
+    ("evil name", "claude-code"), ("x\ny", "claude-code"), ("", "claude-code")])
+def test_the_service_name_is_a_short_plain_label(home, raw, name):
+    assert config.resolve("s1", "/repo", {"RIUS_SERVICE_NAME": raw},
+                          home).service_name == name

@@ -1,9 +1,18 @@
 """Shared fixtures. `pythonpath = ["scripts"]` in pyproject makes rius_cc importable."""
+import atexit
 import os
 import pathlib
 import re
 
 import pytest
+
+# The plugin ignores $HOME (a cloned repo could set it), except when this
+# module exists. Only the suite creates it, so every test, and every process
+# a test starts, can be given its own HOME. It is never committed.
+TRUST_ENV_HOME = (pathlib.Path(__file__).parent.parent / "scripts" / "rius_cc"
+                  / "_tests_trust_env_home.py")
+TRUST_ENV_HOME.write_text('"""Test-only: lets $HOME choose the home. Never shipped."""\n')
+atexit.register(lambda: TRUST_ENV_HOME.unlink() if TRUST_ENV_HOME.exists() else None)
 
 # The developer's REAL state directory, resolved before any test can
 # override HOME. No test may write there.

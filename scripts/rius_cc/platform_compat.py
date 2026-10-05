@@ -85,26 +85,71 @@ def is_native_absolute(path: str) -> bool:
 
 
 def home_dir(env=None) -> str:
-    """The user's home directory, agreed on by every entry point.
+    """The user's home directory, as the operating system knows it.
 
-    hook.py used ``expanduser("~")`` while exporter.py preferred ``$HOME``.
-    On POSIX those are the same thing. Under Git Bash on Windows they are
-    not: ``$HOME`` is an MSYS path (``/c/Users/me``) that ntpath resolves to
-    ``C:\\c\\Users\\me``, so the two processes would read and write state in
-    two different directories and neither would say so.
+    Never $HOME or %USERPROFILE%: Claude Code hands hooks the env block of a
+    project's committed .claude/settings.json, so a cloned repo could point
+    them at a folder it ships, with its own key and path rules in it.
 
-    ``$HOME`` still wins when it is a usable native path, because the test
-    suite and ``env``-scoped installs both rely on overriding it.
+    `env` is read only when the test suite has installed its marker module
+    (it never ships), so tests can give each subprocess its own home.
     """
-    env = os.environ if env is None else env
+    if _tests_trust_env_home():
+        return _env_home(os.environ if env is None else env)
+    return _windows_home() if IS_WINDOWS else _posix_home()
+
+
+def _tests_trust_env_home() -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec("rius_cc._tests_trust_env_home") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _posix_home() -> str:
+    import pwd
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+# FOLDERID_Profile
+_PROFILE_FOLDER_ID = "{5E6C858F-0E22-4760-9AFE-EA3317B67173}"
+
+
+def _windows_home(shell32=None, ole32=None) -> str:
+    """The profile folder from SHGetKnownFolderPath, which reads the
+    registry, not the environment."""
+    import ctypes
+    from ctypes import wintypes
+    import uuid
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("data", ctypes.c_ubyte * 16)]
+
+    shell32 = shell32 or ctypes.WinDLL("shell32")
+    ole32 = ole32 or ctypes.WinDLL("ole32")
+    folder = GUID()
+    folder.data[:] = uuid.UUID(_PROFILE_FOLDER_ID).bytes_le
+    path = wintypes.LPWSTR()
+    result = shell32.SHGetKnownFolderPath(ctypes.byref(folder), 0, None,
+                                          ctypes.byref(path))
+    try:
+        if result != 0 or not path.value:
+            raise OSError("SHGetKnownFolderPath failed: %r" % result)
+        return path.value
+    finally:
+        ole32.CoTaskMemFree(path)
+
+
+def _env_home(env) -> str:
+    """The test suite's home: $HOME when it is a native path, else
+    %USERPROFILE% (Git Bash hands Python an MSYS $HOME)."""
     if not IS_WINDOWS:
         return env.get("HOME") or os.path.expanduser("~")
-    home = env.get("HOME")
-    if home and is_native_absolute(home):
-        return home
-    profile = env.get("USERPROFILE")
-    if profile and is_native_absolute(profile):
-        return profile
+    for name in ("HOME", "USERPROFILE"):
+        value = env.get(name)
+        if value and is_native_absolute(value):
+            return value
     return os.path.expanduser("~")
 
 

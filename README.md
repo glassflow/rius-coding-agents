@@ -217,17 +217,17 @@ back on, or choose the key or the server the key is sent to.
 
 `RIUS_API_KEY` and `RIUS_ENDPOINT` are ignored. The key comes only from
 `/rius:login`, and it is only ever sent to the server stored with it, which
-must be an `https` Rius host. When a setting is ignored, `/rius:status` says
+must be `https` on one of the hosts Rius runs for that environment. When a setting is ignored, `/rius:status` says
 so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RIUS_ENV` | `production` | The environment `/rius:login` signs in to: `production` or `staging`. `--env` wins over it. |
 | `RIUS_MCP_URL` | `https://mcp.eu.console.rius-glassflow.com/mcp` | The bundled MCP server's URL. Set it for a staging key; `/rius:status` says when it does not match the stored key. |
-| `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. |
+| `RIUS_SERVICE_NAME` | `claude-code` | Sets the `service.name` resource attribute. Letters, digits, `.`, `_` and `-` only, up to 64; anything else is ignored. |
 | `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
 | `RIUS_CAPTURE_CONTENT` | `true` | Can only lower capture. `false` drops prompt/message/tool-input/tool-output content, including a subagent's brief and description, the session's name (the trace is titled `claude-code session` instead) and a failed tool's output (its status reads `tool error (detail withheld: RIUS_CAPTURE_CONTENT=false)`); structure, models, tokens, cost, and timing are kept either way. |
-| `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. Truncated values carry an explicit `…[truncated N bytes]` marker. |
+| `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
 Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of

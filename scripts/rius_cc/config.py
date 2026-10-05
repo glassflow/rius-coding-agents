@@ -302,13 +302,21 @@ def _path_rules_decision(cwd: str, home: str):
 
 
 def _max_attr_bytes(env: Mapping[str, str]) -> int:
-    raw = env.get("RIUS_CLAUDE_MAX_ATTR_BYTES")
-    if raw is None:
-        return DEFAULT_MAX_ATTR_BYTES
+    """The environment may only lower the cap: raising it sends more."""
     try:
-        return int(raw)
+        wanted = int(env.get("RIUS_CLAUDE_MAX_ATTR_BYTES", ""))
     except (TypeError, ValueError):
         return DEFAULT_MAX_ATTR_BYTES
+    return wanted if 0 < wanted < DEFAULT_MAX_ATTR_BYTES else DEFAULT_MAX_ATTR_BYTES
+
+
+_SERVICE_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def _service_name(env: Mapping[str, str]) -> str:
+    """Only relabels, but still never more than a short plain name."""
+    wanted = env.get("RIUS_SERVICE_NAME", "")
+    return wanted if _SERVICE_NAME_RE.fullmatch(wanted) else DEFAULT_SERVICE_NAME
 
 
 def redact(api_key: Optional[str]) -> str:
@@ -405,7 +413,7 @@ def _enabled(session_id: str, cwd: str, env: Mapping[str, str], home: str):
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
     api_key, endpoint, key_source, workspace_name, no_key = _credential(home)
     ignored_env = _ignored_env(env)
-    service_name = env.get("RIUS_SERVICE_NAME", DEFAULT_SERVICE_NAME)
+    service_name = _service_name(env)
     # The environment may only lower capture.
     capture_content = _parse_bool_env(env.get("RIUS_CAPTURE_CONTENT")) is not False
     max_attr_bytes = _max_attr_bytes(env)

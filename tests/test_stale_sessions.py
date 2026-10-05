@@ -163,7 +163,7 @@ def test_the_same_key_against_another_endpoint_is_another_key(home, sent,
     before = len(_for(sent, DEAD))
 
     _start_another(tmp_path, home,
-                   signed_in=dict(LOGIN, endpoint="https://elsewhere.rius-glassflow.com"))
+                   signed_in=dict(LOGIN, endpoint="http://localhost:4318"))
 
     assert len(_for(sent, DEAD)) == before
 

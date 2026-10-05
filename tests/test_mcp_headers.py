@@ -18,13 +18,13 @@ def _headers(home, env=None):
 
 def test_stored_login_key_becomes_the_bearer(tmp_path):
     login._write_private(login.credentials_path(str(tmp_path)),
-                         {"api_key": "ri_stored", "endpoint": "https://x.rius-glassflow.com"})
+                         {"api_key": "ri_stored", "endpoint": "https://ingest.eu.console.rius-glassflow.com"})
     assert _headers(str(tmp_path)) == {"Authorization": "Bearer ri_stored"}
 
 
 def test_an_env_key_is_ignored_as_it_is_for_tracing(tmp_path):
     login._write_private(login.credentials_path(str(tmp_path)),
-                         {"api_key": "ri_stored", "endpoint": "https://x.rius-glassflow.com"})
+                         {"api_key": "ri_stored", "endpoint": "https://ingest.eu.console.rius-glassflow.com"})
     assert _headers(str(tmp_path), {"RIUS_API_KEY": "ri_env"}) == {
         "Authorization": "Bearer ri_stored"}
 

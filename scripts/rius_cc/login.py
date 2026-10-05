@@ -47,14 +47,20 @@ ENVIRONMENTS = {
         "console_url": "https://console.rius-glassflow.com",
         "mcp_url": "https://mcp.eu.console.rius-glassflow.com/mcp",
         "ingest_url": "https://ingest.eu.console.rius-glassflow.com",
-        "domain": "rius-glassflow.com",
+        "hosts": ("ingest.eu.console.rius-glassflow.com",
+                  "mcp.eu.console.rius-glassflow.com",
+                  "connect.console.rius-glassflow.com"),
     },
     "staging": {
         "link_base": "https://connect.staging.rius.glassflow.xyz",
         "console_url": "https://staging.rius.glassflow.xyz",
         "mcp_url": "https://mcp.eu.staging.rius.glassflow.xyz/mcp",
         "ingest_url": "https://ingest.eu.staging.rius.glassflow.xyz",
-        "domain": "rius.glassflow.xyz",
+        "hosts": ("ingest.eu.staging.rius.glassflow.xyz",
+                  "ingest.staging.rius.glassflow.xyz",
+                  "mcp.eu.staging.rius.glassflow.xyz",
+                  "mcp.staging.rius.glassflow.xyz",
+                  "connect.staging.rius.glassflow.xyz"),
     },
 }
 # Plain http is only ever accepted for a server on this machine.
@@ -127,9 +133,9 @@ def post_json(url: str, payload: dict, bearer: Optional[str] = None):
 
 
 def is_rius_url(url, env_name: Optional[str]) -> bool:
-    """True for an https URL on the Rius domain of `env_name` (production
-    when unknown), or an http(s) URL on this machine. Nothing else is ever
-    handed the key."""
+    """True for an https URL on one of the Rius hosts of `env_name`
+    (production when unknown), or an http(s) URL on this machine. Nothing
+    else is ever handed the key."""
     if not isinstance(url, str):
         return False
     try:
@@ -141,9 +147,9 @@ def is_rius_url(url, env_name: Optional[str]) -> bool:
         return False
     if host in _LOCAL_HOSTS:
         return parts.scheme in ("http", "https")
-    domain = ENVIRONMENTS.get(env_name or "",
-                              ENVIRONMENTS[DEFAULT_ENVIRONMENT])["domain"]
-    return parts.scheme == "https" and host.endswith("." + domain)
+    hosts = ENVIRONMENTS.get(env_name or "",
+                             ENVIRONMENTS[DEFAULT_ENVIRONMENT])["hosts"]
+    return parts.scheme == "https" and host in hosts
 
 
 def _is_success(status: int) -> bool:

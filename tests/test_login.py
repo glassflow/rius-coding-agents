@@ -84,7 +84,7 @@ def _is_private(path):
 
 
 def _store(home, **overrides):
-    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.stored.rius-glassflow.com",
+    creds = {"api_key": "ri_stored", "endpoint": "https://ingest.eu.console.rius-glassflow.com",
              "env": "production", "workspace_id": "33333333-3333-3333-3333-333333333333",
              "workspace_name": "personal", "org_name": "Me",
              "email": "x@acme.com", "expires_at": "2026-12-01T00:00:00Z"}
@@ -476,7 +476,7 @@ def test_stored_credential_is_used_with_its_endpoint(tmp_path):
     c = config.resolve("s1", "/x", {}, home)
     assert c.enabled is True
     assert c.api_key == "ri_stored"
-    assert c.endpoint == "https://ingest.stored.rius-glassflow.com"
+    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
     assert c.key_source == "/rius:login"
 
 
@@ -485,7 +485,7 @@ def test_an_env_key_never_replaces_the_stored_credential(tmp_path):
     _store(home)
     c = config.resolve("s1", "/x", {"RIUS_API_KEY": "ri_env"}, home)
     assert c.api_key == "ri_stored"
-    assert c.endpoint == "https://ingest.stored.rius-glassflow.com"
+    assert c.endpoint == "https://ingest.eu.console.rius-glassflow.com"
     assert c.key_source == "/rius:login"
     assert config.IGNORED_API_KEY in c.ignored_env
 
