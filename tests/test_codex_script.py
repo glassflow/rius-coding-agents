@@ -317,11 +317,21 @@ def test_the_whole_text_is_checked_beside_the_literals(monkeypatch):
     assert codex_spans.reads_secret_file("run(ls)") is False
 
 
+def test_text_that_names_no_secret_file_is_not_a_read():
+    assert codex_spans.reads_secret_file("text(process.env.HOME);") is False
+    assert codex_spans.reads_secret_file("const k = obj.name; " + CALL) is False
+
+
 @pytest.mark.parametrize("script", [
-    "text(process.env.HOME);", "const k = obj.key; " + CALL,
-    "const v = (await tools.mcp__a__b({})).status.key;"])
-def test_a_property_named_like_a_secret_file_is_not_a_read(script):
-    assert codex_spans.reads_secret_file(script) is False
+    "const k = obj.key; " + CALL,
+    "const v = (await tools.mcp__a__b({})).status.key;",
+    "// the .env file is read elsewhere\n" + CALL,
+    "const cfg = credentials;",
+])
+def test_a_script_that_mentions_a_secret_file_name_anywhere_withholds_its_output(script):
+    """On purpose: the check does not rest on the scanner, so it cannot tell
+    a property or a comment from a file; it errs on withholding."""
+    assert codex_spans.reads_secret_file(script) is True
 
 
 @pytest.mark.parametrize("script", [
@@ -331,11 +341,11 @@ def test_a_secret_file_is_still_found_by_name(script):
     assert codex_spans.reads_secret_file(script) is True
 
 
-def test_a_script_not_read_to_its_end_is_withheld_whatever_it_names():
-    """No word of it looks like a secret file once its property accesses
-    are left out; it is the unfinished scan that withholds it."""
+def test_a_script_not_read_to_its_end_is_not_withheld_for_that():
+    """An unfinished scan means no names (plain `exec`), no more: the output
+    of an ordinary division script is kept."""
+    assert codex_spans.reads_secret_file("const a = 'never closed;\nls") is False
     assert codex_spans.reads_secret_file("const a = 'never closed;\ncat server.pem") is True
-    assert codex_spans.reads_secret_file("const a = 'closed';\ncat server.pem") is False
 
 
 @pytest.mark.parametrize("unit", LOOKAHEAD_UNITS)
@@ -368,3 +378,43 @@ def test_a_slash_that_cannot_be_decided_within_the_lookahead_names_nothing():
     near = "if (a) /" + "x" * 100 + "/.test(b); " + CALL
     assert codex_script.called_tools(far) == []
     assert codex_script.called_tools(near) == ["exec_command"]
+
+
+# --- the secret-file decision does not rest on the scanner ------------------
+
+FILE_BEHIND_A_MISLEXED_SCRIPT = [
+    "const n = rate.in / total; text(await tools.exec_command({cmd: 'cat server.pem'}));"
+    " const m = a / b;",
+    "const n = o.of / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.typeof / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.new / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.return / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.case / t; f('cat server.pem'); const m = a / b;",
+    "const n = o?.in / t; f('cat server.pem'); const m = a / b;",
+    "1 / /'/.test(s) && f('cat server.pem') && 2 / /'/.test(t);",
+    "// note\rawait tools.exec_command({cmd:'cat server.pem'})",
+    "// note\u2028await tools.exec_command({cmd:'cat server.pem'})",
+    SECRET_BEHIND_REGEX,
+    CRLF_CONTINUATION,
+]
+
+
+def _output_value(script, output="TOKEN=abc123"):
+    state = codex_spans.new_state()
+    out = codex_spans.build([
+        codex_rollout.Record(codex_rollout.TURN_START, 1, {"turn_id": "t1"}),
+        codex_rollout.Record(codex_rollout.TOOL_CALL, 2, {
+            "call_id": "c1", "name": "exec", "arguments": script}),
+        codex_rollout.Record(codex_rollout.TOOL_OUTPUT, 3, {
+            "call_id": "c1", "output": output})], state, _ctx(True))
+    return [s for s in out if s.kind_oi == "TOOL" and not s.pending][0].attributes["output.value"]
+
+
+@pytest.mark.parametrize("script", FILE_BEHIND_A_MISLEXED_SCRIPT)
+def test_a_secret_file_read_has_its_output_replaced_however_the_script_is_lexed(script):
+    assert _output_value(script) == scrub.SECRET_FILE_MARKER
+
+
+def test_a_division_script_keeps_its_output():
+    script = 'const avg = (a+b) / 2; text("avg " + avg + " (" + dir + "/x)")'
+    assert _output_value(script, "avg 3 (/x)") == "avg 3 (/x)"

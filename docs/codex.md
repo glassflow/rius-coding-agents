@@ -146,11 +146,14 @@ turn things off.
     a division or a regular expression with a quote or brace in between, the
     span is named plain `exec`. A name is only ever a tool called as
     `tools.<name>(` in code, never text from a string or a comment.
-  - **Secret files (withholds when in doubt).** A script that names a
-    secret-shaped file in a string, or anywhere in its text outside property
-    accesses, has its output replaced; so does one the scanner could not read
-    to its end or that is over 64 KB. A harmless script can have its output
-    withheld this way; a secret file read should not slip through.
+  - **Secret files (withholds when in doubt).** A script whose text names a
+    secret-shaped file anywhere (`.env*`, `*.pem`, `*.key`, `id_rsa*`,
+    `credentials*`, ...: the names the other agents use) has its output
+    replaced, whether the name is a path, a word of a command, a property
+    such as `obj.key`, or a comment. This does not rest on the scanner, so
+    it errs towards withholding the output of a harmless script; a script
+    over 64 KB is withheld as well. A script the scanner cannot read to its
+    end is not withheld for that: it is only named plain `exec`.
   - **Subagents (placement approximate, none dropped while the rollout
     exists).** A subagent spawned inside `exec` goes under the call that was
     running when it was created and whose script can spawn one, else under
