@@ -17,6 +17,9 @@ import os
 from typing import Iterator, List, Tuple
 
 FLAG = "--agent"
+# A message that quotes this command to a person must name the agent: bare,
+# it stores the key for Claude Code.
+USE_KEY_COMMAND = "rius_ctl.sh use-key"
 
 
 class UnknownAgent(ValueError):
@@ -69,7 +72,9 @@ class AgentProfile:
         return (text.replace(CLAUDE_CODE.command_prefix, self.command_prefix)
                 .replace(CLAUDE_CODE.display_name, self.display_name)
                 .replace("files Claude reads",
-                         "files %s reads" % self.display_name))
+                         "files %s reads" % self.display_name)
+                .replace(USE_KEY_COMMAND + "`", "%s %s %s`"
+                         % (USE_KEY_COMMAND, FLAG, self.name)))
 
 
 # Wait budgets stay under the agent's own limit on one shell command, so a

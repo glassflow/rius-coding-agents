@@ -17,7 +17,7 @@ import os
 import time
 from typing import Any, Dict, Iterable, List, Optional
 
-from . import agent, cursor_events, cursor_spans
+from . import agent, cursor_events, cursor_spans, state
 
 SPOOL_DIRNAME = "spool"
 PARENT_SUFFIX = cursor_events.PARENT_SUFFIX
@@ -70,6 +70,68 @@ def root_conversation(sdir: str, conversation_id: str) -> str:
             return current
         current = parent
     return current
+
+
+# A subagent's first event follows its parent's Task call by seconds. The
+# call is among the parent's last events, so only the spool's tail is read.
+TASK_LINK_WINDOW_S = 600
+TASK_LINK_TAIL_BYTES = 256 * 1024
+
+
+def _inside_task_call(events: List[Dict[str, Any]]) -> bool:
+    """True while a Task call has not ended. `cursor-agent -p` sends no
+    postToolUse for a Task, so there only a sessionEnd ends one."""
+    open_calls = set()
+    for event in events:
+        kind = event.get("event")
+        if kind == "sessionEnd":
+            open_calls.clear()
+        elif kind == "preToolUse" and event.get("tool_name") == "Task":
+            open_calls.add(event.get("tool_use_id"))
+        elif kind in TOOL_DONE_EVENTS:
+            open_calls.discard(event.get("tool_use_id"))
+    return bool(open_calls)
+
+
+def _recent_conversations(sdir: str, since_s: float) -> List[str]:
+    """Conversations whose spool changed since `since_s`, newest first."""
+    try:
+        names = os.listdir(sdir)
+    except OSError:
+        return []
+    recent = []
+    for name in names:
+        cid = name[:-len(cursor_events.SPOOL_SUFFIX)]
+        if (not name.endswith(cursor_events.SPOOL_SUFFIX)
+                or not state.is_valid_session_id(cid)):
+            continue
+        try:
+            changed = os.path.getmtime(os.path.join(sdir, name))
+        except OSError:
+            continue
+        if changed >= since_s:
+            recent.append((changed, cid))
+    return [cid for _, cid in sorted(recent, reverse=True)]
+
+
+def conversation_in_task_call(sdir: str, workspace: str,
+                              now_s: Optional[float] = None) -> str:
+    """The conversation working in `workspace` that is waiting on a Task
+    call, or "": the parent of a subagent whose events name no one.
+
+    Reads spools, which the hook otherwise never does, so it is for a
+    conversation that has no spool yet and no env naming its parent.
+    """
+    if not workspace:
+        return ""
+    since = (time.time() if now_s is None else now_s) - TASK_LINK_WINDOW_S
+    for cid in _recent_conversations(sdir, since):
+        events = cursor_events.read_spool(
+            cursor_events.spool_path(sdir, cid), TASK_LINK_TAIL_BYTES)
+        if (any(e.get("cwd") == workspace for e in events)
+                and _inside_task_call(events)):
+            return cid
+    return ""
 
 
 def tick(sdir: str, conversation_id: str) -> int:

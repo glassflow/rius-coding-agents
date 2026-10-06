@@ -29,7 +29,8 @@ cursor session                AGENT  sessionStart .. sessionEnd
   one turn, from its first event to its `sessionEnd`, and a Task subagent
   hangs under its Task call. That call gets no end hook either, so it closes
   with the run and carries `cursor.tool.closed_at_session_end`. A resumed
-  chat (`--resume`) adds turns to the same trace.
+  chat (`--resume`) adds turns to the same trace, and a subagent started in
+  a resumed run hangs under its Task call as in the first run.
 - Spans carry `service.name=cursor`, plus `cursor.version`, `cursor.cwd` and
   the composer mode.
 
@@ -43,10 +44,11 @@ Other gaps:
 - Times are when each hook fired, not when the model call started.
 - Cloud and background agents fire no session hooks.
 - Tab completions are not traced.
-- `cursor-agent -p --resume` fires no `sessionStart`, so a Task subagent
-  started in a resumed run cannot be linked to the chat: its Task call
-  closes with the run and has nothing under it, and the subagent's own
-  events are not sent.
+- `cursor-agent -p --resume` fires no `sessionStart`, so the plugin finds
+  the chat a Task subagent belongs to by looking for the chat in the same
+  folder that is waiting on a Task call (within the last 10 minutes). If two
+  chats in one folder wait on a Task call at once, the one active last gets
+  the subagent.
 
 ## What gets sent
 

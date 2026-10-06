@@ -66,24 +66,40 @@ _NEVER_FIRST_IN_A_SUBAGENT = ("sessionStart", "beforeSubmitPrompt",
                               "sessionEnd", "subagentStart", "subagentStop")
 
 
+def _spawning_conversation(env: Mapping[str, str], sdir: str,
+                           workspace: str) -> str:
+    """The conversation a subagent with no subagentStart belongs to.
+
+    The session env that sessionStart returned names it. A resumed run
+    (`cursor-agent -p --resume`) fires no sessionStart, so no hook has that
+    env: the parent is then the conversation in this workspace waiting on a
+    Task call.
+    """
+    named = str(env.get(SESSION_ENV) or "")
+    if not named:
+        return cursor_export.conversation_in_task_call(sdir, workspace)
+    if (state.is_valid_session_id(named)
+            and os.path.exists(cursor_events.spool_path(sdir, named))):
+        return named
+    return ""
+
+
 def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
-                           sdir: str) -> None:
+                           sdir: str, workspace: str = "") -> None:
     """Hang a subagent that fired no subagentStart under its parent.
 
     `cursor-agent -p` fires no subagentStart: a Task subagent's events
     arrive under the subagent's own conversation id with nothing that names
-    the parent. The session env that sessionStart returned still names it,
-    so a conversation that first shows up while a different one owns the
-    session is that one's subagent.
+    the parent. So a conversation that first shows up while another one is
+    mid-Task is that one's subagent.
     """
-    parent = str(env.get(SESSION_ENV) or "")
-    if (event in _NEVER_FIRST_IN_A_SUBAGENT or parent == key
-            or not state.is_valid_session_id(parent)
+    if (event in _NEVER_FIRST_IN_A_SUBAGENT
             or os.path.exists(cursor_events.spool_path(sdir, key))
-            or not os.path.exists(cursor_events.spool_path(sdir, parent))
             or cursor_export.root_conversation(sdir, key) != key):
         return
-    cursor_export.link_subagent(sdir, key, parent)
+    parent = _spawning_conversation(env, sdir, workspace)
+    if parent and parent != key:
+        cursor_export.link_subagent(sdir, key, parent)
 
 
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
@@ -117,11 +133,11 @@ def handle(event: str, payload: Any, env: Mapping[str, str],
     key = cursor_events.spool_key(payload)
     if not state.is_valid_session_id(key):
         return None
-    link_headless_subagent(event, key, env, sdir)
+    cwd = workspace_dir(payload, env)
+    link_headless_subagent(event, key, env, sdir, cwd)
     root = cursor_export.root_conversation(sdir, key)
     if not state.is_valid_session_id(root):
         return None
-    cwd = workspace_dir(payload, env)
     cfg = config.resolve(root, cwd, env, home)
     if not cfg.api_key:
         return None

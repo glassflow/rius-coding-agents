@@ -124,3 +124,42 @@ def test_typed_shell_syntax_is_refused_and_never_runs(tmp_path, typed):
     assert "Nothing was changed." in r.stdout, r.stdout
     assert not os.path.exists(os.path.join(str(home), ".claude", "rius",
                                            "login_pending.json"))
+
+
+def _usage_groups():
+    """{action: its flags} as the usage text lists them."""
+    groups, current = [], None
+    for line in rius_ctl.USAGE.split("\n\n", 1)[1].splitlines():
+        if re.match(r"  \S", line):
+            current = [line]
+            groups.append(current)
+        elif current is not None and line.strip():
+            current.append(line)
+    listed = {}
+    for group in groups:
+        words = " ".join(group).split()
+        stop = next(i for i, w in enumerate(words) if w[0] in "-[(")
+        flags = set(re.findall(r"--[a-z]+", " ".join(words[stop:])))
+        for action in (w for w in words[:stop] if w != "|"):
+            listed[action] = flags - {"--agent"}
+    return listed
+
+
+def test_the_usage_lists_every_action_with_the_flags_it_takes():
+    takes = {action: set(flags) for action, flags in rius_ctl.ACTION_FLAGS.items()}
+    assert _usage_groups() == takes
+
+
+def test_the_usage_says_every_action_takes_agent():
+    assert "--agent <claude-code|codex|cursor>" in rius_ctl.USAGE
+
+
+def test_an_unknown_action_prints_the_usage(capsys):
+    rius_ctl.dispatch(["wat"], "/nonexistent-home")
+    assert capsys.readouterr().out.strip() == rius_ctl.USAGE
+
+
+def test_a_path_without_a_value_says_what_it_wants(capsys):
+    rius_ctl.dispatch(["install-hooks", "--agent", "cursor", "--path"], "/h")
+    assert ("`--path` needs a value: the path of a hooks.json file."
+            in capsys.readouterr().out)
