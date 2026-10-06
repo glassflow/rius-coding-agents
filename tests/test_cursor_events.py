@@ -98,6 +98,17 @@ def test_shell_exit_code(output, code):
     assert cursor_events.shell_exit_code(output) == code
 
 
+def test_a_tool_output_too_deep_to_parse_is_not_an_exit_code():
+    assert cursor_events.shell_exit_code("[" * 12000) is None
+
+
+def test_a_deeply_nested_tool_output_still_reaches_the_spool(tmp_path):
+    path = cursor_events.record(
+        _payload(tool_name="Read", tool_use_id="t1", tool_output="[" * 12000),
+        str(tmp_path), False, 32768, clock=lambda: 42)
+    assert path and _lines(path)[0]["tool_use_id"] == "t1"
+
+
 def test_subagent_lifecycle_spools_under_the_parent(tmp_path):
     path = cursor_events.record(
         _payload(hook_event_name="subagentStart", conversation_id="sub-9",
