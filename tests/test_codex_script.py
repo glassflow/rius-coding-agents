@@ -336,7 +336,8 @@ def test_a_script_that_mentions_a_secret_file_name_anywhere_withholds_its_output
 
 @pytest.mark.parametrize("script", [
     "run('cat .env')", "run(`cat ${dir}/.env`)", "cat .env", "x = 'a' + '.env'",
-    "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')"])
+    "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')",
+    "run(`cat ${dir}/server.pem, then the rest`)", "list([a, server.pem])"])
 def test_a_secret_file_is_still_found_by_name(script):
     assert codex_spans.reads_secret_file(script) is True
 
