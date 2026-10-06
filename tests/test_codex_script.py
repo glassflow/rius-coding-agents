@@ -276,6 +276,7 @@ def test_a_slash_that_could_be_either_names_nothing_when_the_readings_differ(scr
     'if (/["\']/.test(s)) { ' + CALL + " }",
     "const re = /'/; " + CALL,
     "const ok = a / b > 1 && c / d < 2; " + CALL,
+    "const n = {valueOf() { return 6 }} / 2; " + CALL,
 ])
 def test_a_slash_whose_readings_agree_still_lets_the_tool_be_named(script):
     assert codex_script.called_tools(script) == ["exec_command"]
@@ -321,3 +322,10 @@ def test_a_property_named_like_a_secret_file_is_not_a_read(script):
     "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')"])
 def test_a_secret_file_is_still_found_by_name(script):
     assert codex_spans.reads_secret_file(script) is True
+
+
+def test_a_script_not_read_to_its_end_is_withheld_whatever_it_names():
+    """No word of it looks like a secret file once its property accesses
+    are left out; it is the unfinished scan that withholds it."""
+    assert codex_spans.reads_secret_file("const a = 'never closed;\ncat server.pem") is True
+    assert codex_spans.reads_secret_file("const a = 'closed';\ncat server.pem") is False
