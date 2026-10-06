@@ -355,15 +355,25 @@ def reads_secret_file(arguments: str) -> bool:
         json.dumps({"command": command}))
 
 
+# `process.env.HOME`, `item.key`: a property, not a file named `.env` or `*.key`.
+_PROPERTY_DOT = re.compile(r"(?<=[\w$)\]])\.(?=[A-Za-z_$])")
+
+
 def _script_reads_secret_file(script: str) -> bool:
     """Code mode's `exec` runs a script, such as
     `tools.exec_command({cmd: "cat .env"})`, not JSON arguments: any of its
     string literals naming a secret-shaped file, as a path or a word of a
-    command, counts as reading it. A script too long to read is taken to."""
+    command, counts as reading it. The text as a whole is checked too (apart
+    from property accesses), so a literal the scanner misread cannot hide a
+    read, and a script that is too long, or that the scanner could not read to
+    its end, is taken to."""
     if len(script) > codex_script.MAX_CHARS:
         return True
-    quoted = " ".join(codex_script.string_literals(script))
-    return scrub.reads_secret_file(json.dumps({"command": quoted}))
+    literals, _, complete = codex_script.read(script)
+    if not complete:
+        return True
+    return any(scrub.reads_secret_file(json.dumps({"command": text}))
+               for text in (" ".join(literals), _PROPERTY_DOT.sub(" ", script)))
 
 
 _EXEC_NAME_TOOLS = 3
@@ -463,9 +473,11 @@ def _awaits_spawn_output(state: dict) -> bool:
                for tool in state["open_tools"].values())
 
 
-def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
+def spawning_tool(state: dict, created_ns: int,
+                  closing: bool = False) -> Optional[str]:
     """The span id of the `exec` call that spawned a subagent created at
-    `created_ns`, or None while a spawn_agent call is still open. In code
+    `created_ns`, or None while a spawn_agent call is still open (unless the
+    trace is `closing`: nothing more will say). In code
     mode (`code_mode_host`, on by default) a spawn runs inside an `exec` call
     whose output need not name the agent, so what is left to go by is when
     the agent was created and what the scripts say. The calls that were
@@ -474,7 +486,7 @@ def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     earliest that has spawned nothing yet: calls running at the same time
     each get their own subagent, in the order they began, however late the
     others began."""
-    if _awaits_spawn_output(state):
+    if not closing and _awaits_spawn_output(state):
         return None
     begun = [call for call in state.get("execs") or []
              if call["start_ns"] <= created_ns]
@@ -488,6 +500,13 @@ def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     return chosen[0]["span_id"] if chosen else None
 
 
+def adopting_span(state: dict, ctx: Ctx) -> str:
+    """The span a subagent that no call can be found for hangs under when
+    the trace is closing: its spawner's open turn, else its root."""
+    turn = state.get("turn")
+    return turn["span_id"] if turn else _root_span_id(state, ctx)
+
+
 def _spawners(calls: List[dict]) -> List[dict]:
     return [call for call in calls if call["may_spawn"]]
 
@@ -496,7 +515,7 @@ def _note_spawned(state: dict, tool: dict, output: str) -> None:
     """spawn_agent answers with the new agent's id, which names its rollout."""
     try:
         agent_id = json.loads(output).get("agent_id")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return
     if isinstance(agent_id, str) and agent_id:
         state.setdefault("spawned", {})[agent_id] = tool["span_id"]

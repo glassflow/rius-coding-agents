@@ -358,7 +358,8 @@ def test_an_exec_that_calls_no_tool_stays_exec():
 
 
 def test_what_a_script_says_in_a_string_never_names_the_span():
-    assert _exec_name('text("tools.sk_live_1234567890abcdef");') == "exec"
+    fake_key = "sk_live_" + "s" * 24
+    assert _exec_name('text("tools.%s");' % fake_key) == "exec"
     script = ("const note = 'run tools.deploy_prod now';"
               "await tools.exec_command({cmd: `echo tools.secret_name`});")
     assert _exec_name(script) == "exec_command"

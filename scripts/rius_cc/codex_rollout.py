@@ -192,7 +192,7 @@ def parse_line(line: str) -> Optional[Record]:
     """A Record, or None for a line that is not one we use or cannot read."""
     try:
         raw = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(raw, dict) or not isinstance(raw.get("payload"), dict):
         return None
