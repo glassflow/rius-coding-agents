@@ -35,6 +35,9 @@ traced or sent.
   and the `--path` label says it is the path of a hooks.json file.
 - The "no key" hints tell Codex and Cursor users to run `use-key` with
   `--agent`, so the key lands where their agent looks for it.
+- The note about an ignored `RIUS_CLAUDE_ENABLED` names the agent's own
+  variable (`RIUS_CODEX_ENABLED`, `RIUS_CURSOR_ENABLED`), and Cursor's
+  sign-in text no longer promises token counts, which Cursor does not send.
 
 ## 0.6.0 (2026-10-05)
 
