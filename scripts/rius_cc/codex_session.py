@@ -184,7 +184,7 @@ def _link_unspawned(st: dict) -> None:
     call, so its rollout's own session record says which agent spawned it
     and its thread id (a UUIDv7) when."""
     spawned = _spawned(st)
-    for agent_id in list(st["codex_subs"]):
+    for agent_id in _oldest_first(st["codex_subs"]):
         if agent_id in spawned or not state.is_valid_session_id(agent_id):
             continue
         created_ms = codex_spans.uuid7_ms(agent_id)
@@ -196,6 +196,12 @@ def _link_unspawned(st: dict) -> None:
         tool = spawner and codex_spans.spawning_tool(spawner, created_ms * 10**6)
         if tool:
             spawner.setdefault("spawned", {})[agent_id] = tool
+
+
+def _oldest_first(agent_ids) -> List[str]:
+    """In the order the agents were created (their ids are UUIDv7), so that
+    calls running at the same time are given theirs the same way every time."""
+    return sorted(agent_ids, key=lambda a: (codex_spans.uuid7_ms(a) or 0, a))
 
 
 def _spawner_state(st: dict, thread_id: str) -> Optional[dict]:

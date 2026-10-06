@@ -37,17 +37,19 @@ _EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
 SPAWN_TOOL = "multi_agent_v1__spawn_agent"
+# However a version namespaces it: a script calls `tools.<namespace>__spawn_agent`.
+SPAWN_TOOL_SUFFIX = "spawn_agent"
 # Code mode's one tool: runs a script that calls the others.
 EXEC_TOOL = "exec"
-# How many tool starts an agent remembers, to find the call that spawned a
+# How many exec calls an agent remembers, to find the one that spawned a
 # subagent (spawning_tool).
-_TOOL_STARTS_KEPT = 256
+_EXECS_KEPT = 256
 
 
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
             "session": {}, "model": "", "turn": None, "open_tools": {},
-            "spawned": {}, "tool_starts": []}
+            "spawned": {}, "execs": []}
 
 
 def new_subagent_state(agent_id: str, agent_type: str,
@@ -204,9 +206,8 @@ def _on_tool_call(rec, state, ctx, out):
             "span_name": _span_name(name, wrapped),
             "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
     state["open_tools"][call_id] = tool
-    starts = state.setdefault("tool_starts", [])
-    starts.append([rec.timestamp_ns, tool["span_id"], tool["tool_name"]])
-    del starts[:-_TOOL_STARTS_KEPT]
+    if name == EXEC_TOOL:
+        _remember_exec(state, tool, wrapped)
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
                         _name(tool), "TOOL", rec.timestamp_ns,
                         {"gen_ai.tool.name": tool["tool_name"]}))
@@ -333,6 +334,7 @@ def _on_tool_output(rec, state, ctx, out):
         state["turn"]["llm_start_ns"] = rec.timestamp_ns
     if tool is None:
         return      # called before this session was traced
+    _end_exec(state, tool, rec.timestamp_ns)
     output = rec.get("output")
     if tool["tool_name"] == SPAWN_TOOL:
         _note_spawned(state, tool, output)
@@ -362,18 +364,47 @@ def _on_tool_output(rec, state, ctx, out):
                          "ERROR" if error_type else "OK", status_message, events))
 
 
+def _may_spawn(wrapped: List[str]) -> bool:
+    """A script that names its tools and none of them spawns an agent cannot
+    have spawned one. One that names none (it calls them through an alias,
+    say) might have."""
+    return not wrapped or any(t.endswith(SPAWN_TOOL_SUFFIX) for t in wrapped)
+
+
+def _remember_exec(state: dict, tool: dict, wrapped: List[str]) -> None:
+    execs = state.setdefault("execs", [])
+    execs.append({"span_id": tool["span_id"], "start_ns": tool["start_ns"],
+                  "end_ns": 0, "may_spawn": _may_spawn(wrapped)})
+    del execs[:-_EXECS_KEPT]
+
+
+def _end_exec(state: dict, tool: dict, end_ns: int) -> None:
+    if tool["tool_name"] != EXEC_TOOL:
+        return
+    for call in state.get("execs") or []:
+        if call["span_id"] == tool["span_id"]:
+            call["end_ns"] = end_ns
+
+
 def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     """The span id of the `exec` call that spawned a subagent created at
-    `created_ns`: the agent's last call begun by then, when that is an
-    `exec`. In code mode (`code_mode_host`, on by default) a spawn runs
-    inside an `exec` call whose output need not name the agent, so the time
-    is all there is. Any other call is left to spawn_agent's output, which
-    names the agent exactly: two spawns in parallel would both be placed
-    under the second by time."""
-    begun = [start for start in state.get("tool_starts") or []
-             if start[0] <= created_ns]
-    last = begun[-1] if begun else ()
-    return last[1] if len(last) > 2 and last[2] == EXEC_TOOL else None
+    `created_ns`. In code mode (`code_mode_host`, on by default) a spawn runs
+    inside an `exec` call whose output need not name the agent, so what is
+    left to go by is when the agent was created and what the scripts call.
+    Of the calls that may spawn and were running then, the earliest that has
+    spawned nothing yet: calls running at the same time each get their own
+    subagent, in the order they began, however late the others began. Any
+    other call is left to spawn_agent's output, which names the agent
+    exactly."""
+    started = [call for call in state.get("execs") or []
+               if call["may_spawn"] and call["start_ns"] <= created_ns]
+    running = [call for call in started
+               if not call["end_ns"] or call["end_ns"] >= created_ns]
+    candidates = running or started[-1:]
+    held = set((state.get("spawned") or {}).values())
+    free = [call for call in candidates if call["span_id"] not in held]
+    chosen = (free or candidates)[:1]
+    return chosen[0]["span_id"] if chosen else None
 
 
 def _note_spawned(state: dict, tool: dict, output: str) -> None:
@@ -391,6 +422,7 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     row: the backend counts a trace only when every span has one."""
     out = []
     for tool in state["open_tools"].values():
+        _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
         _content_attr(ctx, attrs, "input.value", tool["input_json"],
