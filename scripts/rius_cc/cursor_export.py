@@ -108,25 +108,34 @@ def _open_task_calls(events: List[Dict[str, Any]]) -> Dict[str, int]:
     return open_calls
 
 
-def _claim_path(sdir: str, parent: str, call: str) -> str:
+def _claim_path(sdir: str, parent: str, call: str, generation: int = 0) -> str:
     digest = hashlib.sha256(call.encode("utf-8")).hexdigest()[:16]
-    return _sidecar(sdir, parent, "." + digest + CLAIM_SUFFIX)
+    again = ".%d" % generation if generation else ""
+    return _sidecar(sdir, parent, "." + digest + again + CLAIM_SUFFIX)
 
 
-# A claim file reads empty between its creation and its first write.
+# A claim file reads empty between its creation and its first write. One
+# that stays empty past CLAIM_STALE_S was left by a hook killed in between.
 CLAIM_READ_ATTEMPTS = 5
 CLAIM_READ_PAUSE_S = 0.01
+CLAIM_STALE_S = 5
+CLAIM_GENERATIONS = 5
 
 
-def _held_by(path: str, child: str) -> bool:
+def _held_by(path: str, child: str) -> Optional[bool]:
+    """Whether the claim at `path` is `child`'s; None if nobody holds it
+    and nobody is about to: it is empty and stale."""
     for _ in range(CLAIM_READ_ATTEMPTS):
         try:
             with open(path, encoding="utf-8") as fh:
                 holder = fh.read()
+            age = time.time() - os.path.getmtime(path)
         except OSError:
             return False
         if holder:
             return holder == child
+        if age > CLAIM_STALE_S:
+            return None
         time.sleep(CLAIM_READ_PAUSE_S)
     return False
 
@@ -137,19 +146,26 @@ def claim_task_call(sdir: str, parent: str, call: str, child: str) -> bool:
     One subagent per call, decided by a file only one hook can create (hooks
     run as separate processes, at the same moment when subagents start
     together). The holder asking again, as when two of its first hooks race,
-    gets the call it already has.
+    gets the call it already has. A stale empty claim is passed over for the
+    next generation of the file, never deleted: two hooks that both find it
+    stale would otherwise both delete and re-create it.
     """
     os.makedirs(sdir, mode=0o700, exist_ok=True)
-    path = _claim_path(sdir, parent, call)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return _held_by(path, child)
-    try:
-        os.write(fd, child.encode("utf-8"))
-    finally:
-        os.close(fd)
-    return True
+    for generation in range(CLAIM_GENERATIONS):
+        path = _claim_path(sdir, parent, call, generation)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            held = _held_by(path, child)
+            if held is None:
+                continue
+            return held
+        try:
+            os.write(fd, child.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
+    return False
 
 
 def _claim_open_call(sdir: str, parent: str, events: List[Dict[str, Any]],
@@ -255,8 +271,8 @@ def _split_spool_name(name: str) -> Optional[str]:
     for suffix in _SPOOL_FILE_SUFFIXES:
         if name.endswith(suffix):
             stem = name[:-len(suffix)]
-            # <conversation>.<call digest>.claim
-            return stem.rpartition(".")[0] if suffix == CLAIM_SUFFIX else stem
+            # <conversation>.<call digest>[.<generation>].claim
+            return stem.partition(".")[0] if suffix == CLAIM_SUFFIX else stem
     return None
 
 

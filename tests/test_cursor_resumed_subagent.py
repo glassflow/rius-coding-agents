@@ -73,12 +73,28 @@ def _link(sdir, conversation_id):
 
 
 def _holder(sdir, call, parent=PARENT):
-    """Who holds a Task call, "" when nobody does."""
-    try:
-        with open(cursor_export._claim_path(str(sdir), parent, call)) as fh:
-            return fh.read()
-    except OSError:
-        return ""
+    """Who holds a Task call, "" when nobody does: the first claim file of
+    the call that has a holder."""
+    for generation in range(cursor_export.CLAIM_GENERATIONS):
+        path = cursor_export._claim_path(str(sdir), parent, call, generation)
+        try:
+            with open(path) as fh:
+                holder = fh.read()
+        except OSError:
+            return ""
+        if holder:
+            return holder
+    return ""
+
+
+def _leave_a_stale_empty_claim(sdir, call, parent=PARENT):
+    """What a hook killed between creating a claim and writing it leaves."""
+    path = cursor_export._claim_path(str(sdir), parent, call)
+    os.makedirs(str(sdir), exist_ok=True)
+    open(path, "w").close()
+    old = time.time() - 60
+    os.utime(path, (old, old))
+    return path
 
 
 def _first_event_of(conversation_id, **changes):
@@ -517,7 +533,9 @@ cursor_hook.handle(payload["hook_event_name"], payload, {}, home)
 
 
 @posix_only("starts hook processes that must run at the same moment")
-def test_two_subagents_starting_together_never_share_a_task_call(tmp_path):
+@pytest.mark.parametrize("stale_claim", [False, True])
+def test_two_subagents_starting_together_never_share_a_task_call(
+        tmp_path, stale_claim):
     first_child = "c0de0000-0000-4000-8000-0000000000a1"
     second_child = "c0de0000-0000-4000-8000-0000000000b1"
     second_call = dict(_until_the_task_call()[-1], tool_use_id="tool_second")
@@ -525,8 +543,10 @@ def test_two_subagents_starting_together_never_share_a_task_call(tmp_path):
     for home in trials:
         with agent.using(agent.CURSOR):
             _set_up(home)
-            _spool(_until_the_task_call() + [second_call],
-                   cursor_export.spool_dir(str(home)))
+            sdir = cursor_export.spool_dir(str(home))
+            _spool(_until_the_task_call() + [second_call], sdir)
+            if stale_claim:
+                _leave_a_stale_empty_claim(sdir, TASK_CALL)
     start = time.time() + 4
     runs = [subprocess.Popen(
         [sys.executable, "-c", RACE, SCRIPTS, str(home),
@@ -582,3 +602,105 @@ def test_a_link_temp_file_a_killed_hook_left_goes_after_a_while(tmp_path):
     os.utime(old, (now - cursor_export.LINK_TEMP_TTL_S - 60,) * 2)
     assert cursor_export.prune(sdir, [], now_s=now) == 1
     assert os.listdir(sdir) == [".link-def.tmp"]
+
+
+# --- a claim a killed hook left empty ------------------------------------------
+
+def test_an_empty_claim_gone_stale_is_claimed_again(tmp_path):
+    sdir = str(tmp_path)
+    stale = _leave_a_stale_empty_claim(sdir, "call-1")
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", STRANGER)
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert _holder(sdir, "call-1") == CHILD
+    assert os.path.exists(stale)
+
+
+def test_an_old_claim_with_a_holder_is_never_passed_over(tmp_path):
+    sdir = str(tmp_path)
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    path = cursor_export._claim_path(sdir, PARENT, "call-1")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", STRANGER)
+    assert not os.path.exists(cursor_export._claim_path(sdir, PARENT,
+                                                        "call-1", 1))
+
+
+def test_a_fresh_empty_claim_is_not_passed_over(tmp_path):
+    sdir = str(tmp_path)
+    fresh = cursor_export._claim_path(sdir, PARENT, "call-1")
+    open(fresh, "w").close()
+    assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert not os.path.exists(cursor_export._claim_path(sdir, PARENT,
+                                                        "call-1", 1))
+
+
+def test_the_first_event_of_a_subagent_links_past_a_stale_empty_claim(home):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    _leave_a_stale_empty_claim(sdir, TASK_CALL)
+    _fire(home, [_first_event_of(CHILD)])
+    assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
+    assert _holder(sdir, TASK_CALL) == CHILD
+
+
+def test_a_claim_of_a_later_generation_goes_with_its_conversation(tmp_path):
+    sdir = str(tmp_path)
+    _spool(_until_the_task_call(), tmp_path)
+    _leave_a_stale_empty_claim(sdir, TASK_CALL)
+    cursor_export.claim_task_call(sdir, PARENT, TASK_CALL, CHILD)
+    later = time.time() + cursor_export.SPOOL_RETENTION_S + 60
+    for name in os.listdir(sdir):
+        os.utime(os.path.join(sdir, name), (later - 1e9, later - 1e9))
+    assert cursor_export.prune(sdir, [PARENT], now_s=later) == 0
+    assert cursor_export.prune(sdir, [], now_s=later) == 3
+    assert os.listdir(sdir) == []
+
+
+
+def test_a_claim_goes_stale_after_a_few_seconds():
+    assert 2 <= cursor_export.CLAIM_STALE_S <= 30
+
+
+def test_a_hook_that_found_a_claim_stale_cannot_take_what_another_then_took(
+        tmp_path, monkeypatch):
+    """Hook A finds the empty claim stale; before it goes on, hook B finds
+    it stale too and finishes its claim. Both must not end up holding it."""
+    sdir = str(tmp_path)
+    _leave_a_stale_empty_claim(sdir, "call-1")
+    real = cursor_export._held_by
+    other = {}
+
+    def interleaved(path, child):
+        held = real(path, child)
+        if held is None and child == CHILD:
+            other["took"] = cursor_export.claim_task_call(
+                sdir, PARENT, "call-1", STRANGER)
+        return held
+
+    monkeypatch.setattr(cursor_export, "_held_by", interleaved)
+    mine = cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert (mine, other["took"]) == (False, True)
+    assert _holder(sdir, "call-1") == STRANGER
+
+
+# --- a claim that cannot be written ---------------------------------------------
+
+def test_a_claim_that_cannot_be_written_still_links_the_subagent(home,
+                                                                 monkeypatch):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+
+    def refuse(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cursor_export, "claim_task_call", refuse)
+    started = {"conversation_id": PARENT, "hook_event_name": "subagentStart",
+               "subagent_id": CHILD, "tool_call_id": "tool_9",
+               "workspace_roots": [WORKSPACE]}
+    cursor_hook.handle("subagentStart", started, {}, str(home))
+    assert [e["event"] for e in cursor_export.read_events(str(home), PARENT)
+            ] == ["subagentStart"]
+    assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
