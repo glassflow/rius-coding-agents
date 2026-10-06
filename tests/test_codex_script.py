@@ -307,3 +307,17 @@ def test_the_whole_text_is_checked_beside_the_literals(monkeypatch):
     monkeypatch.setattr(codex_script, "read", lambda script: ([], [], True))
     assert codex_spans.reads_secret_file("run(cat .env)") is True
     assert codex_spans.reads_secret_file("run(ls)") is False
+
+
+@pytest.mark.parametrize("script", [
+    "text(process.env.HOME);", "const k = obj.key; " + CALL,
+    "const v = (await tools.mcp__a__b({})).credentials_ok.key;"])
+def test_a_property_named_like_a_secret_file_is_not_a_read(script):
+    assert codex_spans.reads_secret_file(script) is False
+
+
+@pytest.mark.parametrize("script", [
+    "run('cat .env')", "run(`cat ${dir}/.env`)", "cat .env", "x = 'a' + '.env'",
+    "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')"])
+def test_a_secret_file_is_still_found_by_name(script):
+    assert codex_spans.reads_secret_file(script) is True

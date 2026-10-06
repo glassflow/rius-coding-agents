@@ -355,20 +355,25 @@ def reads_secret_file(arguments: str) -> bool:
         json.dumps({"command": command}))
 
 
+# `process.env.HOME`, `item.key`: a property, not a file named `.env` or `*.key`.
+_PROPERTY_DOT = re.compile(r"(?<=[\w$)\]])\.(?=[A-Za-z_$])")
+
+
 def _script_reads_secret_file(script: str) -> bool:
     """Code mode's `exec` runs a script, such as
     `tools.exec_command({cmd: "cat .env"})`, not JSON arguments: any of its
     string literals naming a secret-shaped file, as a path or a word of a
-    command, counts as reading it. The text as a whole is checked too, so a
-    literal the scanner misread cannot hide a read, and a script that is
-    too long, or that the scanner could not read to its end, is taken to."""
+    command, counts as reading it. The text as a whole is checked too (apart
+    from property accesses), so a literal the scanner misread cannot hide a
+    read, and a script that is too long, or that the scanner could not read to
+    its end, is taken to."""
     if len(script) > codex_script.MAX_CHARS:
         return True
     literals, _, complete = codex_script.read(script)
     if not complete:
         return True
     return any(scrub.reads_secret_file(json.dumps({"command": text}))
-               for text in (" ".join(literals), script))
+               for text in (" ".join(literals), _PROPERTY_DOT.sub(" ", script)))
 
 
 _EXEC_NAME_TOOLS = 3
