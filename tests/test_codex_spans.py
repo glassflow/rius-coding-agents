@@ -226,7 +226,24 @@ def test_a_call_begun_before_an_upgrade_has_its_output_withheld():
                                                   "output": "TOKEN=abc123"})],
                    state, ctx)
     span = next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
-    assert span.attributes["output.value"] == scrub.SECRET_FILE_MARKER
+    assert span.attributes["output.value"] == cs.OUTPUT_NOT_CHECKED
+
+
+def test_a_call_begun_with_content_off_has_its_output_withheld_once_it_is_on():
+    """Nothing is checked for a secret file while nothing can be sent. The
+    folder's choice can change before the output arrives (`content-on-here`
+    is itself such a call); with no verdict the output is not sent."""
+    state = cs.new_state()
+    cs.build([cr.Record(cr.TURN_START, 1, {"turn_id": "t1"}),
+              cr.Record(cr.TOOL_CALL, 2, {"call_id": "c1", "name": "exec_command",
+                                          "arguments": '{"cmd": "cat .env"}'})],
+             state, _ctx(capture=False))
+    assert "secret_file" not in state["open_tools"]["c1"]
+    out = cs.build([cr.Record(cr.TOOL_OUTPUT, 3, {"call_id": "c1",
+                                                  "output": "TOKEN=abc123"})],
+                   state, _ctx(capture=True))
+    span = next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
+    assert span.attributes["output.value"] == cs.OUTPUT_NOT_CHECKED
 
 
 def test_a_line_that_is_not_where_it_was_is_not_read_as_content(tmp_path):
@@ -238,9 +255,43 @@ def test_a_line_that_is_not_where_it_was_is_not_read_as_content(tmp_path):
     record = cr.read_from(str(rollout), 0)[0][0]
     ctx = _ctx(capture=True)
     here = cs._hold(ctx, record)
-    assert cs._recall(here, "text") == "an unrelated prompt"
-    assert cs._recall([here[0], here[1], here[2] + 1], "text") == ""
-    assert cs._recall([str(tmp_path / "gone"), 0, here[2]], "text") == ""
+    assert cs._recall(ctx, here, "text") == "an unrelated prompt"
+    assert cs._recall(ctx, [here[0], here[1], here[2] + 1], "text") == ""
+    assert cs._recall(ctx, [str(tmp_path / "gone"), 0, here[2]], "text") == ""
+
+
+def test_closing_a_trace_with_content_off_reads_no_rollout(fixtures_dir, monkeypatch):
+    """The idle sweep closes a trace under whatever the folder says now, and
+    a stopped session promises that nothing is read from its transcript."""
+    records, first_tool = _until_first_tool_call(fixtures_dir)
+    state = cs.new_state()
+    cs.build(records[:first_tool + 1], state, _ctx(capture=True))
+    assert state["turn"]["text_at"] and state["open_tools"]
+
+    def refuse(path, offset):
+        raise AssertionError("the rollout was read")
+    monkeypatch.setattr(cr, "read_at", refuse)
+    closing = cs.finalize_session(state, _ctx(capture=False), END_NS)
+    assert [s for s in closing if s.name == "turn"]
+
+
+@pytest.mark.parametrize("held", [
+    [], ["/x"], ["/x", 1], ["/x", 1, 2, 3], "abc", 5, [None, 0, 1],
+    [["a"], 0, 1], ["/x", "0", 1], ["/x", None, 1], ["/x", -5, 1],
+    ["/x", 0, "ts"], ["\0", 0, 1], {"a": 1}])
+def test_a_place_that_is_not_one_reads_as_nothing(held):
+    assert cs._recall(_ctx(capture=True), held, "text") == ""
+
+
+def test_a_damaged_place_in_the_state_does_not_stop_the_trace(fixtures_dir):
+    records, first_tool = _until_first_tool_call(fixtures_dir)
+    state = cs.new_state()
+    cs.build(records[:first_tool + 1], state, _ctx(capture=True))
+    state["turn"]["text_at"] = ["/x", None]
+    state["turn"]["reply_at"] = [5]
+    state["open_tools"][next(iter(state["open_tools"]))]["input_at"] = "damaged"
+    closing = cs.finalize_session(state, _ctx(capture=True), END_NS)
+    assert {s.name for s in closing if not s.pending} >= {"turn"}
 
 
 @pytest.mark.parametrize("chunks", [[5], [12, 13], [9, 18, 27, 36], list(range(1, 46))])
@@ -362,3 +413,7 @@ def test_a_secret_file_read_is_replaced_whole(tmp_path, arguments):
     assert span.attributes["output.value"] == scrub.SECRET_FILE_MARKER
     assert span.status_message == "exec_command.exit_1"
     assert "ONLY_IN_THE_FILE" not in json.dumps([span.attributes, span.events])
+
+
+def test_a_deeply_nested_mcp_error_output_is_read_as_text():
+    assert cs._mcp_text("[" * 12000 + "]" * 12000) == "[" * 12000 + "]" * 12000

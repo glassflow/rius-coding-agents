@@ -14,6 +14,8 @@ import json
 import pathlib
 import shutil
 
+import pytest
+
 from rius_cc import codex_rollout, codex_spans, spans
 
 from tests.test_codex_export import (ENV, _uuid7_at, codex_home,  # noqa: F401
@@ -468,3 +470,146 @@ def test_children_found_together_are_placed_oldest_first(tmp_path):
     codex_session.build(st, _ctx(), str(parent))
     assert st["spawned"] == {first: spans.span_id_for("call_a"),
                              second: spans.span_id_for("call_b")}
+
+
+# --- a subagent is never lost to a guess about what a script can do --------
+
+TEMPLATE_SPAWN = (SHELL_SCRIPT + "\ntext(`child: ${(await tools.multi_agent_v1__"
+                  "spawn_agent({message: 'go'})).agent_id}`);")
+COMPUTED_SPAWN = (SHELL_SCRIPT + "\nconst r = await tools['multi_agent_v1__"
+                  "spawn_agent']({message: 'go'});")
+CSV_SPAWN = SHELL_SCRIPT + "\nawait tools.spawn_agents_on_csv({path: 'jobs.csv'});"
+
+
+@pytest.mark.parametrize("script", [TEMPLATE_SPAWN, COMPUTED_SPAWN, CSV_SPAWN])
+def test_a_spawn_the_scanner_does_not_see_still_counts_as_one(script):
+    """What a script may do is judged on its whole text: with another tool
+    named outside the template, the names found alone said "no spawn" for
+    every call, and the subagent and its whole subtree were dropped."""
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT), ("a", 200, None, script)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+
+
+def test_a_subagent_always_has_a_parent_when_an_exec_had_begun():
+    """Nothing says a script spawns (it is built at run time), but the child
+    is there: the running call, else the last one begun."""
+    st = _agent_after([("a", 100, None, SHELL_SCRIPT), ("b", 120, 140, SHELL_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 150) == _id("a")
+    done = _agent_after([("a", 100, 120, SHELL_SCRIPT), ("b", 130, 140, SHELL_SCRIPT)])
+    assert codex_spans.spawning_tool(done, 150) == _id("b")
+    assert codex_spans.spawning_tool(done, 50) is None
+
+
+def test_calls_that_may_spawn_come_before_calls_that_cannot_when_all_run():
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT),
+                       ("a", 200, None, TEMPLATE_SPAWN)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+
+
+def _with_open_spawn(calls, spawn_name="collaboration__spawn_agent"):
+    st = _agent_after(calls)
+    codex_spans.build([_record(codex_rollout.TOOL_CALL, 300, call_id="direct",
+                               name=spawn_name, arguments="{}")], st, _ctx())
+    return st
+
+
+@pytest.mark.parametrize("name", ["collaboration__spawn_agent",
+                                  "multi_agent_v1__spawn_agent", "spawn_agent"])
+def test_no_guess_is_made_while_a_spawn_call_that_will_name_its_agent_is_open(name):
+    """The call's output, or multi_agent_v2's sub_agent_activity beside it,
+    names the child exactly; a guess made before it arrives is never
+    corrected, because the child's root keeps the parent it was built with."""
+    st = _with_open_spawn([("a", 100, None, NO_TOOL_SCRIPT)], name)
+    assert codex_spans.spawning_tool(st, 350) is None
+    codex_spans.build([_record(codex_rollout.TOOL_OUTPUT, 400, call_id="direct",
+                               output="{}")], st, _ctx())
+    assert codex_spans.spawning_tool(st, 350) == _id("a")
+
+
+def test_an_open_exec_call_does_not_make_the_spawner_wait():
+    st = _agent_after([("a", 100, None, SPAWN_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 350) == _id("a")
+
+
+def _v2_rollouts(folder, activity_line):
+    """A parent whose `exec` call (no tool named) is still running when it
+    makes a direct v2 spawn call; the child exists from T0 + 30."""
+    folder.mkdir()
+    child = _uuid7_at(T0 + 30, "c" * 19)
+    spawn = _item(T0 + 10, {
+        "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+        "call_id": "call_direct", "arguments": "{}"})
+    started = _event(T0 + 60, {
+        "type": "sub_agent_activity", "event_id": "call_direct",
+        "agent_thread_id": child, "kind": "started"})
+    done = _item(T0 + 70, {"type": "function_call_output", "call_id": "call_direct",
+                           "output": '{"task_name":"/root/sub"}'})
+    head = [_line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
+                                             "cli_version": "0.144.1"}),
+            _event(T0, {"type": "task_started", "turn_id": "t1"}),
+            _exec_call(T0 + 1, "call_exec", NO_TOOL_SCRIPT), spawn]
+    tail = [started, done, _exec_done(T0 + 500, "call_exec"),
+            _event(T0 + 900, {"type": "task_complete", "turn_id": "t1",
+                              "last_agent_message": ""})]
+    path = folder / ("rollout-p-%s.jsonl" % PARENT)
+    _rollout(path, head)
+    child_path = _rollout(folder / ("rollout-c-%s.jsonl" % child), [
+        _line(T0 + 31, "session_meta", {
+            "id": child, "cwd": "/tmp/proj", "cli_version": "0.144.1",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": PARENT}}}})]
+        + _turn(T0 + 40, "t-child"))
+    return path, child_path, child, head, tail
+
+
+def test_a_v2_child_read_before_its_activity_line_is_not_put_under_the_exec(
+        codex_home, tmp_path, sent):
+    parent, child_path, child, head, tail = _v2_rollouts(tmp_path / "sessions", None)
+    _run(tmp_path, "UserPromptSubmit", parent)
+    _run(tmp_path, "SubagentStop", parent, agent_id=child, agent_type="default",
+         agent_transcript_path=str(child_path))
+    assert _latest(sent).get(spans.span_id_for("subagent:" + child)) is None
+    _rollout(parent, head + tail)
+    _run(tmp_path, "Stop", parent)
+    root = _latest(sent)[spans.span_id_for("subagent:" + child)]
+    assert root.parent_span_id == spans.span_id_for("call_direct")
+
+
+def test_a_spawn_that_hides_its_name_still_gets_its_subagent_placed(
+        codex_home, tmp_path, sent):
+    """The reviewer's repro: a template literal spawning next to a tool
+    called outside it."""
+    folder = tmp_path / "sessions"
+    folder.mkdir()
+    child = _uuid7_at(T0 + 20, "d" * 19)
+    parent = _rollout(folder / ("rollout-p-%s.jsonl" % PARENT), [
+        _line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
+                                        "cli_version": "0.144.1"})]
+        + _turn(T0, "t1", _exec_call(T0 + 1, "call_exec", TEMPLATE_SPAWN),
+                _exec_done(T0 + 500, "call_exec")))
+    child_path = _rollout(folder / ("rollout-c-%s.jsonl" % child), [
+        _line(T0 + 10, "session_meta", {
+            "id": child, "cwd": "/tmp/proj", "cli_version": "0.144.1",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": PARENT}}}})]
+        + _turn(T0 + 40, "t-child"))
+    _run(tmp_path, "SubagentStop", parent, agent_id=child, agent_type="default",
+         agent_transcript_path=str(child_path))
+    _run(tmp_path, "Stop", parent)
+    root = _latest(sent)[spans.span_id_for("subagent:" + child)]
+    assert root.parent_span_id == spans.span_id_for("call_exec")
+
+
+def test_overlapping_spawns_are_placed_in_the_order_their_hooks_arrive(tmp_path):
+    """Known approximation. The children are told apart by when they were
+    made, but only among those whose hook has been seen: if the younger
+    child's hook comes first it takes the call that began first."""
+    from rius_cc import codex_session
+    parent, children, first, second = _concurrent_rollouts(tmp_path / "sessions")
+    st = codex_session.load({})
+    for child in (second, first):
+        codex_session.note_payload(
+            st, "SubagentStop", {"transcript_path": str(parent), "agent_id": child,
+                                 "agent_type": "default",
+                                 "agent_transcript_path": str(children[child])})
+        codex_session.build(st, _ctx(), str(parent))
+    assert st["spawned"][second] == spans.span_id_for("call_a")
+    assert st["spawned"][first] == spans.span_id_for("call_b")

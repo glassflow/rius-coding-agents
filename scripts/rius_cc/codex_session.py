@@ -31,6 +31,9 @@ def load(st: dict) -> dict:
     for key, value in codex_spans.new_state().items():
         st.setdefault(key, value)
     st.setdefault("codex_subs", {})
+    for each in [st] + [sub["state"] for sub in st["codex_subs"].values()
+                        if sub.get("state") is not None]:
+        codex_spans.upgrade_state(each)
     return st
 
 
