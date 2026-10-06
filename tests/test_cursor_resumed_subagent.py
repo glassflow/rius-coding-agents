@@ -388,3 +388,21 @@ def test_a_folder_that_is_off_or_a_signed_out_machine_searches_nothing(
     _fire(home, [_first_event_of(CHILD)])
     assert reads == []
     assert cursor_events.linked_children(sdir, PARENT) == []
+
+
+def test_a_signed_out_machine_writes_no_link_even_when_the_env_names_a_parent(home):
+    _set_up(home, signed_in_here=False)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    _fire(home, [dict(_first_event_of(CHILD))],
+          {cursor_hook.SESSION_ENV: PARENT})
+    assert cursor_events.linked_children(sdir, PARENT) == []
+
+
+def test_a_folder_that_is_off_still_follows_an_env_that_names_a_parent(home):
+    _set_up(home, enabled=False)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    _fire(home, [dict(_first_event_of(CHILD))],
+          {cursor_hook.SESSION_ENV: PARENT})
+    assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
