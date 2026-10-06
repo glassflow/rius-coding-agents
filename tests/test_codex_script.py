@@ -139,7 +139,14 @@ HOSTILE = {
     "dollar braces": "`${" * 10000,
     "many literals": '"a" ' * 8000,
     "past the cap": '"a" ' * 400000,
+    "paren slash class": ")/[" * 21845,
+    "increment slash class": "a++/[" * 13000,
+    "paren slash word class": ")/x[" * 16000,
+    "paren space slash class": ") /[a" * 13000,
 }
+# Slashes that may divide or begin a regular expression, each with an
+# unclosed `[`: what made every one of them look to the end of the line.
+LOOKAHEAD_UNITS = [")/[", "a++/[", ")/x[", ") /[a", ") /a[b]", "x) /" + "y" * 60 + "[ "]
 
 
 def _call_and_output(script, capture):
@@ -329,3 +336,25 @@ def test_a_script_not_read_to_its_end_is_withheld_whatever_it_names():
     are left out; it is the unfinished scan that withholds it."""
     assert codex_spans.reads_secret_file("const a = 'never closed;\ncat server.pem") is True
     assert codex_spans.reads_secret_file("const a = 'closed';\ncat server.pem") is False
+
+
+@pytest.mark.parametrize("unit", LOOKAHEAD_UNITS)
+def test_what_is_looked_ahead_at_does_not_grow_with_the_script(unit):
+    """The same few thousand characters of lookahead at 4 KB and at 64 KB:
+    the work is linear, where each `/` once looked to the end of the line."""
+    looked = []
+    for size in (4096, 8192, 16384, 65000):
+        reader = codex_script._Reader(unit * (size // len(unit)))
+        reader.read()
+        looked.append(reader.looked)
+    bound = codex_script._LOOKAHEAD_TOTAL + codex_script._LOOKAHEAD
+    assert max(looked) <= bound, looked
+    started = time.perf_counter()
+    codex_script.read(unit * (65000 // len(unit)))
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_long_real_regular_expression_is_read_whole():
+    body = "a" * 5000 + "[/]" * 500
+    assert codex_script.called_tools("const re = /%s/; %s" % (body, CALL)) == ["exec_command"]
+    assert codex_script.called_tools("if (/%s/.test(x)) { %s }" % (body, CALL)) == ["exec_command"]

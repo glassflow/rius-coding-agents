@@ -24,6 +24,12 @@ _NUMBER = re.compile(r"[0-9][0-9A-Za-z_.]*")
 # After these a `/` starts a regular expression; after `)`, `}`, `++` and `--`
 # it may do either; after anything else it divides.
 _REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{;+-*%<>~^")
+# How far past a `/` that may divide or may begin a regular expression to look
+# for the end of the expression, for one such `/` and for a whole script: past
+# either, the script is not read, so the work stays linear.
+_LOOKAHEAD = 256
+_LOOKAHEAD_TOTAL = 16 * 1024
+_UNDECIDED = -2
 _REGEX_AFTER_WORDS = frozenset(("return", "typeof", "case", "in", "of", "delete",
                                 "void", "throw", "new", "else", "do", "yield",
                                 "await"))
@@ -39,6 +45,7 @@ class _Reader:
         self.last = ""                  # the last significant character
         self.before = ""                # and the one before it
         self.last_word = ""
+        self.looked = 0                 # characters looked ahead at so far
 
     def _set(self, last: str, word: str = "") -> None:
         self.before, self.last, self.last_word = self.last, last, word
@@ -174,28 +181,41 @@ class _Reader:
     def _readings_differ(self) -> bool:
         """Whether, read as a regular expression, the text from this `/` on
         the line holds something that read as a division would be lexed
-        otherwise: a quote, a brace, a backslash."""
-        close = self._regex_end(self.at + 1)
+        otherwise: a quote, a brace, a backslash. One that cannot be
+        decided within the lookahead counts as differing."""
+        close = self._regex_end(self.at + 1, _LOOKAHEAD)
+        if close == _UNDECIDED or self.looked > _LOOKAHEAD_TOTAL:
+            return True
         body = self.text[self.at + 1:close] if close >= 0 else ""
         return any(ch in body for ch in "\"'`{}\\/")
 
-    def _regex_end(self, at: int) -> int:
+    def _regex_end(self, at: int, limit: int = 0) -> int:
         """Where a regular expression that begins at `at` ends (the closing
-        `/`), or -1 if the line ends first."""
+        `/`), or -1 if the line ends first. With a `limit`, only that many
+        characters are looked at: past it, _UNDECIDED."""
+        stop = min(len(self.text), at + limit) if limit else len(self.text)
+        end, reached = self._scan_regex(at, stop)
+        if not limit:
+            return end
+        self.looked += reached - at
+        return _UNDECIDED if end < 0 and reached >= stop < len(self.text) else end
+
+    def _scan_regex(self, at: int, stop: int) -> Tuple[int, int]:
+        """(the closing `/` or -1, how far it looked)."""
         text, in_class = self.text, False
-        while at < len(text):
+        while at < stop:
             ch = text[at]
             if ch == "\\":
                 at += 2
                 continue
             if ch == "\n":
-                return -1
+                return -1, at
             if ch == "/" and not in_class:
-                return at
+                return at, at
             if ch in "[]":
                 in_class = ch == "["
             at += 1
-        return -1
+        return -1, at
 
     def _regex(self) -> bool:
         end = self._regex_end(self.at + 1)
