@@ -18,10 +18,10 @@ def all_names():
     return sorted(p.stem for p in DIR.glob("*.json"))
 
 
-def clock():
+def clock(start_ns=BASE_NS):
     """One second per hook, so every event has its own, known time."""
     counter = itertools.count()
-    return lambda: BASE_NS + next(counter) * STEP_NS
+    return lambda: start_ns + next(counter) * STEP_NS
 
 
 def spool(name, spool_dir, capture_content=True, max_attr_bytes=32768):

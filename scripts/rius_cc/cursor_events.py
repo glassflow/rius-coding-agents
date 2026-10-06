@@ -20,7 +20,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import scrub
 from .spans import exportable
@@ -166,8 +166,12 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
     for key in IDENTITY_FIELDS:
         if key in payload:
             record[key] = payload[key]
-    if not record.get("cwd") and _cwd(payload):
+    if "cwd" not in record and _cwd(payload):
         record["cwd"] = _cwd(payload)
+    if _cwd(payload):
+        # The workspace root, which a tool's own cwd can differ from: what a
+        # subagent that names no parent is matched to its parent by.
+        record["workspace"] = _cwd(payload)
     subagent_type = task_subagent_type(payload)
     if subagent_type and "subagent_type" not in record:
         # A type name such as "explore", not content: it names the span of
@@ -277,26 +281,41 @@ def read_conversation(spool_dir: str, conversation_id: str) -> List[Dict[str, An
     return _without_echoes(events)
 
 
-def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
-    """Conversations whose `.parent` sidecar names this one: subagents
-    linked without a subagentStart (cursor_hook.link_headless_subagent)."""
+def call_id(value: Any) -> str:
+    """A tool call id as one plain token, whatever Cursor sent."""
+    return " ".join(str(value or "").split())
+
+
+def read_link(path: str) -> Tuple[str, str]:
+    """(parent conversation, Task call it answers) from a `.parent` sidecar.
+    The Task call is "" for a link made without one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            parent, _, task = fh.read().partition("\n")
+    except (OSError, UnicodeDecodeError):
+        return "", ""
+    return parent.strip(), task.strip()
+
+
+def read_links(spool_dir: str) -> Dict[str, Tuple[str, str]]:
+    """Every subagent's (parent, Task call it answers), by subagent id."""
     try:
         names = os.listdir(spool_dir)
     except OSError:
-        return []
-    children = []
+        return {}
+    links = {}
     for name in names:
         child = name[:-len(PARENT_SUFFIX)]
-        if not name.endswith(PARENT_SUFFIX) or not _SAFE_NAME.match(child):
-            continue
-        try:
-            with open(os.path.join(spool_dir, name), encoding="utf-8") as fh:
-                parent = fh.read().strip()
-        except (OSError, UnicodeDecodeError):
-            continue
-        if parent == conversation_id and child != conversation_id:
-            children.append(child)
-    return sorted(children)
+        if name.endswith(PARENT_SUFFIX) and _SAFE_NAME.match(child):
+            links[child] = read_link(os.path.join(spool_dir, name))
+    return links
+
+
+def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
+    """Conversations whose `.parent` sidecar names this one: subagents
+    linked without a subagentStart (cursor_hook.link_headless_subagent)."""
+    return sorted(child for child, (parent, _) in read_links(spool_dir).items()
+                  if parent == conversation_id and child != conversation_id)
 
 
 # The plugin's hooks and the same hooks installed into hooks.json by

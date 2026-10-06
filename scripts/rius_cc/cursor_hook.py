@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Mapping, NamedTuple, Optional
+from typing import Any, Dict, Mapping, NamedTuple, Optional, Tuple
 
 from . import config, cursor_events, cursor_export, state
 
@@ -67,21 +67,23 @@ _NEVER_FIRST_IN_A_SUBAGENT = ("sessionStart", "beforeSubmitPrompt",
 
 
 def _spawning_conversation(env: Mapping[str, str], sdir: str,
-                           workspace: str) -> str:
-    """The conversation a subagent with no subagentStart belongs to.
+                           workspace: str) -> Tuple[str, str]:
+    """(conversation, Task call) a subagent with no subagentStart answers,
+    "" for what is not known.
 
-    The session env that sessionStart returned names it. A resumed run
-    (`cursor-agent -p --resume`) fires no sessionStart, so no hook has that
-    env: the parent is then the conversation in this workspace waiting on a
-    Task call.
+    The session env that sessionStart returned names the conversation. A
+    resumed run (`cursor-agent -p --resume`) fires no sessionStart, so no
+    hook has that env: the conversation is then the one in this workspace
+    with a Task call no subagent answers yet.
     """
     named = str(env.get(SESSION_ENV) or "")
     if not named:
-        return cursor_export.conversation_in_task_call(sdir, workspace)
+        return cursor_export.task_call_awaiting_subagent(
+            sdir, workspace) or ("", "")
     if (state.is_valid_session_id(named)
             and os.path.exists(cursor_events.spool_path(sdir, named))):
-        return named
-    return ""
+        return named, cursor_export.oldest_unclaimed_task_call(sdir, named)
+    return "", ""
 
 
 def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
@@ -91,15 +93,16 @@ def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
     `cursor-agent -p` fires no subagentStart: a Task subagent's events
     arrive under the subagent's own conversation id with nothing that names
     the parent. So a conversation that first shows up while another one is
-    mid-Task is that one's subagent.
+    mid-Task is that one's subagent. An empty `workspace` rules out looking
+    for the parent when the env does not name it.
     """
     if (event in _NEVER_FIRST_IN_A_SUBAGENT
             or os.path.exists(cursor_events.spool_path(sdir, key))
             or cursor_export.root_conversation(sdir, key) != key):
         return
-    parent = _spawning_conversation(env, sdir, workspace)
-    if parent and parent != key:
-        cursor_export.link_subagent(sdir, key, parent)
+    parent, task_call = _spawning_conversation(env, sdir, workspace)
+    if parent:
+        cursor_export.link_subagent(sdir, key, parent, task_call)
 
 
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
@@ -108,8 +111,9 @@ def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
                          cfg.max_attr_bytes)
     subagent_id = str(payload.get("subagent_id") or "")
     if event == "subagentStart" and state.is_valid_session_id(subagent_id):
-        cursor_export.link_subagent(sdir, subagent_id,
-                                    cursor_events.spool_key(payload))
+        cursor_export.link_subagent(
+            sdir, subagent_id, cursor_events.spool_key(payload),
+            cursor_events.call_id(payload.get("tool_call_id")))
     if event in cursor_export.TOOL_DONE_EVENTS:
         return cursor_export.tick(sdir, cursor_events.spool_key(payload))
     return 0
@@ -134,13 +138,16 @@ def handle(event: str, payload: Any, env: Mapping[str, str],
     if not state.is_valid_session_id(key):
         return None
     cwd = workspace_dir(payload, env)
-    link_headless_subagent(event, key, env, sdir, cwd)
+    own = config.resolve(key, cwd, env, home)
+    if not own.api_key:
+        return None
+    # A folder that is off has no use for a parent search: nothing in it is
+    # traced unless the env names a parent.
+    link_headless_subagent(event, key, env, sdir, cwd if own.enabled else "")
     root = cursor_export.root_conversation(sdir, key)
     if not state.is_valid_session_id(root):
         return None
-    cfg = config.resolve(root, cwd, env, home)
-    if not cfg.api_key:
-        return None
+    cfg = own if root == key else config.resolve(root, cwd, env, home)
     tools_done = 0
     if cfg.enabled:
         tools_done = _spool(event, payload, sdir, cfg)

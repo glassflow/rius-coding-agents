@@ -7,17 +7,19 @@ accepted export; `cursor_sent` in the session state is what it remembers.
 
 A subagent's own events are spooled under its own id. Its trace, config and
 state are its root conversation's, found through the `.parent` link written
-when the subagent started.
+when the subagent started. The link also names the Task call the subagent
+answers, so one call is never given a second subagent.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import tempfile
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from . import agent, cursor_events, cursor_spans, state
+from . import agent, cursor_events, cursor_spans, platform_compat, state
 
 SPOOL_DIRNAME = "spool"
 PARENT_SUFFIX = cursor_events.PARENT_SUFFIX
@@ -48,49 +50,89 @@ def _sidecar(sdir: str, conversation_id: str, suffix: str) -> str:
     return path[:-len(cursor_events.SPOOL_SUFFIX)] + suffix
 
 
-def link_subagent(sdir: str, subagent_id: str, parent_id: str) -> None:
+def link_subagent(sdir: str, subagent_id: str, parent_id: str,
+                  task_call: str = "") -> None:
+    """Record whose subagent this is, and the Task call it answers when that
+    is known: a Task call starts one subagent. Replaced whole, so a reader
+    never sees half a link."""
     os.makedirs(sdir, mode=0o700, exist_ok=True)
-    fd = os.open(_sidecar(sdir, subagent_id, PARENT_SUFFIX),
-                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(prefix=".link-", suffix=".tmp", dir=sdir)
     try:
-        os.write(fd, parent_id.encode("utf-8"))
-    finally:
-        os.close(fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(parent_id + ("\n" + task_call if task_call else ""))
+        platform_compat.replace_atomic(
+            tmp, _sidecar(sdir, subagent_id, PARENT_SUFFIX))
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def root_conversation(sdir: str, conversation_id: str) -> str:
     current = conversation_id
     for _ in range(cursor_events.MAX_SUBAGENT_DEPTH + 1):
-        try:
-            with open(_sidecar(sdir, current, PARENT_SUFFIX)) as fh:
-                parent = fh.read().strip()
-        except OSError:
-            return current
+        parent, _ = cursor_events.read_link(
+            _sidecar(sdir, current, PARENT_SUFFIX))
         if not parent or parent == current:
             return current
         current = parent
     return current
 
 
-# A subagent's first event follows its parent's Task call by seconds. The
-# call is among the parent's last events, so only the spool's tail is read.
-TASK_LINK_WINDOW_S = 600
+# A subagent's first event follows its parent's Task call by seconds. That
+# call is among the parent's last events, so only a spool's tail is read, and
+# only the newest few spools are looked at.
+TASK_LINK_WINDOW_NS = 120 * 10**9
 TASK_LINK_TAIL_BYTES = 256 * 1024
+TASK_LINK_CANDIDATES = 20
 
 
-def _inside_task_call(events: List[Dict[str, Any]]) -> bool:
-    """True while a Task call has not ended. `cursor-agent -p` sends no
-    postToolUse for a Task, so there only a sessionEnd ends one."""
-    open_calls = set()
+def _open_task_calls(events: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Task calls with no end yet, oldest first, each with the time it
+    began. `cursor-agent -p` sends no postToolUse for a Task, so there only
+    a sessionEnd ends one."""
+    open_calls: Dict[str, int] = {}
     for event in events:
         kind = event.get("event")
+        call = cursor_events.call_id(event.get("tool_use_id"))
         if kind == "sessionEnd":
             open_calls.clear()
-        elif kind == "preToolUse" and event.get("tool_name") == "Task":
-            open_calls.add(event.get("tool_use_id"))
+        elif kind == "preToolUse" and event.get("tool_name") == "Task" and call:
+            open_calls.setdefault(call, event["ts"])
         elif kind in TOOL_DONE_EVENTS:
-            open_calls.discard(event.get("tool_use_id"))
-    return bool(open_calls)
+            open_calls.pop(call, None)
+    return open_calls
+
+
+def _claimed_calls(sdir: str) -> Dict[str, Set[str]]:
+    """The Task calls each conversation's subagents already answer."""
+    claimed: Dict[str, Set[str]] = {}
+    for parent, call in cursor_events.read_links(sdir).values():
+        if call:
+            claimed.setdefault(parent, set()).add(call)
+    return claimed
+
+
+def _first_unclaimed(events: List[Dict[str, Any]], claimed: Set[str],
+                     since_ns: int) -> str:
+    return next((call for call, began in _open_task_calls(events).items()
+                 if call not in claimed and began >= since_ns), "")
+
+
+def _tail(sdir: str, conversation_id: str) -> List[Dict[str, Any]]:
+    return cursor_events.read_spool(
+        cursor_events.spool_path(sdir, conversation_id), TASK_LINK_TAIL_BYTES)
+
+
+def oldest_unclaimed_task_call(sdir: str, parent: str) -> str:
+    """The Task call of `parent` that no subagent answers yet, "" if none."""
+    try:
+        return _first_unclaimed(_tail(sdir, parent),
+                                _claimed_calls(sdir).get(parent, set()), 0)
+    except Exception:  # a hook must never fail the agent
+        return ""
 
 
 def _recent_conversations(sdir: str, since_s: float) -> List[str]:
@@ -114,24 +156,38 @@ def _recent_conversations(sdir: str, since_s: float) -> List[str]:
     return [cid for _, cid in sorted(recent, reverse=True)]
 
 
-def conversation_in_task_call(sdir: str, workspace: str,
-                              now_s: Optional[float] = None) -> str:
-    """The conversation working in `workspace` that is waiting on a Task
-    call, or "": the parent of a subagent whose events name no one.
+def task_call_awaiting_subagent(sdir: str, workspace: str,
+                                now_ns: Optional[int] = None
+                                ) -> Optional[Tuple[str, str]]:
+    """(conversation, Task call) that a subagent whose events name no parent
+    answers: a Task call begun in the last TASK_LINK_WINDOW_NS by a
+    conversation working in `workspace`, that no subagent answers yet.
 
     Reads spools, which the hook otherwise never does, so it is for a
     conversation that has no spool yet and no env naming its parent.
     """
     if not workspace:
-        return ""
-    since = (time.time() if now_s is None else now_s) - TASK_LINK_WINDOW_S
-    for cid in _recent_conversations(sdir, since):
-        events = cursor_events.read_spool(
-            cursor_events.spool_path(sdir, cid), TASK_LINK_TAIL_BYTES)
-        if (any(e.get("cwd") == workspace for e in events)
-                and _inside_task_call(events)):
-            return cid
-    return ""
+        return None
+    try:
+        return _awaiting_subagent(sdir, workspace, now_ns)
+    except Exception:  # a hook must never fail the agent
+        return None
+
+
+def _awaiting_subagent(sdir: str, workspace: str, now_ns: Optional[int]
+                       ) -> Optional[Tuple[str, str]]:
+    now = time.time_ns() if now_ns is None else now_ns
+    since_ns = now - TASK_LINK_WINDOW_NS
+    claimed = _claimed_calls(sdir)
+    recent = _recent_conversations(sdir, since_ns / 1e9)
+    for cid in recent[:TASK_LINK_CANDIDATES]:
+        events = _tail(sdir, cid)
+        if not any(e.get("workspace") == workspace for e in events):
+            continue
+        call = _first_unclaimed(events, claimed.get(cid, set()), since_ns)
+        if call:
+            return cid, call
+    return None
 
 
 def tick(sdir: str, conversation_id: str) -> int:
