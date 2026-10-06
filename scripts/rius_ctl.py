@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""CLI backing the /rius:* slash commands (one command file per action).
+"""CLI backing the slash commands (one command file per action): /rius:* in
+Claude Code, /rius-* in Cursor, $rius:rius-* in Codex.
 
 Actions: on | off | clear | enable-here | content-on-here | disable-here |
-         status | login | login-wait | logout | use-key
-         install-hooks | uninstall-hooks [--path <hooks.json>] (Cursor only)
-Flags:   --session <id>   --cwd <path>   --env <name> (login only)
-         --agent <claude-code|codex|cursor> (default claude-code)
+         status | login | login-wait | logout | use-key |
+         install-hooks | uninstall-hooks (Cursor only)
+Flags:   --session <id>   --cwd <folder>   --debug (status only)
+         --env <production|staging> (login and use-key)
+         --path <hooks.json file> (install-hooks and uninstall-hooks)
+         --agent <claude-code|codex|cursor> (every action; default claude-code)
          `-- '<typed text>'`: what the user typed after a slash command
 
 Each action takes only the flags ACTION_FLAGS lists, with values
@@ -37,13 +40,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rius_cc import (agent, codex_trust, config, cursor_install,  # noqa: E402
                      login, notice, platform_compat, state)
 
-USAGE = (
-    "Usage: rius_ctl.py "
-    "<on|off|clear|enable-here|content-on-here|disable-here|status|login|"
-    "login-wait|logout|use-key> "
-    "[--session <id>] [--cwd <path>] [--env <production|staging>] "
-    "[--debug] (status only)"
-)
+USAGE = """\
+Usage: rius_ctl.py <action> [flags]
+  Every action also takes --agent <claude-code|codex|cursor>; the default is
+  claude-code.
+
+  on | off | clear                  --session <id> [--cwd <folder>]
+  status                            [--session <id>] [--cwd <folder>] [--debug]
+  enable-here | content-on-here | disable-here
+                                    [--cwd <folder>]
+  login                             [--cwd <folder>] [--env <production|staging>]
+  login-wait | logout               [--cwd <folder>]
+  use-key                           [--cwd <folder>] [--env <production|staging>]
+                                    (reads the key from stdin)
+  install-hooks | uninstall-hooks   [--path <hooks.json file>]
+                                    (needs --agent cursor)"""
 
 # Actions that WRITE a per-session override. These must never guess which
 # session they are acting on: guessing means either crashing on a fresh
@@ -83,7 +94,7 @@ def _is_session_id(value):
     return re.fullmatch(r"[A-Za-z0-9_-]*", value) is not None
 
 
-def _is_folder(value):
+def _is_path(value):
     return bool(value) and not value.startswith("-") and "\0" not in value
 
 
@@ -91,9 +102,9 @@ def _is_folder(value):
 # flag is one entry here plus its name in ACTION_FLAGS.
 FLAG_VALUES = {
     "--session": ("a session id (letters, digits, - and _)", _is_session_id),
-    "--cwd": ("a folder path", _is_folder),
+    "--cwd": ("a folder path", _is_path),
     "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
-    "--path": ("a hooks.json path", _is_folder),
+    "--path": ("the path of a hooks.json file", _is_path),
     "--agent": ("claude-code, codex or cursor",
                 lambda value: value in agent.PROFILES),
 }

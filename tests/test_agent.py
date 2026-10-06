@@ -88,6 +88,20 @@ def test_localize_rewords_commands_and_the_agent_name():
     assert agent.CURSOR.localize(text) == "Run `/rius-login`, then restart Cursor."
 
 
+def test_localize_names_the_agent_in_the_use_key_command():
+    text = "store a key with `pbpaste | rius_ctl.sh use-key`"
+    assert agent.CLAUDE_CODE.localize(text) == text
+    assert agent.CODEX.localize(text) == (
+        "store a key with `pbpaste | rius_ctl.sh use-key --agent codex`")
+    assert agent.CURSOR.localize(text) == (
+        "store a key with `pbpaste | rius_ctl.sh use-key --agent cursor`")
+
+
+def test_localize_leaves_the_key_source_label_alone():
+    label = "Key from: rius_ctl.sh use-key"
+    assert agent.CURSOR.localize(label) == label
+
+
 # --- the shared core under another agent ------------------------------------
 
 def test_every_path_moves_to_the_agent_home(codex, tmp_path):
