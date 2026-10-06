@@ -521,7 +521,7 @@ def test_two_subagents_starting_together_never_share_a_task_call(tmp_path):
     first_child = "c0de0000-0000-4000-8000-0000000000a1"
     second_child = "c0de0000-0000-4000-8000-0000000000b1"
     second_call = dict(_until_the_task_call()[-1], tool_use_id="tool_second")
-    trials = [tmp_path / ("home%d" % i) for i in range(8)]
+    trials = [tmp_path / ("home%d" % i) for i in range(12)]
     for home in trials:
         with agent.using(agent.CURSOR):
             _set_up(home)
@@ -539,10 +539,13 @@ def test_two_subagents_starting_together_never_share_a_task_call(tmp_path):
     for home in trials:
         with agent.using(agent.CURSOR):
             sdir = cursor_export.spool_dir(str(home))
-        held = {_holder(sdir, TASK_CALL), _holder(sdir, "tool_second")}
-        assert held == {first_child, second_child}
+        # Both calls are taken, so a third chat finds none to attach to.
+        cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir,
+                                           WORKSPACE)
         assert cursor_events.linked_children(sdir, PARENT) == [first_child,
                                                                second_child]
+        held = {_holder(sdir, TASK_CALL), _holder(sdir, "tool_second")}
+        assert held == {first_child, second_child}
 
 
 # --- what is cleaned up with the spool ----------------------------------------
