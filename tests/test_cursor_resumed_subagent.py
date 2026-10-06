@@ -684,3 +684,23 @@ def test_a_hook_that_found_a_claim_stale_cannot_take_what_another_then_took(
     mine = cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
     assert (mine, other["took"]) == (False, True)
     assert _holder(sdir, "call-1") == STRANGER
+
+
+# --- a claim that cannot be written ---------------------------------------------
+
+def test_a_claim_that_cannot_be_written_still_links_the_subagent(home,
+                                                                 monkeypatch):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+
+    def refuse(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cursor_export, "claim_task_call", refuse)
+    started = {"conversation_id": PARENT, "hook_event_name": "subagentStart",
+               "subagent_id": CHILD, "tool_call_id": "tool_9",
+               "workspace_roots": [WORKSPACE]}
+    cursor_hook.handle("subagentStart", started, {}, str(home))
+    assert [e["event"] for e in cursor_export.read_events(str(home), PARENT)
+            ] == ["subagentStart"]
+    assert cursor_events.linked_children(sdir, PARENT) == [CHILD]

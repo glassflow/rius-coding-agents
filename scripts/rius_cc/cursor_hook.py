@@ -106,6 +106,15 @@ def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
         cursor_export.link_subagent(sdir, key, parent)
 
 
+def _claim_quietly(sdir: str, parent: str, call: str, subagent_id: str) -> None:
+    """A claim that cannot be written is no claim: the subagent is still
+    linked to its parent."""
+    try:
+        cursor_export.claim_task_call(sdir, parent, call, subagent_id)
+    except Exception:  # a hook must never fail the agent
+        pass
+
+
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
     """Append the event; returns how many tools the conversation finished."""
     cursor_events.record(payload, sdir, cfg.capture_content,
@@ -115,7 +124,7 @@ def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
         parent = cursor_events.spool_key(payload)
         call = cursor_events.call_id(payload.get("tool_call_id"))
         if call:
-            cursor_export.claim_task_call(sdir, parent, call, subagent_id)
+            _claim_quietly(sdir, parent, call, subagent_id)
         cursor_export.link_subagent(sdir, subagent_id, parent)
     if event in cursor_export.TOOL_DONE_EVENTS:
         return cursor_export.tick(sdir, cursor_events.spool_key(payload))
