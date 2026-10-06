@@ -242,3 +242,16 @@ def test_a_grandchild_of_a_child_not_yet_read_hangs_under_that_child_when_closin
     assert parent_of == {c_id: spans.span_id_for("call_exec"),
                          g_id: spans.span_id_for("turn:tc")}
     assert not any(s.pending for s in rows.values())
+
+
+def test_a_child_whose_spawner_is_unknown_hangs_under_the_session_when_closing(
+        codex_home, tmp_path, sent):
+    folder = tmp_path / "sessions"
+    parent = _dying_parent(folder, with_exec=False)
+    child, child_path = _child(folder, _uuid7_at(T0 - 500, "e" * 19))
+    _hooks(tmp_path, parent, child, child_path)
+    del sent[:]
+    _sweep(tmp_path, _state(tmp_path)["last_ns"] + 2 * HOUR_NS)
+    rows = {s.span_id: s for _, out in sent for s in out}
+    root = rows[spans.span_id_for("subagent:" + child)]
+    assert root.parent_span_id == spans.span_id_for("turn:t1") and not root.pending
