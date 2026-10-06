@@ -3,8 +3,10 @@
 One pass over the text, with no backtracking, finds what the script quotes in
 its string literals and which tools it calls (`tools.<name>(...)`), leaving
 out comments, regular expressions and the insides of strings. A script it cannot
-read to its end (an unterminated string, template or comment, a stray brace)
-or that is longer than MAX_CHARS is not trusted to name anything.
+read to its end (an unterminated string, template or comment, a stray brace),
+that is longer than MAX_CHARS, or where a `/` could be a division or a regular
+expression and the two readings would split the text differently, is not
+trusted to name anything: this is a best effort, not a parser.
 
 Knows nothing about spans (that is codex_spans.py).
 """
@@ -19,8 +21,9 @@ _TOOL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _WORD = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _CALL = re.compile(r"\s*\(")
 _NUMBER = re.compile(r"[0-9][0-9A-Za-z_.]*")
-# After these a `/` starts a regular expression; after anything else it divides.
-_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{};+-*%<>~^")
+# After these a `/` starts a regular expression; after `)`, `}`, `++` and `--`
+# it may do either; after anything else it divides.
+_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{;+-*%<>~^")
 _REGEX_AFTER_WORDS = frozenset(("return", "typeof", "case", "in", "of", "delete",
                                 "void", "throw", "new", "else", "do", "yield",
                                 "await"))
@@ -34,7 +37,11 @@ class _Reader:
         self.tools: List[str] = []
         self.braces: List[str] = []     # "{" or "${", one per open brace
         self.last = ""                  # the last significant character
+        self.before = ""                # and the one before it
         self.last_word = ""
+
+    def _set(self, last: str, word: str = "") -> None:
+        self.before, self.last, self.last_word = self.last, last, word
 
     def read(self) -> bool:
         """Whether the whole text was read."""
@@ -58,7 +65,7 @@ class _Reader:
         elif not self._word_or_number():
             if ch == "{":
                 self.braces.append("{")
-            self.last, self.last_word = ch, ""
+            self._set(ch)
             self.at += 1
         return True
 
@@ -70,7 +77,7 @@ class _Reader:
         if word == "tools" and self.last != ".":
             self._called(match.end())
         self.at = match.end()
-        self.last, self.last_word = "a", word
+        self._set("a", word)
         return True
 
     def _called(self, after: int) -> None:
@@ -88,10 +95,11 @@ class _Reader:
         while at < len(text):
             ch = text[at]
             if ch == "\\":
-                at += 2
+                at += 3 if text.startswith("\r\n", at + 1) else 2
             elif ch == quote:
                 self.literals.append(text[start:at])
-                self.at, self.last, self.last_word = at + 1, "a", ""
+                self.at = at + 1
+                self._set("a")
                 return True
             elif ch == "\n":
                 return False
@@ -109,12 +117,14 @@ class _Reader:
                 at += 2
             elif ch == "`":
                 self.literals.append(text[start:at])
-                self.at, self.last, self.last_word = at + 1, "a", ""
+                self.at = at + 1
+                self._set("a")
                 return True
             elif ch == "$" and text.startswith("{", at + 1):
                 self.literals.append(text[start:at])
                 self.braces.append("${")
-                self.at, self.last, self.last_word = at + 2, "{", ""
+                self.at = at + 2
+                self._set("{")
                 return True
             else:
                 at += 1
@@ -124,7 +134,7 @@ class _Reader:
         if not self.braces:
             return False
         self.at += 1
-        self.last, self.last_word = "}", ""
+        self._set("}")
         return self._template() if self.braces.pop() == "${" else True
 
     def _slash(self) -> bool:
@@ -140,30 +150,60 @@ class _Reader:
             return end >= 0
         if self._starts_regex():
             return self._regex()
-        self.at, self.last, self.last_word = at + 1, "/", ""
+        if self._may_be_regex() and self._readings_differ():
+            return False
+        self.at = at + 1
+        self._set("/")
         return True
 
     def _starts_regex(self) -> bool:
         if self.last == "a":
             return self.last_word in _REGEX_AFTER_WORDS
+        if self._after_increment():
+            return False
         return self.last == "" or self.last in _REGEX_AFTER_CHARS
 
-    def _regex(self) -> bool:
-        text, at, in_class = self.text, self.at + 1, False
+    def _after_increment(self) -> bool:
+        return self.last in ("+", "-") and self.before == self.last
+
+    def _may_be_regex(self) -> bool:
+        """After `)` or `}` (`if (a) /x/.test(b)`) and after `++` or `--`, a
+        `/` may divide or may begin a regular expression."""
+        return self.last in (")", "}") or self._after_increment()
+
+    def _readings_differ(self) -> bool:
+        """Whether, read as a regular expression, the text from this `/` on
+        the line holds something that read as a division would be lexed
+        otherwise: a quote, a brace, a backslash."""
+        close = self._regex_end(self.at + 1)
+        body = self.text[self.at + 1:close] if close >= 0 else ""
+        return any(ch in body for ch in "\"'`{}\\/")
+
+    def _regex_end(self, at: int) -> int:
+        """Where a regular expression that begins at `at` ends (the closing
+        `/`), or -1 if the line ends first."""
+        text, in_class = self.text, False
         while at < len(text):
             ch = text[at]
             if ch == "\\":
                 at += 2
                 continue
             if ch == "\n":
-                return False
+                return -1
             if ch == "/" and not in_class:
-                self.at, self.last, self.last_word = at + 1, "a", ""
-                return True
+                return at
             if ch in "[]":
                 in_class = ch == "["
             at += 1
-        return False
+        return -1
+
+    def _regex(self) -> bool:
+        end = self._regex_end(self.at + 1)
+        if end < 0:
+            return False
+        self.at = end + 1
+        self._set("a")
+        return True
 
 
 def read(script: str) -> Tuple[List[str], List[str], bool]:

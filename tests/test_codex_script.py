@@ -239,3 +239,71 @@ def test_a_spawn_hook_response_nested_too_deep_is_ignored():
         "tool_name": "spawn_agent", "tool_response": DEEP,
         "transcript_path": "/tmp/rollout-x.jsonl"})
     assert st["codex_subs"] == {}
+
+
+# --- a `/` that could divide or begin a regular expression ------------------
+
+AMBIGUOUS_REPRO = ("if (a) /'/.test(b); var s = 'tools.secret_thing(1)'; "
+                   "var u = /'/")
+SECRET_BEHIND_REGEX = ("if (a) /'/.test(b); await tools.exec_command({cmd: 'cat .env'});"
+                       " var u = /'/")
+CRLF_CONTINUATION = ("const a = 'x\\\r\ny';\r\n"
+                     'await tools.exec_command({cmd:"cat .env"});')
+
+
+@pytest.mark.parametrize("script", [
+    AMBIGUOUS_REPRO,
+    "if (x) { } /'/.test(y); var s = 'tools.secret_thing(1)';",
+    "i++ /'/.test(y); var s = 'tools.secret_thing(1)';",
+    "if (a) /`/.test(b); const t = `tools.secret_thing(1)`;",
+    "if (a) /{/.test(b); const t = 'tools.secret_thing(1)';",
+])
+def test_a_slash_that_could_be_either_names_nothing_when_the_readings_differ(script):
+    assert codex_script.called_tools(script) == []
+    out, state = _tool_call_spans(script)
+    assert [s.name for s in out if s.kind_oi == "TOOL"] == ["exec"]
+    assert "secret_thing" not in json.dumps(state)
+
+
+@pytest.mark.parametrize("script", [
+    'const n = (a + b) / 2; ' + CALL,
+    "const r = (a) / b / c;\n" + CALL,
+    "x++ / 2;\n" + CALL,
+    "x++ / 2; " + CALL,
+    "if (a) /x/.test(b); " + CALL,
+    "const o = {a: 1}; const r = o.a / 2; " + CALL,
+    "const total = items.map((i) => i.n).length / 3;\n" + CALL,
+    'if (/["\']/.test(s)) { ' + CALL + " }",
+    "const re = /'/; " + CALL,
+    "const ok = a / b > 1 && c / d < 2; " + CALL,
+])
+def test_a_slash_whose_readings_agree_still_lets_the_tool_be_named(script):
+    assert codex_script.called_tools(script) == ["exec_command"]
+
+
+@pytest.mark.parametrize("script", [
+    SECRET_BEHIND_REGEX,
+    "const a = 'never closed;\n" + CALL.replace("ls", "cat .env"),
+])
+def test_a_secret_file_read_is_not_hidden_by_a_script_the_scanner_misreads(script):
+    assert codex_spans.reads_secret_file(script) is True
+
+
+def test_a_line_continuation_with_a_crlf_is_read_to_its_end():
+    literals, tools, complete = codex_script.read(CRLF_CONTINUATION)
+    assert complete and tools == ["exec_command"]
+    assert "cat .env" in literals
+    assert codex_spans.reads_secret_file(CRLF_CONTINUATION) is True
+
+
+def test_a_script_that_reads_no_secret_file_is_not_withheld_for_it():
+    assert codex_spans.reads_secret_file("const r = (a) / b / c;\n" + CALL) is False
+    assert codex_spans.reads_secret_file("if (a) /x/.test(b); " + CALL) is False
+
+
+def test_the_whole_text_is_checked_beside_the_literals(monkeypatch):
+    """Even if the scanner read a script as quoting nothing, a secret-shaped
+    word anywhere in it counts."""
+    monkeypatch.setattr(codex_script, "read", lambda script: ([], [], True))
+    assert codex_spans.reads_secret_file("run(cat .env)") is True
+    assert codex_spans.reads_secret_file("run(ls)") is False
