@@ -166,7 +166,7 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
     for key in IDENTITY_FIELDS:
         if key in payload:
             record[key] = payload[key]
-    if "cwd" not in record and _cwd(payload):
+    if not record.get("cwd") and _cwd(payload):
         record["cwd"] = _cwd(payload)
     subagent_type = task_subagent_type(payload)
     if subagent_type and "subagent_type" not in record:
@@ -223,12 +223,23 @@ def record(payload: Any, spool_dir: str, capture_content: bool,
     return path
 
 
-def read_spool(path: str) -> List[Dict[str, Any]]:
-    """Every whole line of one spool. A torn last line (a hook killed
-    mid-write) or a corrupt one is skipped."""
+def _read_lines(path: str, tail_bytes: int) -> List[str]:
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        start = max(0, size - tail_bytes) if tail_bytes else 0
+        fh.seek(start)
+        data = fh.read()
+    if start:
+        # The cut usually lands inside a line: drop that partial one.
+        data = data.partition(b"\n")[2]
+    return data.decode("utf-8").split("\n")
+
+
+def read_spool(path: str, tail_bytes: int = 0) -> List[Dict[str, Any]]:
+    """Every whole line of one spool, or of its last `tail_bytes` bytes. A
+    torn last line (a hook killed mid-write) or a corrupt one is skipped."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().split("\n")
+        lines = _read_lines(path, tail_bytes)
     except (OSError, UnicodeDecodeError):
         return []
     out = []

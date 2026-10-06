@@ -32,3 +32,14 @@ def spool(name, spool_dir, capture_content=True, max_attr_bytes=32768):
         cursor_events.record(payload, str(spool_dir), capture_content,
                              max_attr_bytes, clock=tick)
     return events[0]["conversation_id"]
+
+
+def resumed_subagent_run():
+    """real_headless_subagent as the second run of a chat: its sessionStart
+    and sessionEnd become a first run of their own, and `_hook_env` is
+    dropped from the rest because a resumed run fires no sessionStart to
+    set it. Derived from a real run, not captured."""
+    real = payloads("real_headless_subagent")
+    resumed = [{k: v for k, v in e.items() if k != "_hook_env"}
+               for e in real[1:]]
+    return [real[0], real[-1]] + resumed

@@ -152,3 +152,46 @@ def test_a_real_headless_subagent_reaches_the_receiver_in_one_tree(
     assert subagent.parent_span_id == task.span_id
     assert sum(1 for s in spans if s.parent_span_id == subagent.span_id) == 6
     assert sum(1 for s in spans if s.name == "turn") == 1
+
+
+def _wait_for(done, timeout_s=20):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        spans = [span for span, _ in _latest_spans().values()]
+        if done(spans):
+            return spans
+        time.sleep(0.1)
+    raise AssertionError("the spans never arrived")
+
+
+def _subagent_is_closed(spans):
+    return any(s.name == "explore" and not _attrs(s).get("glassflow.span.pending")
+               for s in spans)
+
+
+@posix_only("Cursor hooks run the launcher through bash")
+def test_a_subagent_of_a_resumed_run_reaches_the_receiver_in_one_tree(
+        server, tmp_path):
+    """The second run of a chat fires no sessionStart, so none of its hooks
+    gets the session env: the subagent's parent comes from the spool."""
+    with agent.using(agent.CURSOR):
+        sign_in(str(tmp_path), api_key="glassflow_dummy", endpoint=server)
+        config.write_path_rules(str(tmp_path),
+                                {"enabled_paths": ["/Users/dev/project"]})
+    for payload in cursor_fixtures.resumed_subagent_run():
+        session_env = payload.pop("_hook_env", {})
+        env = minimal_env(HOME=str(tmp_path),
+                          PATH="/usr/bin:/bin:/usr/local/bin", **session_env)
+        event = payload["hook_event_name"]
+        r = subprocess.run([BASH, LAUNCHER, "--agent", "cursor", event],
+                           input=json.dumps(payload), capture_output=True,
+                           text=True, env=env, timeout=30)
+        assert r.returncode == 0 and isinstance(json.loads(r.stdout), dict)
+    spans = _wait_for(_subagent_is_closed)
+
+    assert len({span.trace_id for span in spans}) == 1
+    task = next(s for s in spans if s.name == "Task")
+    subagent = next(s for s in spans if s.name == "explore")
+    assert subagent.parent_span_id == task.span_id
+    assert sum(1 for s in spans if s.parent_span_id == subagent.span_id) == 6
+    assert sum(1 for s in spans if s.name == "turn") == 1
