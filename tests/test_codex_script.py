@@ -311,7 +311,7 @@ def test_the_whole_text_is_checked_beside_the_literals(monkeypatch):
 
 @pytest.mark.parametrize("script", [
     "text(process.env.HOME);", "const k = obj.key; " + CALL,
-    "const v = (await tools.mcp__a__b({})).credentials_ok.key;"])
+    "const v = (await tools.mcp__a__b({})).status.key;"])
 def test_a_property_named_like_a_secret_file_is_not_a_read(script):
     assert codex_spans.reads_secret_file(script) is False
 
