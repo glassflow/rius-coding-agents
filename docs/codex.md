@@ -136,19 +136,34 @@ turn things off.
 - OpenAI does not report cache-write tokens, so none are sent.
 - Code mode (`code_mode_host`, on by default in codex-cli 0.144.1) runs
   every tool through one `exec` call that runs a script. Each such call is
-  one TOOL span, named after the tools its script calls (`exec_command`,
-  `apply_patch`, `mcp__<server>__<tool>`; plain `exec` when it calls none,
-  or when the script cannot be read to its end or is over 64 KB);
-  the commands, patches and spawns inside it get no spans of their own. Its
-  output carries no exit code, so a failed command inside `exec` reads as
-  success. A subagent spawned inside `exec` goes under the call that was
-  running when it was created and whose script can spawn one, else under
-  any call that was running, else under the last one begun; it is never
-  left out. When several such calls run at once, nothing in the rollout
-  says which spawned which, so the placement is approximate: they take
-  their subagents in the order they began, among the subagents Rius has
-  heard of so far, and a younger one heard of first can take the call that
-  began first.
+  one TOOL span; the commands, patches and spawns inside it get no spans of
+  their own. Its output carries no exit code, so a failed command inside
+  `exec` reads as success.
+  - **Name (best effort).** The span is named after the tools its script
+    calls (`exec_command`, `apply_patch`, `mcp__<server>__<tool>`). The
+    script is read by a small scanner, not a JavaScript parser: when it
+    cannot be read to its end, is over 64 KB, or holds a `/` that could be
+    a division or a regular expression with a quote or brace in between, the
+    span is named plain `exec`. A name is only ever a tool called as
+    `tools.<name>(` in code, never text from a string or a comment.
+  - **Secret files (withholds when in doubt).** A script that names a
+    secret-shaped file in a string, or anywhere in its text outside property
+    accesses, has its output replaced; so does one the scanner could not read
+    to its end or that is over 64 KB. A harmless script can have its output
+    withheld this way; a secret file read should not slip through.
+  - **Subagents (placement approximate, none dropped while the rollout
+    exists).** A subagent spawned inside `exec` goes under the call that was
+    running when it was created and whose script can spawn one, else under
+    any call that was running, else under the last one begun. While a
+    `spawn_agent` call is open its output (or, in `multi_agent_v2`, the
+    `sub_agent_activity` line) names the child exactly, so the child waits
+    for it. If the session ends first, the child is placed when its trace is
+    closed (under an `exec` call as above, else under its spawner's open
+    turn, else under the session), and its rollout is read then, unless the
+    session was stopped. When several `exec` calls run at once nothing says
+    which spawned which: they take their subagents in the order they began,
+    among the subagents Rius has heard of so far, and a younger one heard of
+    first can take the call that began first.
 - Interrupted turns are parsed from their documented shape but were not
   seen in a recorded run.
 - A failed tool call is only marked as an error when it is a non-zero exit
