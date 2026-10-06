@@ -283,7 +283,7 @@ either do nothing useful on a fresh install or flip tracing for a different
 session you happen to have open. Most of the time you want
 `/rius:enable-here` instead, which is persistent and needs no session id.
 
-Any other action prints its usage line and exits 0. Every command passes
+Any other action prints its usage and exits 0. Every command passes
 `--cwd` for you, so `enable-here`, `disable-here` and `status` always see the
 folder you are actually in.
 

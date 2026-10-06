@@ -66,24 +66,53 @@ _NEVER_FIRST_IN_A_SUBAGENT = ("sessionStart", "beforeSubmitPrompt",
                               "sessionEnd", "subagentStart", "subagentStop")
 
 
+def _spawning_conversation(env: Mapping[str, str], sdir: str,
+                           workspace: str, child: str) -> str:
+    """The conversation a subagent with no subagentStart belongs to, "" if
+    none; the Task call it answers is claimed for `child` on the way.
+
+    The session env that sessionStart returned names the conversation. A
+    resumed run (`cursor-agent -p --resume`) fires no sessionStart, so no
+    hook has that env: the conversation is then the one in this workspace
+    with a Task call no subagent has claimed.
+    """
+    named = str(env.get(SESSION_ENV) or "")
+    if not named:
+        found = cursor_export.claim_awaiting_task_call(sdir, workspace, child)
+        return found[0] if found else ""
+    if (state.is_valid_session_id(named)
+            and os.path.exists(cursor_events.spool_path(sdir, named))):
+        cursor_export.claim_oldest_task_call(sdir, named, child)
+        return named
+    return ""
+
+
 def link_headless_subagent(event: str, key: str, env: Mapping[str, str],
-                           sdir: str) -> None:
+                           sdir: str, workspace: str = "") -> None:
     """Hang a subagent that fired no subagentStart under its parent.
 
     `cursor-agent -p` fires no subagentStart: a Task subagent's events
     arrive under the subagent's own conversation id with nothing that names
-    the parent. The session env that sessionStart returned still names it,
-    so a conversation that first shows up while a different one owns the
-    session is that one's subagent.
+    the parent. So a conversation that first shows up while another one is
+    mid-Task is that one's subagent. An empty `workspace` rules out looking
+    for the parent when the env does not name it.
     """
-    parent = str(env.get(SESSION_ENV) or "")
-    if (event in _NEVER_FIRST_IN_A_SUBAGENT or parent == key
-            or not state.is_valid_session_id(parent)
+    if (event in _NEVER_FIRST_IN_A_SUBAGENT
             or os.path.exists(cursor_events.spool_path(sdir, key))
-            or not os.path.exists(cursor_events.spool_path(sdir, parent))
             or cursor_export.root_conversation(sdir, key) != key):
         return
-    cursor_export.link_subagent(sdir, key, parent)
+    parent = _spawning_conversation(env, sdir, workspace, key)
+    if parent:
+        cursor_export.link_subagent(sdir, key, parent)
+
+
+def _claim_quietly(sdir: str, parent: str, call: str, subagent_id: str) -> None:
+    """A claim that cannot be written is no claim: the subagent is still
+    linked to its parent."""
+    try:
+        cursor_export.claim_task_call(sdir, parent, call, subagent_id)
+    except Exception:  # a hook must never fail the agent
+        pass
 
 
 def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
@@ -92,8 +121,11 @@ def _spool(event: str, payload: Dict[str, Any], sdir: str, cfg) -> int:
                          cfg.max_attr_bytes)
     subagent_id = str(payload.get("subagent_id") or "")
     if event == "subagentStart" and state.is_valid_session_id(subagent_id):
-        cursor_export.link_subagent(sdir, subagent_id,
-                                    cursor_events.spool_key(payload))
+        parent = cursor_events.spool_key(payload)
+        call = cursor_events.call_id(payload.get("tool_call_id"))
+        if call:
+            _claim_quietly(sdir, parent, call, subagent_id)
+        cursor_export.link_subagent(sdir, subagent_id, parent)
     if event in cursor_export.TOOL_DONE_EVENTS:
         return cursor_export.tick(sdir, cursor_events.spool_key(payload))
     return 0
@@ -103,6 +135,16 @@ def _closes_open_trace(event: str, conversation_id: str, home: str) -> bool:
     """A folder disabled mid-session still has its trace closed."""
     return event == "sessionEnd" and state.trace_is_open(
         state.load(conversation_id, home))
+
+
+def _parent_search(own, cwd: str, payload: Dict[str, Any]) -> str:
+    """The workspace to look for a subagent's parent in, "" for no search.
+
+    None in a folder that is off: nothing in it is traced unless the env
+    names a parent. None for a conversation whose transcript already exists:
+    it has history, so it is a resumed chat, not a subagent starting.
+    """
+    return cwd if own.enabled and not payload.get("transcript_path") else ""
 
 
 def handle(event: str, payload: Any, env: Mapping[str, str],
@@ -117,14 +159,16 @@ def handle(event: str, payload: Any, env: Mapping[str, str],
     key = cursor_events.spool_key(payload)
     if not state.is_valid_session_id(key):
         return None
-    link_headless_subagent(event, key, env, sdir)
+    cwd = workspace_dir(payload, env)
+    own = config.resolve(key, cwd, env, home)
+    if not own.api_key:
+        return None
+    search_in = _parent_search(own, cwd, payload)
+    link_headless_subagent(event, key, env, sdir, search_in)
     root = cursor_export.root_conversation(sdir, key)
     if not state.is_valid_session_id(root):
         return None
-    cwd = workspace_dir(payload, env)
-    cfg = config.resolve(root, cwd, env, home)
-    if not cfg.api_key:
-        return None
+    cfg = own if root == key else config.resolve(root, cwd, env, home)
     tools_done = 0
     if cfg.enabled:
         tools_done = _spool(event, payload, sdir, cfg)

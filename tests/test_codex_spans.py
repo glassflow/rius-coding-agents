@@ -171,6 +171,129 @@ def test_capture_off_keeps_no_content_in_state_mid_turn(fixtures_dir):
     assert "nonexistent-rius-t3" not in persisted
 
 
+def _until_first_tool_call(fixtures_dir):
+    records, _ = cr.read_from(str(fixtures_dir / FIXTURE), 0)
+    return records, next(i for i, r in enumerate(records) if r.kind == cr.TOOL_CALL)
+
+
+def test_content_turned_off_mid_turn_is_not_sent_when_the_turn_closes(fixtures_dir):
+    """The state keeps where the prompt is, so what it can give back is up to
+    the capture setting at the time: a folder that stopped sending content
+    stops at once, whatever was on when the turn began."""
+    records, first_tool = _until_first_tool_call(fixtures_dir)
+    state = cs.new_state()
+    cs.build(records[:first_tool + 1], state, _ctx(capture=True))
+    closing = cs.finalize_session(state, _ctx(capture=False), END_NS)
+    for s in closing:
+        for key in CONTENT_KEYS:
+            assert key not in s.attributes, (s.name, key)
+    assert [s for s in closing if s.name == "turn"]
+
+
+def test_a_secret_file_read_stays_redacted_when_its_call_cannot_be_read_back(
+        tmp_path):
+    """Whether a call read a secret file is settled when the call is seen,
+    not from the line read again at its output: a rollout that has moved
+    must not turn into an unredacted `.env`."""
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("\n".join(json.dumps(line) for line in [
+        {"timestamp": "2026-10-05T16:14:00.001Z", "type": "event_msg",
+         "payload": {"type": "task_started", "turn_id": "t1"}},
+        {"timestamp": "2026-10-05T16:14:00.002Z", "type": "response_item",
+         "payload": {"type": "function_call", "call_id": "c1",
+                     "name": "exec_command",
+                     "arguments": json.dumps({"cmd": "cat .env"})}}]) + "\n")
+    records, _ = cr.read_from(str(rollout), 0)
+    state, ctx = cs.new_state(), _ctx(capture=True)
+    cs.build(records, state, ctx)
+    rollout.unlink()
+    out = cs.build([cr.Record(cr.TOOL_OUTPUT, 4 * 10**6, {
+        "call_id": "c1", "output": "Output:\nDB_PASSWORD=hunter2\n"})],
+        state, ctx)
+    span = next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
+    assert span.attributes["output.value"] == scrub.SECRET_FILE_MARKER
+    assert "DB_PASSWORD" not in json.dumps(span.attributes)
+
+
+def test_a_call_begun_before_an_upgrade_has_its_output_withheld():
+    """Its state predates the verdict on whether it read a secret file."""
+    state, ctx = cs.new_state(), _ctx(capture=True)
+    cs.build([cr.Record(cr.TURN_START, 1, {"turn_id": "t1"}),
+              cr.Record(cr.TOOL_CALL, 2, {"call_id": "c1", "name": "exec_command",
+                                          "arguments": "{}"})], state, ctx)
+    del state["open_tools"]["c1"]["secret_file"]
+    out = cs.build([cr.Record(cr.TOOL_OUTPUT, 3, {"call_id": "c1",
+                                                  "output": "TOKEN=abc123"})],
+                   state, ctx)
+    span = next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
+    assert span.attributes["output.value"] == cs.OUTPUT_NOT_CHECKED
+
+
+def test_a_call_begun_with_content_off_has_its_output_withheld_once_it_is_on():
+    """Nothing is checked for a secret file while nothing can be sent. The
+    folder's choice can change before the output arrives (`content-on-here`
+    is itself such a call); with no verdict the output is not sent."""
+    state = cs.new_state()
+    cs.build([cr.Record(cr.TURN_START, 1, {"turn_id": "t1"}),
+              cr.Record(cr.TOOL_CALL, 2, {"call_id": "c1", "name": "exec_command",
+                                          "arguments": '{"cmd": "cat .env"}'})],
+             state, _ctx(capture=False))
+    assert "secret_file" not in state["open_tools"]["c1"]
+    out = cs.build([cr.Record(cr.TOOL_OUTPUT, 3, {"call_id": "c1",
+                                                  "output": "TOKEN=abc123"})],
+                   state, _ctx(capture=True))
+    span = next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
+    assert span.attributes["output.value"] == cs.OUTPUT_NOT_CHECKED
+
+
+def test_a_line_that_is_not_where_it_was_is_not_read_as_content(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(json.dumps({
+        "timestamp": "2026-10-05T16:14:00.001Z", "type": "event_msg",
+        "payload": {"type": "user_message", "message": "an unrelated prompt"}})
+        + "\n")
+    record = cr.read_from(str(rollout), 0)[0][0]
+    ctx = _ctx(capture=True)
+    here = cs._hold(ctx, record)
+    assert cs._recall(ctx, here, "text") == "an unrelated prompt"
+    assert cs._recall(ctx, [here[0], here[1], here[2] + 1], "text") == ""
+    assert cs._recall(ctx, [str(tmp_path / "gone"), 0, here[2]], "text") == ""
+
+
+def test_closing_a_trace_with_content_off_reads_no_rollout(fixtures_dir, monkeypatch):
+    """The idle sweep closes a trace under whatever the folder says now, and
+    a stopped session promises that nothing is read from its transcript."""
+    records, first_tool = _until_first_tool_call(fixtures_dir)
+    state = cs.new_state()
+    cs.build(records[:first_tool + 1], state, _ctx(capture=True))
+    assert state["turn"]["text_at"] and state["open_tools"]
+
+    def refuse(path, offset):
+        raise AssertionError("the rollout was read")
+    monkeypatch.setattr(cr, "read_at", refuse)
+    closing = cs.finalize_session(state, _ctx(capture=False), END_NS)
+    assert [s for s in closing if s.name == "turn"]
+
+
+@pytest.mark.parametrize("held", [
+    [], ["/x"], ["/x", 1], ["/x", 1, 2, 3], "abc", 5, [None, 0, 1],
+    [["a"], 0, 1], ["/x", "0", 1], ["/x", None, 1], ["/x", -5, 1],
+    ["/x", 0, "ts"], ["\0", 0, 1], {"a": 1}])
+def test_a_place_that_is_not_one_reads_as_nothing(held):
+    assert cs._recall(_ctx(capture=True), held, "text") == ""
+
+
+def test_a_damaged_place_in_the_state_does_not_stop_the_trace(fixtures_dir):
+    records, first_tool = _until_first_tool_call(fixtures_dir)
+    state = cs.new_state()
+    cs.build(records[:first_tool + 1], state, _ctx(capture=True))
+    state["turn"]["text_at"] = ["/x", None]
+    state["turn"]["reply_at"] = [5]
+    state["open_tools"][next(iter(state["open_tools"]))]["input_at"] = "damaged"
+    closing = cs.finalize_session(state, _ctx(capture=True), END_NS)
+    assert {s.name for s in closing if not s.pending} >= {"turn"}
+
+
 @pytest.mark.parametrize("chunks", [[5], [12, 13], [9, 18, 27, 36], list(range(1, 46))])
 def test_resuming_from_an_offset_builds_the_same_spans(fixtures_dir, chunks):
     whole, _ = _build(fixtures_dir)
@@ -241,23 +364,31 @@ def test_spans_decode_as_otlp(fixtures_dir):
 _AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 
-def _failed_call(name, arguments, output, mcp_error=None):
-    ctx = spans.Ctx("s1", "/x", "", "", "codex", True, 32768)
-    st = cs.new_state()
-    recs = [cr.Record(cr.TURN_START, 1, {"turn_id": "t1"}),
-            cr.Record(cr.TOOL_CALL, 2, {"call_id": "c1", "name": name,
-                                         "arguments": arguments})]
+def _failed_call(tmp_path, name, arguments, output, mcp_error=None):
+    """One call that failed, read from a rollout file the way a hook does:
+    what the state keeps of the call's content is a place in that file."""
+    def line(ms, kind, payload):
+        return json.dumps({"timestamp": "2026-10-05T16:14:00.%03dZ" % ms,
+                           "type": kind, "payload": payload})
+    lines = [line(1, "event_msg", {"type": "task_started", "turn_id": "t1"}),
+             line(2, "response_item", {"type": "function_call", "call_id": "c1",
+                                       "name": name, "arguments": arguments})]
     if mcp_error is not None:
-        recs.append(cr.Record(cr.MCP_RESULT, 3, {"call_id": "c1",
-                                                  "is_error": True,
-                                                  "error": mcp_error}))
-    recs.append(cr.Record(cr.TOOL_OUTPUT, 4, {"call_id": "c1", "output": output}))
-    out = cs.build(recs, st, ctx)
+        lines.append(line(3, "event_msg", {"type": "mcp_tool_call_end",
+                                            "call_id": "c1",
+                                            "result": {"Err": mcp_error}}))
+    lines.append(line(4, "response_item", {"type": "function_call_output",
+                                           "call_id": "c1", "output": output}))
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("\n".join(lines) + "\n")
+    records, _ = cr.read_from(str(rollout), 0)
+    ctx = spans.Ctx("s1", "/x", "", "", "codex", True, 32768)
+    out = cs.build(records, cs.new_state(), ctx)
     return next(s for s in out if s.kind_oi == "TOOL" and not s.pending)
 
 
-def test_a_failed_commands_error_line_is_scrubbed():
-    span = _failed_call("exec_command", '{"cmd": "deploy"}',
+def test_a_failed_commands_error_line_is_scrubbed(tmp_path):
+    span = _failed_call(tmp_path, "exec_command", '{"cmd": "deploy"}',
                         "Process exited with code 1\nOutput:\nerror: bad key %s\n"
                         % _AWS_KEY)
     assert span.status_message == "error: bad key [redacted:aws-key]"
@@ -265,8 +396,8 @@ def test_a_failed_commands_error_line_is_scrubbed():
     assert _AWS_KEY not in json.dumps(span.attributes)
 
 
-def test_an_mcp_error_is_scrubbed():
-    span = _failed_call("mcp__db__query", "{}", "[]",
+def test_an_mcp_error_is_scrubbed(tmp_path):
+    span = _failed_call(tmp_path, "mcp__db__query", "{}", "[]",
                         mcp_error="auth failed token=abcdef123456")
     assert span.status_message == "auth failed token=[redacted:token]"
 
@@ -276,9 +407,13 @@ def test_an_mcp_error_is_scrubbed():
     '{"command": ["bash", "-lc", "cat config/id_rsa"]}',
     '{"path": "/repo/.env.local"}',
 ])
-def test_a_secret_file_read_is_replaced_whole(arguments):
-    span = _failed_call("exec_command", arguments,
+def test_a_secret_file_read_is_replaced_whole(tmp_path, arguments):
+    span = _failed_call(tmp_path, "exec_command", arguments,
                         "Process exited with code 1\nOutput:\nONLY_IN_THE_FILE=1\n")
     assert span.attributes["output.value"] == scrub.SECRET_FILE_MARKER
     assert span.status_message == "exec_command.exit_1"
     assert "ONLY_IN_THE_FILE" not in json.dumps([span.attributes, span.events])
+
+
+def test_a_deeply_nested_mcp_error_output_is_read_as_text():
+    assert cs._mcp_text("[" * 12000 + "]" * 12000) == "[" * 12000 + "]" * 12000

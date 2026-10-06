@@ -9,13 +9,17 @@ fixtures/codex/code_mode/ is the parent and child rollout of a turn that ran
 `ls /nonexistent`, spawned a `default` subagent (which ran `ls`) and waited
 for it. Every prompt, reply, script and output text is stripped.
 """
+import datetime
 import json
 import pathlib
 import shutil
 
+import pytest
+
 from rius_cc import codex_rollout, codex_spans, spans
 
-from tests.test_codex_export import ENV, codex_home, exporter, sent  # noqa: F401
+from tests.test_codex_export import (ENV, _uuid7_at, codex_home,  # noqa: F401
+                                     exporter, sent)
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "codex" / "code_mode"
 PARENT = "01a10cd7-ea95-7313-8660-2f7de512f6ab"
@@ -116,24 +120,101 @@ def test_subagent_stop_alone_is_enough_to_link_the_child(
     assert sub_root.parent_span_id == spans.span_id_for(SPAWN_CALL)
 
 
-def test_the_spawning_call_is_the_last_one_begun_before_the_child_existed():
-    state = codex_spans.new_state()
-    state["tool_starts"] = [[100, "a", "exec"], [200, "b", "exec"],
-                            [300, "c", "exec"]]
-    assert codex_spans.spawning_tool(state, 250) == "b"
-    assert codex_spans.spawning_tool(state, 50) is None
+SPAWN_SCRIPT = ("const r = await tools.multi_agent_v1__spawn_agent({message: 'x'});"
+                "text(r.agent_id);")
+SHELL_SCRIPT = 'text((await tools.exec_command({cmd: "sleep 5"})).output);'
+WAIT_SCRIPT = "await tools.multi_agent_v1__wait_agent({targets: [id]});"
+NO_TOOL_SCRIPT = "text(new Date().toISOString())"
+
+
+def _record(kind, ns, **fields):
+    return codex_rollout.Record(kind, ns, fields)
+
+
+def _ctx(capture=False):
+    return spans.Ctx(session_id=PARENT, cwd="/tmp/proj", git_branch="",
+                     cc_version="", service_name="codex",
+                     capture_content=capture, max_attr_bytes=32768)
+
+
+def _agent_after(calls):
+    """The builder state of an agent that made these exec calls, each as
+    (call id, begun, ended or None while it runs, script)."""
+    events = [(1, codex_rollout.TURN_START, {"turn_id": "t1"})]
+    for call_id, begun, ended, script in calls:
+        events.append((begun, codex_rollout.TOOL_CALL,
+                       {"call_id": call_id, "name": "exec", "arguments": script}))
+        if ended:
+            events.append((ended, codex_rollout.TOOL_OUTPUT,
+                           {"call_id": call_id, "output": "done"}))
+    st = codex_spans.new_state()
+    records = [codex_rollout.Record(kind, ns, fields)
+               for ns, kind, fields in sorted(events, key=lambda e: e[0])]
+    codex_spans.build(records, st, _ctx())
+    return st
+
+
+def _id(call_id):
+    return spans.span_id_for(call_id)
+
+
+def test_the_spawning_call_is_the_exec_running_when_the_child_existed():
+    st = _agent_after([("a", 100, 200, SPAWN_SCRIPT), ("b", 300, 400, SPAWN_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 150) == _id("a")
+    assert codex_spans.spawning_tool(st, 350) == _id("b")
+    assert codex_spans.spawning_tool(st, 50) is None
+
+
+def test_a_child_made_after_every_call_ended_goes_under_the_last_one_begun():
+    """A script that kept running after its output came back (Codex yields
+    a long one and carries on) has no end to go by."""
+    st = _agent_after([("a", 100, 200, SPAWN_SCRIPT), ("b", 300, 400, SPAWN_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+    assert codex_spans.spawning_tool(st, 450) == _id("b")
+
+
+def test_a_call_that_ended_before_the_child_existed_is_passed_over():
+    st = _agent_after([("a", 100, 150, SPAWN_SCRIPT), ("b", 120, None, SPAWN_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 200) == _id("b")
+
+
+def test_a_call_that_runs_other_tools_never_takes_the_subagent():
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT),
+                       ("a", 200, None, SPAWN_SCRIPT),
+                       ("wait", 210, None, WAIT_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+
+
+def test_a_script_that_names_no_tool_may_have_spawned_through_an_alias():
+    st = _agent_after([("a", 100, None, SHELL_SCRIPT), ("b", 200, None, NO_TOOL_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 250) == _id("b")
+
+
+def test_calls_running_together_each_get_a_subagent_in_the_order_they_began():
+    st = _agent_after([("a", 100, None, SPAWN_SCRIPT), ("b", 101, None, SPAWN_SCRIPT)])
+    for created, child in ((150, "c1"), (160, "c2")):
+        st["spawned"][child] = codex_spans.spawning_tool(st, created)
+    assert st["spawned"] == {"c1": _id("a"), "c2": _id("b")}
+
+
+def test_one_call_that_spawns_several_keeps_them_all():
+    st = _agent_after([("a", 100, None, SPAWN_SCRIPT)])
+    for created, child in ((150, "c1"), (160, "c2"), (170, "c3")):
+        st["spawned"][child] = codex_spans.spawning_tool(st, created)
+    assert set(st["spawned"].values()) == {_id("a")}
 
 
 def test_only_an_exec_call_is_placed_by_time():
     """A spawn_agent call's output names its agent exactly; by time, two
     spawns in parallel would both land under the second."""
-    state = codex_spans.new_state()
-    state["tool_starts"] = [[100, "a", "exec"],
-                            [200, "b", codex_spans.SPAWN_TOOL],
-                            [300, "c", "exec_command"]]
-    assert codex_spans.spawning_tool(state, 250) is None
-    assert codex_spans.spawning_tool(state, 350) is None
-    assert codex_spans.spawning_tool(state, 150) == "a"
+    st = codex_spans.new_state()
+    codex_spans.build([
+        _record(codex_rollout.TURN_START, 1, turn_id="t1"),
+        _record(codex_rollout.TOOL_CALL, 100, call_id="a",
+                name=codex_spans.SPAWN_TOOL, arguments="{}"),
+        _record(codex_rollout.TOOL_CALL, 200, call_id="b", name="exec_command",
+                arguments="{}")], st, _ctx())
+    assert codex_spans.spawning_tool(st, 250) is None
 
 
 def test_exec_output_parts_are_read_as_their_text():
@@ -176,9 +257,9 @@ ENV_FILE = ("DATABASE_URL=postgres://admin:S3cr3tPw@db.internal:5432/prod\n"
             "INTERNAL_HOST=db.internal.acme\n")
 
 
-def _exec_output(script, texts):
-    """One `exec` call and its output parts, built into a tool span with
-    content on."""
+def _exec_rows(script, texts, capture=True):
+    """One `exec` call and its output parts, built into the tool span's
+    pending and finished rows."""
     lines = [
         {"timestamp": "2026-10-05T16:14:00.000Z", "type": "session_meta",
          "payload": {"id": PARENT, "cwd": "/tmp/proj",
@@ -198,10 +279,15 @@ def _exec_output(script, texts):
     assert None not in records
     ctx = spans.Ctx(session_id=PARENT, cwd="/tmp/proj", git_branch="",
                     cc_version="", service_name="codex",
-                    capture_content=True, max_attr_bytes=32768)
+                    capture_content=capture, max_attr_bytes=32768)
     out = codex_spans.build(records, codex_spans.new_state(), ctx)
-    tool = [s for s in out if s.name == "exec" and not s.pending][0]
-    return tool.attributes["output.value"]
+    return [s for s in out if s.kind_oi == "TOOL"]
+
+
+def _exec_output(script, texts):
+    """The output of one `exec` call, built into a tool span with content on."""
+    return [s for s in _exec_rows(script, texts)
+            if not s.pending][0].attributes["output.value"]
 
 
 def test_each_exec_output_part_is_its_own_line():
@@ -236,6 +322,295 @@ def test_a_secret_file_read_inside_exec_is_replaced_whole():
 
 def test_a_script_naming_no_secret_file_keeps_its_output():
     value = _exec_output(
-        'const k = obj.key; text(process.env.HOME); text("ls -la")',
+        'const k = obj.name; text(process.env.HOME); text("ls -la")',
         ["Script completed\nOutput:\n", "INTERNAL_HOST=db.internal.acme\n"])
     assert "INTERNAL_HOST=db.internal.acme" in value
+
+
+def _exec_name(script, capture=True):
+    pending, finished = _exec_rows(script, ["Script completed\nOutput:\n"],
+                                   capture)
+    assert pending.pending and not finished.pending
+    assert pending.name == finished.name
+    assert finished.attributes["gen_ai.tool.name"] == "exec"
+    return finished.name
+
+
+def test_an_exec_span_is_named_after_the_tools_its_script_calls():
+    assert _exec_name('const r = await tools.exec_command({cmd: "ls"});'
+                      'text(r.output);') == "exec_command"
+    assert _exec_name("text(await tools.apply_patch(patch))") == "apply_patch"
+    assert _exec_name("await tools.mcp__rius__list_agents({})") \
+        == "mcp__rius__list_agents"
+
+
+def test_an_exec_that_calls_several_tools_lists_them_once_in_order():
+    script = ('await Promise.all([tools.exec_command({cmd: "a"}),'
+              ' tools.exec_command({cmd: "b"}), tools.apply_patch(p)]);')
+    assert _exec_name(script) == "exec_command, apply_patch"
+    many = " ".join("tools.t%d({});" % n for n in range(1, 6))
+    assert _exec_name(many) == "t1, t2, t3 +2"
+
+
+def test_an_exec_that_calls_no_tool_stays_exec():
+    assert _exec_name("text(ALL_TOOLS.filter(x => x.name.length > 3))") == "exec"
+    assert _exec_name("") == "exec"
+
+
+def test_what_a_script_says_in_a_string_never_names_the_span():
+    fake_key = "sk_live_" + "s" * 24
+    assert _exec_name('text("tools.%s");' % fake_key) == "exec"
+    script = ("const note = 'run tools.deploy_prod now';"
+              "await tools.exec_command({cmd: `echo tools.secret_name`});")
+    assert _exec_name(script) == "exec_command"
+
+
+def test_an_exec_span_has_its_name_with_content_off_and_no_content():
+    script = 'const r = await tools.exec_command({cmd: "ls /private"});'
+    assert _exec_name(script, capture=False) == "exec_command"
+    for row in _exec_rows(script, ["Script completed\nOutput:\n"], capture=False):
+        assert "input.value" not in row.attributes
+        assert "ls /private" not in row.name
+
+
+def _stamp(ms):
+    when = datetime.datetime.fromtimestamp(ms // 1000, datetime.timezone.utc)
+    return when.strftime("%Y-%m-%dT%H:%M:%S") + ".%03dZ" % (ms % 1000)
+
+
+def _line(ms, kind, payload):
+    return json.dumps({"timestamp": _stamp(ms), "type": kind, "payload": payload})
+
+
+def _item(ms, payload):
+    return _line(ms, "response_item", payload)
+
+
+def _event(ms, payload):
+    return _line(ms, "event_msg", payload)
+
+
+def _exec_call(ms, call_id, script):
+    return _item(ms, {"type": "custom_tool_call", "call_id": call_id,
+                      "name": "exec", "input": script})
+
+
+def _exec_done(ms, call_id):
+    return _item(ms, {"type": "custom_tool_call_output", "call_id": call_id,
+                      "output": [{"type": "input_text", "text": "done"}]})
+
+
+def _turn(ms, turn_id, *middle):
+    return ([_event(ms, {"type": "task_started", "turn_id": turn_id})]
+            + list(middle)
+            + [_event(ms + 900, {"type": "task_complete", "turn_id": turn_id,
+                                 "last_agent_message": ""})])
+
+
+def _rollout(path, lines):
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+T0 = 1791216846000
+
+
+def _concurrent_rollouts(folder):
+    """A parent that ran three `exec` calls at once: one runs a command, two
+    spawn an agent; and the two children (ids made 20 and 30 ms in)."""
+    folder.mkdir()
+    first, second = _uuid7_at(T0 + 20, "a" * 19), _uuid7_at(T0 + 30, "b" * 19)
+    parent = _rollout(folder / ("rollout-p-%s.jsonl" % PARENT), [
+        _line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
+                                        "cli_version": "0.144.1"})]
+        + _turn(T0, "t1",
+                _exec_call(T0 + 1, "call_shell", SHELL_SCRIPT),
+                _exec_call(T0 + 2, "call_a", SPAWN_SCRIPT),
+                _exec_call(T0 + 3, "call_b", SPAWN_SCRIPT),
+                _exec_done(T0 + 500, "call_a"), _exec_done(T0 + 501, "call_b"),
+                _exec_done(T0 + 502, "call_shell")))
+    children = {}
+    for child in (first, second):
+        children[child] = _rollout(folder / ("rollout-c-%s.jsonl" % child), [
+            _line(T0 + 10, "session_meta", {
+                "id": child, "cwd": "/tmp/proj", "cli_version": "0.144.1",
+                "source": {"subagent": {"thread_spawn": {
+                    "parent_thread_id": PARENT}}}})]
+            + _turn(T0 + 40, "t-" + child[:8]))
+    return parent, children, first, second
+
+
+def test_calls_running_together_each_keep_their_own_subagent(
+        codex_home, tmp_path, sent):
+    """Judged by which call began last, both children would hang under the
+    second spawn; judged by time alone, under the command."""
+    parent, children, first, second = _concurrent_rollouts(tmp_path / "sessions")
+    _run(tmp_path, "UserPromptSubmit", parent)
+    for child in (first, second):
+        _run(tmp_path, "PostToolUse", parent, tool_name="spawn_agent",
+             tool_response=json.dumps({"agent_id": child}))
+    _run(tmp_path, "Stop", parent)
+    latest = _latest(sent)
+    under = {child: latest[spans.span_id_for("subagent:" + child)].parent_span_id
+             for child in (first, second)}
+    assert under == {first: spans.span_id_for("call_a"),
+                     second: spans.span_id_for("call_b")}
+
+
+def test_children_found_together_are_placed_oldest_first(tmp_path):
+    """Both are known by the time the parent is read, the younger's hook
+    first: the call that began first still goes to the older child."""
+    from rius_cc import codex_session
+    parent, children, first, second = _concurrent_rollouts(tmp_path / "sessions")
+    st = codex_session.load({})
+    for child in (second, first):
+        codex_session.note_payload(
+            st, "SubagentStop", {"transcript_path": str(parent), "agent_id": child,
+                                 "agent_type": "default",
+                                 "agent_transcript_path": str(children[child])})
+    codex_session.build(st, _ctx(), str(parent))
+    assert st["spawned"] == {first: spans.span_id_for("call_a"),
+                             second: spans.span_id_for("call_b")}
+
+
+# --- a subagent is never lost to a guess about what a script can do --------
+
+TEMPLATE_SPAWN = (SHELL_SCRIPT + "\ntext(`child: ${(await tools.multi_agent_v1__"
+                  "spawn_agent({message: 'go'})).agent_id}`);")
+COMPUTED_SPAWN = (SHELL_SCRIPT + "\nconst r = await tools['multi_agent_v1__"
+                  "spawn_agent']({message: 'go'});")
+CSV_SPAWN = SHELL_SCRIPT + "\nawait tools.spawn_agents_on_csv({path: 'jobs.csv'});"
+
+
+@pytest.mark.parametrize("script", [TEMPLATE_SPAWN, COMPUTED_SPAWN, CSV_SPAWN])
+def test_a_spawn_the_scanner_does_not_see_still_counts_as_one(script):
+    """What a script may do is judged on its whole text: with another tool
+    named outside the template, the names found alone said "no spawn" for
+    every call, and the subagent and its whole subtree were dropped."""
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT), ("a", 200, None, script)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+
+
+def test_a_subagent_always_has_a_parent_when_an_exec_had_begun():
+    """Nothing says a script spawns (it is built at run time), but the child
+    is there: the running call, else the last one begun."""
+    st = _agent_after([("a", 100, None, SHELL_SCRIPT), ("b", 120, 140, SHELL_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 150) == _id("a")
+    done = _agent_after([("a", 100, 120, SHELL_SCRIPT), ("b", 130, 140, SHELL_SCRIPT)])
+    assert codex_spans.spawning_tool(done, 150) == _id("b")
+    assert codex_spans.spawning_tool(done, 50) is None
+
+
+def test_calls_that_may_spawn_come_before_calls_that_cannot_when_all_run():
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT),
+                       ("a", 200, None, TEMPLATE_SPAWN)])
+    assert codex_spans.spawning_tool(st, 250) == _id("a")
+
+
+def _with_open_spawn(calls, spawn_name="collaboration__spawn_agent"):
+    st = _agent_after(calls)
+    codex_spans.build([_record(codex_rollout.TOOL_CALL, 300, call_id="direct",
+                               name=spawn_name, arguments="{}")], st, _ctx())
+    return st
+
+
+@pytest.mark.parametrize("name", ["collaboration__spawn_agent",
+                                  "multi_agent_v1__spawn_agent", "spawn_agent"])
+def test_no_guess_is_made_while_a_spawn_call_that_will_name_its_agent_is_open(name):
+    """The call's output, or multi_agent_v2's sub_agent_activity beside it,
+    names the child exactly; a guess made before it arrives is never
+    corrected, because the child's root keeps the parent it was built with."""
+    st = _with_open_spawn([("a", 100, None, NO_TOOL_SCRIPT)], name)
+    assert codex_spans.spawning_tool(st, 350) is None
+    codex_spans.build([_record(codex_rollout.TOOL_OUTPUT, 400, call_id="direct",
+                               output="{}")], st, _ctx())
+    assert codex_spans.spawning_tool(st, 350) == _id("a")
+
+
+def test_an_open_exec_call_does_not_make_the_spawner_wait():
+    st = _agent_after([("a", 100, None, SPAWN_SCRIPT)])
+    assert codex_spans.spawning_tool(st, 350) == _id("a")
+
+
+def _v2_rollouts(folder, activity_line):
+    """A parent whose `exec` call (no tool named) is still running when it
+    makes a direct v2 spawn call; the child exists from T0 + 30."""
+    folder.mkdir()
+    child = _uuid7_at(T0 + 30, "c" * 19)
+    spawn = _item(T0 + 10, {
+        "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+        "call_id": "call_direct", "arguments": "{}"})
+    started = _event(T0 + 60, {
+        "type": "sub_agent_activity", "event_id": "call_direct",
+        "agent_thread_id": child, "kind": "started"})
+    done = _item(T0 + 70, {"type": "function_call_output", "call_id": "call_direct",
+                           "output": '{"task_name":"/root/sub"}'})
+    head = [_line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
+                                             "cli_version": "0.144.1"}),
+            _event(T0, {"type": "task_started", "turn_id": "t1"}),
+            _exec_call(T0 + 1, "call_exec", NO_TOOL_SCRIPT), spawn]
+    tail = [started, done, _exec_done(T0 + 500, "call_exec"),
+            _event(T0 + 900, {"type": "task_complete", "turn_id": "t1",
+                              "last_agent_message": ""})]
+    path = folder / ("rollout-p-%s.jsonl" % PARENT)
+    _rollout(path, head)
+    child_path = _rollout(folder / ("rollout-c-%s.jsonl" % child), [
+        _line(T0 + 31, "session_meta", {
+            "id": child, "cwd": "/tmp/proj", "cli_version": "0.144.1",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": PARENT}}}})]
+        + _turn(T0 + 40, "t-child"))
+    return path, child_path, child, head, tail
+
+
+def test_a_v2_child_read_before_its_activity_line_is_not_put_under_the_exec(
+        codex_home, tmp_path, sent):
+    parent, child_path, child, head, tail = _v2_rollouts(tmp_path / "sessions", None)
+    _run(tmp_path, "UserPromptSubmit", parent)
+    _run(tmp_path, "SubagentStop", parent, agent_id=child, agent_type="default",
+         agent_transcript_path=str(child_path))
+    assert _latest(sent).get(spans.span_id_for("subagent:" + child)) is None
+    _rollout(parent, head + tail)
+    _run(tmp_path, "Stop", parent)
+    root = _latest(sent)[spans.span_id_for("subagent:" + child)]
+    assert root.parent_span_id == spans.span_id_for("call_direct")
+
+
+def test_a_spawn_that_hides_its_name_still_gets_its_subagent_placed(
+        codex_home, tmp_path, sent):
+    """The reviewer's repro: a template literal spawning next to a tool
+    called outside it."""
+    folder = tmp_path / "sessions"
+    folder.mkdir()
+    child = _uuid7_at(T0 + 20, "d" * 19)
+    parent = _rollout(folder / ("rollout-p-%s.jsonl" % PARENT), [
+        _line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
+                                        "cli_version": "0.144.1"})]
+        + _turn(T0, "t1", _exec_call(T0 + 1, "call_exec", TEMPLATE_SPAWN),
+                _exec_done(T0 + 500, "call_exec")))
+    child_path = _rollout(folder / ("rollout-c-%s.jsonl" % child), [
+        _line(T0 + 10, "session_meta", {
+            "id": child, "cwd": "/tmp/proj", "cli_version": "0.144.1",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": PARENT}}}})]
+        + _turn(T0 + 40, "t-child"))
+    _run(tmp_path, "SubagentStop", parent, agent_id=child, agent_type="default",
+         agent_transcript_path=str(child_path))
+    _run(tmp_path, "Stop", parent)
+    root = _latest(sent)[spans.span_id_for("subagent:" + child)]
+    assert root.parent_span_id == spans.span_id_for("call_exec")
+
+
+def test_overlapping_spawns_are_placed_in_the_order_their_hooks_arrive(tmp_path):
+    """Known approximation. The children are told apart by when they were
+    made, but only among those whose hook has been seen: if the younger
+    child's hook comes first it takes the call that began first."""
+    from rius_cc import codex_session
+    parent, children, first, second = _concurrent_rollouts(tmp_path / "sessions")
+    st = codex_session.load({})
+    for child in (second, first):
+        codex_session.note_payload(
+            st, "SubagentStop", {"transcript_path": str(parent), "agent_id": child,
+                                 "agent_type": "default",
+                                 "agent_transcript_path": str(children[child])})
+        codex_session.build(st, _ctx(), str(parent))
+    assert st["spawned"][second] == spans.span_id_for("call_a")
+    assert st["spawned"][first] == spans.span_id_for("call_b")

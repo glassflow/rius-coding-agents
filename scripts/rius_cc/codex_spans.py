@@ -15,7 +15,9 @@ which is what argus-core pricing expects, so it is sent as given with
 `cached_input_tokens` as the cache-read subset. Reasoning tokens are part of
 `output_tokens` and are only reported as their own split.
 
-Everything in `state` is plain JSON, persisted between hook invocations.
+Everything in `state` is plain JSON, persisted between hook invocations, and
+holds no content: a prompt, a reply or a tool's input is read again from the
+rollout when the span it belongs to is finished (see `_hold`).
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
-from . import scrub
+from . import codex_script, scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
@@ -36,18 +38,46 @@ DEFAULT_ROOT_NAME = "codex session"
 _EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
+# In place of the output of a call that was not checked for a secret file.
+OUTPUT_NOT_CHECKED = "[redacted:not-checked]"
+
 SPAWN_TOOL = "multi_agent_v1__spawn_agent"
+# However a version namespaces it: a script calls `tools.<namespace>__spawn_agent`.
+SPAWN_TOOL_SUFFIX = "spawn_agent"
+SPAWN_WORD = "spawn"
 # Code mode's one tool: runs a script that calls the others.
 EXEC_TOOL = "exec"
-# How many tool starts an agent remembers, to find the call that spawned a
+# How many exec calls an agent remembers, to find the one that spawned a
 # subagent (spawning_tool).
-_TOOL_STARTS_KEPT = 256
+_EXECS_KEPT = 256
 
 
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
             "session": {}, "model": "", "turn": None, "open_tools": {},
-            "spawned": {}, "tool_starts": []}
+            "spawned": {}, "execs": []}
+
+
+def upgrade_state(state: dict) -> None:
+    """Bring a state saved by 0.6.0 up to this builder's. It kept the text
+    of the open turn and of open tools in the state file, and the exec calls
+    in `tool_starts`; none of that is left behind, so the plaintext does not
+    outlive the upgrade and a subagent spawned by a call that began before it
+    still finds that call."""
+    open_ids = {tool["span_id"] for tool in state["open_tools"].values()}
+    execs = state.setdefault("execs", [])
+    for start_ns, span_id, name in state.pop("tool_starts", None) or []:
+        if name == EXEC_TOOL:
+            # How long a finished call ran is not known: it is not running.
+            execs.append({"span_id": span_id, "start_ns": start_ns,
+                                   "end_ns": 0 if span_id in open_ids else start_ns,
+                                   "may_spawn": True})
+    for key in ("text", "reply"):
+        (state.get("turn") or {}).pop(key, None)
+    for tool in state["open_tools"].values():
+        tool.pop("input_json", None)
+        if tool.pop("mcp_error", None) is not None:
+            tool["mcp_failed"] = True
 
 
 def new_subagent_state(agent_id: str, agent_type: str,
@@ -101,9 +131,30 @@ def _finished(ctx: Ctx, span_id: str, parent: Optional[str], name: str,
                 pending=False, events=events)
 
 
-def _kept(ctx: Ctx, text: str) -> str:
-    """Content that may wait in the state file: none with capture off."""
-    return text if ctx.capture_content else ""
+def _hold(ctx: Ctx, rec) -> Optional[list]:
+    """Where `rec`'s content can be read again, for when a span is finished.
+    That, not the content, is what the state keeps: it is saved in plaintext
+    on every hook event, so it never holds a prompt, a reply or a tool's
+    input."""
+    if not ctx.capture_content or not rec.path or rec.offset < 0:
+        return None
+    return [rec.path, rec.offset, rec.timestamp_ns]
+
+
+def _recall(ctx: Ctx, held: Optional[list], field: str) -> str:
+    """What `_hold` pointed at, or nothing: with capture off the rollout is
+    not read at all, and a line that is no longer there, or a place that is
+    not one, gives nothing either."""
+    if not held or not ctx.capture_content:
+        return ""
+    try:
+        path, offset, timestamp_ns = held
+        rec = cr.read_at(path, offset)
+    except (TypeError, ValueError):
+        return ""
+    if rec is None or rec.timestamp_ns != timestamp_ns:
+        return ""
+    return rec.get(field) or ""
 
 
 def uuid7_ms(value: str) -> Optional[int]:
@@ -138,8 +189,8 @@ def _on_turn_start(rec, state, ctx, out):
         out += _close_turn(state, ctx, rec.timestamp_ns, None)
     turn_id = rec.get("turn_id")
     state["turn"] = {"turn_id": turn_id, "span_id": span_id_for("turn:" + turn_id),
-                     "start_ns": rec.timestamp_ns, "text": "", "reply": "",
-                     "llm_index": 0, "llm_start_ns": rec.timestamp_ns}
+                     "start_ns": rec.timestamp_ns, "text_at": None,
+                     "reply_at": [], "llm_index": 0, "llm_start_ns": rec.timestamp_ns}
     out.append(_pending(ctx, state["turn"]["span_id"],
                         _root_span_id(state, ctx), "turn", "CHAIN",
                         rec.timestamp_ns, {}))
@@ -147,13 +198,14 @@ def _on_turn_start(rec, state, ctx, out):
 
 def _on_user_message(rec, state, ctx, out):
     turn = state["turn"]
-    turn["text"] = _kept(ctx, rec.get("text"))
+    turn["text_at"] = _hold(ctx, rec)
     turn["llm_start_ns"] = rec.timestamp_ns
 
 
 def _on_agent_message(rec, state, ctx, out):
-    turn = state["turn"]
-    turn["reply"] += _kept(ctx, rec.get("text"))
+    held = _hold(ctx, rec)
+    if held:
+        state["turn"].setdefault("reply_at", []).append(held)
 
 
 def _usage_attrs(ctx: Ctx, model: str, rec) -> Dict[str, Any]:
@@ -181,38 +233,58 @@ def _repeats_last_call(rec, state: dict) -> bool:
     return False
 
 
+def _reply(ctx: Ctx, turn: dict) -> str:
+    return "".join(_recall(ctx, held, "text")
+                   for held in turn.get("reply_at") or [])
+
+
 def _on_usage(rec, state, ctx, out):
     if _repeats_last_call(rec, state):
         return
     turn = state["turn"]
     attrs = _usage_attrs(ctx, state["model"], rec)
-    _content_attr(ctx, attrs, "output.value", turn["reply"])
+    _content_attr(ctx, attrs, "output.value", _reply(ctx, turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
                          turn["llm_start_ns"], rec.timestamp_ns, attrs))
     turn["llm_index"] += 1
     turn["llm_start_ns"] = rec.timestamp_ns
-    turn["reply"] = ""
+    turn["reply_at"] = []
 
 
 def _on_tool_call(rec, state, ctx, out):
     call_id = rec.get("call_id")
+    name = rec.get("name")
+    script = rec.get("arguments") if name == EXEC_TOOL else ""
+    wrapped = codex_script.called_tools(script)
     tool = {"span_id": span_id_for(call_id), "parent_span_id": _llm_span_id(state["turn"]),
-            "start_ns": rec.timestamp_ns, "tool_name": rec.get("name"),
-            "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
+            "start_ns": rec.timestamp_ns, "tool_name": name,
+            "span_name": _span_name(name, wrapped),
+            "input_at": _hold(ctx, rec),
+            "mcp_failed": False, "error_at": None}
+    if ctx.capture_content:
+        tool["secret_file"] = reads_secret_file(rec.get("arguments"))
     state["open_tools"][call_id] = tool
-    starts = state.setdefault("tool_starts", [])
-    starts.append([rec.timestamp_ns, tool["span_id"], tool["tool_name"]])
-    del starts[:-_TOOL_STARTS_KEPT]
+    if name == EXEC_TOOL:
+        _remember_exec(state, tool, _may_spawn(script, wrapped))
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
-                        tool["tool_name"], "TOOL", rec.timestamp_ns,
+                        _name(tool), "TOOL", rec.timestamp_ns,
                         {"gen_ai.tool.name": tool["tool_name"]}))
 
 
 def _on_mcp_result(rec, state, ctx, out):
     tool = state["open_tools"].get(rec.get("call_id"))
     if tool is not None and rec.get("is_error"):
-        tool["mcp_error"] = _kept(ctx, rec.get("error"))
+        tool["mcp_failed"] = True
+        tool["error_at"] = _hold(ctx, rec)
+
+
+def _on_subagent_started(rec, state, ctx, out):
+    """multi_agent_v2: the call that started a thread is named by the event,
+    not by the call's output."""
+    tool = state["open_tools"].get(rec.get("call_id"))
+    if tool is not None and rec.get("agent_id"):
+        state.setdefault("spawned", {})[rec.get("agent_id")] = tool["span_id"]
 
 
 def _command_output(output: str) -> str:
@@ -224,7 +296,7 @@ def _mcp_text(body: str) -> str:
     """The text parts of an MCP result Codex wrote out as JSON content."""
     try:
         parts = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
         return body
     if not isinstance(parts, list):
         return body
@@ -242,16 +314,17 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
     match = _EXIT_CODE.search(output.partition(_OUTPUT_MARKER)[0])
     if match and match.group(1) != "0":
         return "%s.exit_%s" % (tool["tool_name"], match.group(1))
-    if tool.get("mcp_error") is not None:
+    if tool.get("mcp_failed"):
         return tool["tool_name"] + ".tool_error"
     return None
 
 
-def _error_detail(tool: dict, output: str) -> str:
-    if tool["mcp_error"]:
-        return tool["mcp_error"]
+def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
+    error = _recall(ctx, tool.get("error_at"), "error")
+    if error:
+        return error
     body = _command_output(output)
-    return _mcp_text(body) if tool["mcp_error"] is not None else body
+    return _mcp_text(body) if tool.get("mcp_failed") else body
 
 
 def error_line(text: str) -> str:
@@ -265,12 +338,14 @@ def reads_secret_file(arguments: str) -> bool:
     """scrub.reads_secret_file for Codex's shell tools too: exec_command
     takes `cmd`, the older shell tool an argv list as `command`, and code
     mode's `exec` a script."""
-    if scrub.reads_secret_file(arguments):
-        return True
     try:
+        if scrub.reads_secret_file(arguments):
+            return True
         args = json.loads(arguments or "{}")
     except ValueError:
         return _script_reads_secret_file(arguments)
+    except RecursionError:
+        return True     # nested too deep to read: withhold
     if not isinstance(args, dict):
         return False
     command = args.get("cmd")
@@ -280,21 +355,54 @@ def reads_secret_file(arguments: str) -> bool:
         json.dumps({"command": command}))
 
 
-# A string literal in a script: "...", '...' or `...`.
-_SCRIPT_STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"|\'((?:[^\'\\\n]|\\.)*)\''
-                            r'|`((?:[^`\\]|\\.)*)`')
+# What also ends a word of a script: the punctuation of its objects and arrays.
+_SCRIPT_PUNCTUATION = re.compile(r"[,{}\[\]:]")
 
 
 def _script_reads_secret_file(script: str) -> bool:
     """Code mode's `exec` runs a script, such as
-    `tools.exec_command({cmd: "cat .env"})`, not JSON arguments: any of its
-    string literals naming a secret-shaped file, as a path or a word of a
-    command, counts as reading it."""
-    for match in _SCRIPT_STRING.finditer(script or ""):
-        literal = next(group for group in match.groups() if group is not None)
-        if scrub.reads_secret_file(json.dumps({"command": literal})):
-            return True
-    return False
+    `tools.exec_command({cmd: "cat .env"})`, not JSON arguments. It reads a
+    secret file when a secret-shaped name (`.env*`, `*.pem`, `*.key`, ...)
+    stands anywhere in its text, as a path or as a word of a command: this
+    does not rest on the scanner, which is only a best effort, so it also
+    counts a property (`obj.key`) or a comment that names one. The literals the
+    scanner found are checked too. A script too long to read is taken to."""
+    if len(script) > codex_script.MAX_CHARS:
+        return True
+    literals = codex_script.string_literals(script)
+    return any(scrub.reads_secret_file(json.dumps({"command": text}))
+               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals)))
+
+
+_EXEC_NAME_TOOLS = 3
+
+
+def _span_name(tool_name: str, wrapped: List[str]) -> str:
+    """Every code-mode call is `exec`, so it is named after the tools its
+    script calls instead; `exec` stays for one that calls none."""
+    if not wrapped:
+        return tool_name
+    extra = len(wrapped) - _EXEC_NAME_TOOLS
+    names = ", ".join(wrapped[:_EXEC_NAME_TOOLS])
+    return scrub.scrub(names) + (" +%d" % extra if extra > 0 else "")
+
+
+def _name(tool: dict) -> str:
+    return tool.get("span_name") or tool["tool_name"]
+
+
+def _shown(tool: dict, output: str) -> str:
+    """A call's output, or what stands for it when the call read a secret
+    file, or when it is not known whether it did (it began with content off,
+    or before an upgrade): then nothing of it may be sent."""
+    verdict = tool.get("secret_file")
+    if verdict is None:
+        return OUTPUT_NOT_CHECKED
+    return scrub.SECRET_FILE_MARKER if verdict else output
+
+
+def _arguments(ctx: Ctx, tool: dict) -> str:
+    return _recall(ctx, tool.get("input_at"), "arguments")
 
 
 def _on_tool_output(rec, state, ctx, out):
@@ -303,54 +411,109 @@ def _on_tool_output(rec, state, ctx, out):
         state["turn"]["llm_start_ns"] = rec.timestamp_ns
     if tool is None:
         return      # called before this session was traced
+    _end_exec(state, tool, rec.timestamp_ns)
     output = rec.get("output")
     if tool["tool_name"] == SPAWN_TOOL:
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
+    arguments = _arguments(ctx, tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
-    _content_attr(ctx, attrs, "input.value", tool["input_json"], json_text=True)
-    secret_file = reads_secret_file(tool["input_json"])
-    _content_attr(ctx, attrs, "output.value",
-                  scrub.SECRET_FILE_MARKER if secret_file else output,
-                  json_text=True)
+    _content_attr(ctx, attrs, "input.value", arguments, json_text=True)
+    withheld = tool.get("secret_file") is not False
+    _content_attr(ctx, attrs, "output.value", _shown(tool, output), json_text=True)
     error_type = tool_error(tool, output)
     status_message, events = "", []
     if error_type:
         attrs["error.type"] = error_type
         if not ctx.capture_content:
             status_message = TOOL_ERROR_WITHHELD
-        elif secret_file:
+        elif withheld:
             status_message = error_type
         else:
-            status_message = error_line(_error_detail(tool, output)) or error_type
+            status_message = error_line(_error_detail(ctx, tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
             "exception.type": error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                         tool["tool_name"], "TOOL", tool["start_ns"],
+                         _name(tool), "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
                          "ERROR" if error_type else "OK", status_message, events))
 
 
-def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
+def _may_spawn(script: str, wrapped: List[str]) -> bool:
+    """Whether an `exec` script could spawn an agent. Decided on the whole
+    text, not on the names found in it: a spawn inside a template literal or
+    called as `tools["..."]` is not among them. One that names no tool at all
+    (it calls them through an alias, say) might have."""
+    return not wrapped or SPAWN_WORD in script.lower()
+
+
+def _remember_exec(state: dict, tool: dict, may_spawn: bool) -> None:
+    execs = state.setdefault("execs", [])
+    execs.append({"span_id": tool["span_id"], "start_ns": tool["start_ns"],
+                  "end_ns": 0, "may_spawn": may_spawn})
+    del execs[:-_EXECS_KEPT]
+
+
+def _end_exec(state: dict, tool: dict, end_ns: int) -> None:
+    if tool["tool_name"] != EXEC_TOOL:
+        return
+    for call in state.get("execs") or []:
+        if call["span_id"] == tool["span_id"]:
+            call["end_ns"] = end_ns
+
+
+def _awaits_spawn_output(state: dict) -> bool:
+    """A spawn_agent call is open: what it says, or what is written beside
+    it (multi_agent_v2's sub_agent_activity), names its agent exactly, and a
+    guess made now would never be corrected."""
+    return any(tool["tool_name"].endswith(SPAWN_TOOL_SUFFIX)
+               for tool in state["open_tools"].values())
+
+
+def spawning_tool(state: dict, created_ns: int,
+                  closing: bool = False) -> Optional[str]:
     """The span id of the `exec` call that spawned a subagent created at
-    `created_ns`: the agent's last call begun by then, when that is an
-    `exec`. In code mode (`code_mode_host`, on by default) a spawn runs
-    inside an `exec` call whose output need not name the agent, so the time
-    is all there is. Any other call is left to spawn_agent's output, which
-    names the agent exactly: two spawns in parallel would both be placed
-    under the second by time."""
-    begun = [start for start in state.get("tool_starts") or []
-             if start[0] <= created_ns]
-    last = begun[-1] if begun else ()
-    return last[1] if len(last) > 2 and last[2] == EXEC_TOOL else None
+    `created_ns`, or None while a spawn_agent call is still open (unless the
+    trace is `closing`: nothing more will say). In code
+    mode (`code_mode_host`, on by default) a spawn runs inside an `exec` call
+    whose output need not name the agent, so what is left to go by is when
+    the agent was created and what the scripts say. The calls that were
+    running then and may spawn come first, then any that was running, then
+    the last begun, so a subagent always has a parent; of those, the
+    earliest that has spawned nothing yet: calls running at the same time
+    each get their own subagent, in the order they began, however late the
+    others began."""
+    if not closing and _awaits_spawn_output(state):
+        return None
+    begun = [call for call in state.get("execs") or []
+             if call["start_ns"] <= created_ns]
+    running = [call for call in begun
+               if not call["end_ns"] or call["end_ns"] >= created_ns]
+    candidates = (_spawners(running) or running or _spawners(begun)[-1:]
+                  or begun[-1:])
+    held = set((state.get("spawned") or {}).values())
+    free = [call for call in candidates if call["span_id"] not in held]
+    chosen = (free or candidates)[:1]
+    return chosen[0]["span_id"] if chosen else None
+
+
+def adopting_span(state: dict, ctx: Ctx) -> str:
+    """The span a subagent that no call can be found for hangs under when
+    the trace is closing: its spawner's open turn, else its root."""
+    turn = state.get("turn")
+    return turn["span_id"] if turn else _root_span_id(state, ctx)
+
+
+def _spawners(calls: List[dict]) -> List[dict]:
+    return [call for call in calls if call["may_spawn"]]
 
 
 def _note_spawned(state: dict, tool: dict, output: str) -> None:
     """spawn_agent answers with the new agent's id, which names its rollout."""
     try:
         agent_id = json.loads(output).get("agent_id")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return
     if isinstance(agent_id, str) and agent_id:
         state.setdefault("spawned", {})[agent_id] = tool["span_id"]
@@ -361,12 +524,13 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     row: the backend counts a trace only when every span has one."""
     out = []
     for tool in state["open_tools"].values():
+        _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", tool["input_json"],
+        _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
                       json_text=True)
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                             tool["tool_name"], "TOOL", tool["start_ns"],
+                             _name(tool), "TOOL", tool["start_ns"],
                              now_ns, attrs, status_code="UNSET"))
     state["open_tools"] = {}
     return out
@@ -385,7 +549,8 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
         if rec.get("aborted"):
             attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
         _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
-    _content_attr(ctx, attrs, "input.value", turn["text"])
+    _content_attr(ctx, attrs, "input.value",
+                  _recall(ctx, turn.get("text_at"), "text"))
     out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
                          "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
     state["turn"] = None
@@ -405,6 +570,7 @@ _HANDLERS = {
     cr.USAGE: _on_usage,
     cr.TOOL_CALL: _on_tool_call,
     cr.MCP_RESULT: _on_mcp_result,
+    cr.SUBAGENT_STARTED: _on_subagent_started,
     cr.TOOL_OUTPUT: _on_tool_output,
     cr.TURN_END: _on_turn_end,
 }

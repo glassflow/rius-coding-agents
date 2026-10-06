@@ -23,16 +23,20 @@ USAGE = "usage"
 TOOL_CALL = "tool_call"
 TOOL_OUTPUT = "tool_output"
 MCP_RESULT = "mcp_result"
+SUBAGENT_STARTED = "subagent_started"
 
 
 class Record:
-    __slots__ = ("kind", "timestamp_ns", "offset", "fields")
+    """One rollout line. Read from a file, it also knows where: `path` and
+    `offset`, the start of its line."""
+    __slots__ = ("kind", "timestamp_ns", "offset", "path", "fields")
 
     def __init__(self, kind: str, timestamp_ns: int, fields: Dict[str, Any]) -> None:
         self.kind = kind
         self.timestamp_ns = timestamp_ns
         self.fields = fields
         self.offset = -1
+        self.path = ""
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.fields.get(key, default)
@@ -110,6 +114,15 @@ def _mcp_result(p: Dict[str, Any]) -> Dict[str, Any]:
             "error": _text(err)}
 
 
+def _subagent_started(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """multi_agent_v2 says which call started which thread; the call's own
+    output only names the new agent by path."""
+    if p.get("kind") != "started":
+        return None
+    return {"call_id": _text(p.get("event_id")),
+            "agent_id": _text(p.get("agent_thread_id"))}
+
+
 _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]] = {
     "task_started": (TURN_START, lambda p: {"turn_id": _text(p.get("turn_id"))}),
     "task_complete": (TURN_END, _turn_end),
@@ -118,6 +131,7 @@ _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]
     "agent_message": (AGENT_MESSAGE, lambda p: {"text": _text(p.get("message"))}),
     "token_count": (USAGE, _usage),
     "mcp_tool_call_end": (MCP_RESULT, _mcp_result),
+    "sub_agent_activity": (SUBAGENT_STARTED, _subagent_started),
 }
 
 
@@ -168,7 +182,7 @@ def _fields_for(line_type: str, payload: Dict[str, Any]):
     if line_type == "turn_context":
         return TURN_CONTEXT, _turn_context(payload)
     table = _EVENTS if line_type == "event_msg" else _ITEMS if line_type == "response_item" else {}
-    kind, parse = table.get(payload.get("type"), (None, None))
+    kind, parse = table.get(_text(payload.get("type")), (None, None))
     if kind is None:
         return None, None
     return kind, parse(payload)
@@ -178,7 +192,7 @@ def parse_line(line: str) -> Optional[Record]:
     """A Record, or None for a line that is not one we use or cannot read."""
     try:
         raw = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(raw, dict) or not isinstance(raw.get("payload"), dict):
         return None
@@ -231,5 +245,17 @@ def read_from(path: str, offset: int) -> Tuple[List[Record], int]:
         start = nl + 1
         if record is not None:
             record.offset = line_offset
+            record.path = path
             records.append(record)
     return records, offset + start
+
+
+def read_at(path: str, offset: int) -> Optional[Record]:
+    """The record whose line starts at `offset`, or None."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            line = fh.readline()
+    except OSError:
+        return None
+    return parse_line(line.decode("utf-8", errors="replace"))

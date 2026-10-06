@@ -29,7 +29,8 @@ cursor session                AGENT  sessionStart .. sessionEnd
   one turn, from its first event to its `sessionEnd`, and a Task subagent
   hangs under its Task call. That call gets no end hook either, so it closes
   with the run and carries `cursor.tool.closed_at_session_end`. A resumed
-  chat (`--resume`) adds turns to the same trace.
+  chat (`--resume`) adds turns to the same trace, and a subagent started in
+  a resumed run hangs under its Task call as in the first run.
 - Spans carry `service.name=cursor`, plus `cursor.version`, `cursor.cwd` and
   the composer mode.
 
@@ -43,10 +44,24 @@ Other gaps:
 - Times are when each hook fired, not when the model call started.
 - Cloud and background agents fire no session hooks.
 - Tab completions are not traced.
-- `cursor-agent -p --resume` fires no `sessionStart`, so a Task subagent
-  started in a resumed run cannot be linked to the chat: its Task call
-  closes with the run and has nothing under it, and the subagent's own
-  events are not sent.
+- `cursor-agent -p --resume` fires no `sessionStart`, so the plugin has to
+  guess which chat a Task subagent belongs to. It looks for a chat in the
+  same folder (matched on the hook's `workspace_roots`) with a Task call that
+  began in the last 2 minutes and that no other subagent has claimed. A call
+  is claimed once, atomically, so two subagents never end up on the same
+  call. It is still a guess, with these limits:
+  - Only the newest 20 spools are searched, and only the last 256 KB of
+    each. A chat that wrote more than that after its Task call is not found,
+    and its subagent stays unlinked.
+  - A new chat in that folder whose first hook is neither `sessionStart` nor
+    `beforeSubmitPrompt`, and that has no transcript yet, can be taken for
+    the subagent of a waiting Task call. A chat that already has a transcript,
+    such as `--resume` of an earlier chat, never is, and neither is a
+    subagent that Cursor itself resumes.
+  - If two chats in one folder have a waiting Task call, the one active last
+    gets the subagent.
+  - The search runs only in a folder where tracing is on, and a Task call
+    that has no `tool_use_id` cannot be claimed.
 
 ## What gets sent
 

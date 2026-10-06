@@ -128,7 +128,8 @@ def shell_exit_code(tool_output: Any) -> Optional[int]:
     if isinstance(tool_output, str):
         try:
             tool_output = json.loads(tool_output)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # A string of 12000 "[" is not JSON Python can parse.
             return None
     if not isinstance(tool_output, dict):
         return None
@@ -168,6 +169,10 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
             record[key] = payload[key]
     if "cwd" not in record and _cwd(payload):
         record["cwd"] = _cwd(payload)
+    if _cwd(payload):
+        # The workspace root, which a tool's own cwd can differ from: what a
+        # subagent that names no parent is matched to its parent by.
+        record["workspace"] = _cwd(payload)
     subagent_type = task_subagent_type(payload)
     if subagent_type and "subagent_type" not in record:
         # A type name such as "explore", not content: it names the span of
@@ -223,12 +228,23 @@ def record(payload: Any, spool_dir: str, capture_content: bool,
     return path
 
 
-def read_spool(path: str) -> List[Dict[str, Any]]:
-    """Every whole line of one spool. A torn last line (a hook killed
-    mid-write) or a corrupt one is skipped."""
+def _read_lines(path: str, tail_bytes: int) -> List[str]:
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        start = max(0, size - tail_bytes) if tail_bytes else 0
+        fh.seek(start)
+        data = fh.read()
+    if start:
+        # The cut usually lands inside a line: drop that partial one.
+        data = data.partition(b"\n")[2]
+    return data.decode("utf-8").split("\n")
+
+
+def read_spool(path: str, tail_bytes: int = 0) -> List[Dict[str, Any]]:
+    """Every whole line of one spool, or of its last `tail_bytes` bytes. A
+    torn last line (a hook killed mid-write) or a corrupt one is skipped."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().split("\n")
+        lines = _read_lines(path, tail_bytes)
     except (OSError, UnicodeDecodeError):
         return []
     out = []
@@ -266,26 +282,39 @@ def read_conversation(spool_dir: str, conversation_id: str) -> List[Dict[str, An
     return _without_echoes(events)
 
 
-def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
-    """Conversations whose `.parent` sidecar names this one: subagents
-    linked without a subagentStart (cursor_hook.link_headless_subagent)."""
+def call_id(value: Any) -> str:
+    """A tool call id as one plain token, whatever Cursor sent."""
+    return " ".join(str(value or "").split())
+
+
+def read_link(path: str) -> str:
+    """The parent conversation a `.parent` sidecar names, "" if unreadable."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().partition("\n")[0].strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def read_links(spool_dir: str) -> Dict[str, str]:
+    """Every subagent's parent conversation, by subagent id."""
     try:
         names = os.listdir(spool_dir)
     except OSError:
-        return []
-    children = []
+        return {}
+    links = {}
     for name in names:
         child = name[:-len(PARENT_SUFFIX)]
-        if not name.endswith(PARENT_SUFFIX) or not _SAFE_NAME.match(child):
-            continue
-        try:
-            with open(os.path.join(spool_dir, name), encoding="utf-8") as fh:
-                parent = fh.read().strip()
-        except (OSError, UnicodeDecodeError):
-            continue
-        if parent == conversation_id and child != conversation_id:
-            children.append(child)
-    return sorted(children)
+        if name.endswith(PARENT_SUFFIX) and _SAFE_NAME.match(child):
+            links[child] = read_link(os.path.join(spool_dir, name))
+    return links
+
+
+def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
+    """Conversations whose `.parent` sidecar names this one: subagents
+    linked without a subagentStart (cursor_hook.link_headless_subagent)."""
+    return sorted(child for child, parent in read_links(spool_dir).items()
+                  if parent == conversation_id and child != conversation_id)
 
 
 # The plugin's hooks and the same hooks installed into hooks.json by

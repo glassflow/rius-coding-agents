@@ -1,0 +1,122 @@
+{
+ "_comment": "The hook events codex-cli 0.144.1 fired for this run (multi_agent_v2 on, mock model), in order; rollouts named by thread id.",
+ "hooks": [
+  {
+   "event": "SessionStart",
+   "agent_id": "",
+   "agent_type": "",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": ""
+  },
+  {
+   "event": "UserPromptSubmit",
+   "agent_id": "",
+   "agent_type": "",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "",
+   "agent_type": "",
+   "tool_name": "collaborationspawn_agent",
+   "tool_response": "{\"task_name\":\"/root/sub\"}",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_type": "default",
+   "tool_name": "collaborationspawn_agent",
+   "tool_response": "{\"task_name\":\"/root/sub/sub\"}",
+   "transcript": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_type": "default",
+   "tool_name": "collaborationspawn_agent",
+   "tool_response": "{\"task_name\":\"/root/sub/sub/sub\"}",
+   "transcript": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca2-c1e9-73b3-aa24-491058720efa",
+   "agent_type": "default",
+   "tool_name": "collaborationwait_agent",
+   "tool_response": "{\"message\":\"Wait timed out.\",\"timed_out\":true}",
+   "transcript": "01a10ca2-c1e9-73b3-aa24-491058720efa",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "",
+   "agent_type": "",
+   "tool_name": "collaborationwait_agent",
+   "tool_response": "{\"message\":\"Wait timed out.\",\"timed_out\":true}",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_type": "default",
+   "tool_name": "collaborationwait_agent",
+   "tool_response": "{\"message\":\"Wait timed out.\",\"timed_out\":true}",
+   "transcript": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_transcript": ""
+  },
+  {
+   "event": "PostToolUse",
+   "agent_id": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_type": "default",
+   "tool_name": "collaborationwait_agent",
+   "tool_response": "{\"message\":\"Wait timed out.\",\"timed_out\":true}",
+   "transcript": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_transcript": ""
+  },
+  {
+   "event": "SubagentStop",
+   "agent_id": "01a10ca2-c1e9-73b3-aa24-491058720efa",
+   "agent_type": "default",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_transcript": "01a10ca2-c1e9-73b3-aa24-491058720efa"
+  },
+  {
+   "event": "Stop",
+   "agent_id": "",
+   "agent_type": "",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": ""
+  },
+  {
+   "event": "SubagentStop",
+   "agent_id": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_type": "default",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-be8e-7af2-be26-87e190f17d1b",
+   "agent_transcript": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875"
+  },
+  {
+   "event": "SubagentStop",
+   "agent_id": "01a10ca2-c1a2-7d80-89c3-31fc40d121df",
+   "agent_type": "default",
+   "tool_name": "",
+   "tool_response": "",
+   "transcript": "01a10ca2-c155-7ab2-adb8-1e5fd4c07875",
+   "agent_transcript": "01a10ca2-c1a2-7d80-89c3-31fc40d121df"
+  }
+ ]
+}

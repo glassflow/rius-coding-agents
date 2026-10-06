@@ -46,6 +46,11 @@ pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env staging
 `<plugin>` is the installed plugin's folder, for example
 `~/.claude/plugins/cache/rius-coding-agents/rius/<version>`.
 
+These commands store the key for Claude Code. For Codex or Cursor add
+`--agent codex` or `--agent cursor`: the key then goes into that agent's own
+`rius/credentials.json` (`~/.codex/rius/`, `~/.cursor/rius/`) and does not
+touch Claude Code's.
+
 The key is read from stdin, so it never lands in your shell history or a
 command line. The endpoint is the environment's built-in ingest host and
 cannot be given. Storing a key replaces, and revokes, the one stored
