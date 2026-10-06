@@ -20,10 +20,12 @@ MAX_CHARS = 64 * 1024
 _TOOL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _WORD = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _CALL = re.compile(r"\s*\(")
+# What ends a `//` comment: any line terminator of the language.
+_LINE_END = re.compile("[\n\r\u2028\u2029]")
 _NUMBER = re.compile(r"[0-9][0-9A-Za-z_.]*")
 # After these a `/` starts a regular expression; after `)`, `}`, `++` and `--`
 # it may do either; after anything else it divides.
-_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{;+-*%<>~^")
+_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{;+-*%<>~^/.")
 # How far past a `/` that may divide or may begin a regular expression to look
 # for the end of the expression, for one such `/` and for a whole script: past
 # either, the script is not read, so the work stays linear.
@@ -148,8 +150,8 @@ class _Reader:
         text, at = self.text, self.at
         following = text[at + 1:at + 2]
         if following == "/":
-            end = text.find("\n", at)
-            self.at = len(text) if end < 0 else end
+            end = _LINE_END.search(text, at)
+            self.at = len(text) if end is None else end.start()
             return True
         if following == "*":
             end = text.find("*/", at + 2)
@@ -165,7 +167,8 @@ class _Reader:
 
     def _starts_regex(self) -> bool:
         if self.last == "a":
-            return self.last_word in _REGEX_AFTER_WORDS
+            # `o.in / 2` and `o?.of / 2` name a property, not the keyword.
+            return self.last_word in _REGEX_AFTER_WORDS and self.before != "."
         if self._after_increment():
             return False
         return self.last == "" or self.last in _REGEX_AFTER_CHARS
@@ -187,7 +190,7 @@ class _Reader:
         if close == _UNDECIDED or self.looked > _LOOKAHEAD_TOTAL:
             return True
         body = self.text[self.at + 1:close] if close >= 0 else ""
-        return any(ch in body for ch in "\"'`{}\\/")
+        return "tools." in body or any(ch in body for ch in "\"'`{}\\/")
 
     def _regex_end(self, at: int, limit: int = 0) -> int:
         """Where a regular expression that begins at `at` ends (the closing

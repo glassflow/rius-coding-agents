@@ -419,3 +419,43 @@ def test_a_secret_file_read_has_its_output_replaced_however_the_script_is_lexed(
 def test_a_division_script_keeps_its_output():
     script = 'const avg = (a+b) / 2; text("avg " + avg + " (" + dir + "/x)")'
     assert _output_value(script, "avg 3 (/x)") == "avg 3 (/x)"
+
+
+# --- keeping the names right when the lexer meets odd but valid script ------
+
+@pytest.mark.parametrize("word", [
+    "in", "of", "typeof", "new", "return", "case", "delete", "void", "throw",
+    "else", "do", "yield", "await"])
+@pytest.mark.parametrize("access", [".", "?."])
+def test_a_keyword_named_property_followed_by_a_slash_divides(word, access):
+    script = "const n = o%s%s / total; %s const m = a / b;" % (access, word, CALL)
+    assert codex_script.called_tools(script) == ["exec_command"]
+
+
+def test_a_keyword_that_is_one_still_begins_a_regular_expression():
+    assert codex_script.called_tools("return /'/.test(y); " + CALL) == ["exec_command"]
+    assert codex_script.called_tools("x = typeof /'/; " + CALL) == ["exec_command"]
+
+
+def test_a_regular_expression_after_a_division_is_read_as_one():
+    script = "1 / /'/.test(s) && tools.a({}) && 2 / /'/.test(t);"
+    assert codex_script.called_tools(script) == ["a"]
+
+
+@pytest.mark.parametrize("end", ["\r", " ", " ", "\n", "\r\n"])
+def test_a_line_comment_ends_at_any_line_terminator(end):
+    assert codex_script.called_tools("// note" + end + CALL) == ["exec_command"]
+
+
+@pytest.mark.parametrize("script", [
+    "if (a) /tools.fake_name()/.test(b); " + CALL,
+    "{ } /tools.fake_name()/.test(b); " + CALL,
+    "i++ /tools.fake_name()/.test(b); " + CALL,
+])
+def test_the_text_of_a_regular_expression_never_names_a_tool(script):
+    assert codex_script.called_tools(script) == []
+
+
+def test_a_regular_expression_that_is_certain_names_nothing_either():
+    assert codex_script.called_tools("if (/tools.fake_name()/.test(b)) { " + CALL + " }") \
+        == ["exec_command"]
