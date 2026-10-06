@@ -10,7 +10,12 @@ as the second run of a chat: its sessionStart is moved to a first run of its
 own and `_hook_env` is dropped from the rest. That arrangement is derived,
 not captured.
 """
+import json
 import os
+import pathlib
+import subprocess
+import sys
+import threading
 import time
 
 import pytest
@@ -20,6 +25,9 @@ from rius_cc import (agent, config, cursor_events, cursor_export, cursor_hook,
 
 from . import signed_in
 from .cursor_fixtures import STEP_NS, clock, payloads, resumed_subagent_run
+from .platforms import posix_only
+
+SCRIPTS = str(pathlib.Path(__file__).parent.parent / "scripts")
 
 WORKSPACE = "/Users/dev/project"
 OTHER = "/Users/dev/other"
@@ -64,6 +72,15 @@ def _link(sdir, conversation_id):
                                cursor_export.PARENT_SUFFIX))
 
 
+def _holder(sdir, call, parent=PARENT):
+    """Who holds a Task call, "" when nobody does."""
+    try:
+        with open(cursor_export._claim_path(str(sdir), parent, call)) as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
 def _first_event_of(conversation_id, **changes):
     """The real subagent's first event, as another conversation's."""
     first = dict(payloads("real_headless_subagent")[4],
@@ -101,10 +118,10 @@ def test_the_subagent_belongs_to_the_resumed_run_not_the_first(tmp_path):
 def test_a_task_call_is_found_by_the_workspace_it_runs_in(tmp_path):
     sdir = str(tmp_path)
     _spool(_until_the_task_call(), tmp_path)
-    found = cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE)
+    found = cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD)
     assert found == (PARENT, TASK_CALL)
-    assert cursor_export.task_call_awaiting_subagent(sdir, OTHER) is None
-    assert cursor_export.task_call_awaiting_subagent(sdir, "") is None
+    assert cursor_export.claim_awaiting_task_call(sdir, OTHER, CHILD) is None
+    assert cursor_export.claim_awaiting_task_call(sdir, "", CHILD) is None
 
 
 def test_a_tool_that_ran_elsewhere_does_not_move_the_chat(tmp_path):
@@ -112,7 +129,7 @@ def test_a_tool_that_ran_elsewhere_does_not_move_the_chat(tmp_path):
     elsewhere = dict(_until_the_task_call()[-2], cwd=OTHER, tool_name="Shell",
                      hook_event_name="preToolUse", tool_use_id="shell-1")
     _spool(_until_the_task_call() + [elsewhere], tmp_path)
-    assert cursor_export.task_call_awaiting_subagent(sdir, OTHER) is None
+    assert cursor_export.claim_awaiting_task_call(sdir, OTHER, CHILD) is None
     cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir, OTHER)
     assert cursor_events.linked_children(sdir, PARENT) == []
 
@@ -121,17 +138,17 @@ def test_a_chat_that_ended_has_no_task_call_waiting(tmp_path):
     ended = [e for e in resumed_subagent_run() if e["conversation_id"] == PARENT]
     _spool(ended, tmp_path)
     assert ended[-1]["hook_event_name"] == "sessionEnd"
-    assert cursor_export.task_call_awaiting_subagent(
-        str(tmp_path), WORKSPACE) is None
+    assert cursor_export.claim_awaiting_task_call(
+        str(tmp_path), WORKSPACE, CHILD) is None
 
 
 def test_a_finished_task_call_is_not_waiting(tmp_path):
     sdir = str(tmp_path)
     _spool(_until_the_task_call(), tmp_path)
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE)
+    assert cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD)
     done = dict(_until_the_task_call()[-1], hook_event_name="postToolUse")
     cursor_events.record(done, sdir, True, 32768)
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE) is None
+    assert cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD) is None
 
 
 def test_a_task_call_older_than_the_window_is_not_waiting(tmp_path):
@@ -140,10 +157,10 @@ def test_a_task_call_older_than_the_window_is_not_waiting(tmp_path):
     began = cursor_events.read_spool(
         cursor_events.spool_path(sdir, PARENT))[-1]["ts"]
     window = cursor_export.TASK_LINK_WINDOW_NS
-    assert cursor_export.task_call_awaiting_subagent(
-        sdir, WORKSPACE, began + window - STEP_NS)
-    assert cursor_export.task_call_awaiting_subagent(
-        sdir, WORKSPACE, began + window + STEP_NS) is None
+    assert cursor_export.claim_awaiting_task_call(
+        sdir, WORKSPACE, CHILD, began + window - STEP_NS)
+    assert cursor_export.claim_awaiting_task_call(
+        sdir, WORKSPACE, CHILD, began + window + STEP_NS) is None
 
 
 def test_the_window_is_about_two_minutes():
@@ -160,8 +177,8 @@ def test_the_newest_chat_with_a_task_call_waiting_wins(tmp_path):
                              32768, clock=tick)
     stale = time.time() - 30
     os.utime(cursor_events.spool_path(sdir, older), (stale, stale))
-    assert cursor_export.task_call_awaiting_subagent(
-        sdir, WORKSPACE)[0] == PARENT
+    found = cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD)
+    assert found[0] == PARENT
 
 
 def test_only_the_newest_chats_are_searched(tmp_path):
@@ -175,9 +192,9 @@ def test_only_the_newest_chats_are_searched(tmp_path):
         cursor_events.record({"conversation_id": other, "workspace_roots": [OTHER],
                               "hook_event_name": "sessionStart"}, sdir, True,
                              32768)
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE) is None
+    assert cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD) is None
     os.remove(cursor_events.spool_path(sdir, "c0de0000-0000-4000-8000-%012d" % 0))
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE)
+    assert cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD)
 
 
 def test_a_task_call_starts_one_subagent(tmp_path):
@@ -185,11 +202,12 @@ def test_a_task_call_starts_one_subagent(tmp_path):
     call already has its subagent, must not become that chat's second."""
     sdir = str(tmp_path)
     _spool(resumed_subagent_run()[:-1], tmp_path)
-    assert _link(sdir, CHILD) == (PARENT, TASK_CALL)
+    assert (_link(sdir, CHILD), _holder(sdir, TASK_CALL)) == (PARENT, CHILD)
     cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir,
                                        WORKSPACE)
     assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE) is None
+    assert cursor_export.claim_awaiting_task_call(
+        sdir, WORKSPACE, STRANGER) is None
 
 
 def test_parallel_task_calls_each_start_one_subagent(tmp_path):
@@ -199,8 +217,8 @@ def test_parallel_task_calls_each_start_one_subagent(tmp_path):
     second_child = "c0de0000-0000-4000-8000-0000000000b1"
     _spool(_until_the_task_call() + [second, _first_event_of(first_child),
                                      _first_event_of(second_child)], tmp_path)
-    assert _link(sdir, first_child) == (PARENT, TASK_CALL)
-    assert _link(sdir, second_child) == (PARENT, "tool_second")
+    assert _holder(sdir, TASK_CALL) == first_child
+    assert _holder(sdir, "tool_second") == second_child
     cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir,
                                        WORKSPACE)
     assert cursor_events.linked_children(sdir, PARENT) == [first_child,
@@ -212,7 +230,7 @@ def test_a_subagent_the_env_names_claims_its_task_call_too(tmp_path):
     real = payloads("real_headless_subagent")
     _spool(real[:5], tmp_path)
     assert real[4]["conversation_id"] == CHILD
-    assert _link(sdir, CHILD) == (PARENT, TASK_CALL)
+    assert (_link(sdir, CHILD), _holder(sdir, TASK_CALL)) == (PARENT, CHILD)
     cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir,
                                        WORKSPACE)
     assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
@@ -225,7 +243,7 @@ def test_a_subagent_start_claims_its_task_call(tmp_path):
     config_for = type("Cfg", (), {"capture_content": True,
                                   "max_attr_bytes": 32768})
     cursor_hook._spool("subagentStart", started, sdir, config_for)
-    assert _link(sdir, CHILD) == (PARENT, "tool_9")
+    assert (_link(sdir, CHILD), _holder(sdir, "tool_9")) == (PARENT, CHILD)
 
 
 def test_a_resumed_chat_with_a_spool_is_not_taken_for_a_subagent(tmp_path):
@@ -255,8 +273,8 @@ def test_a_tool_call_id_of_any_type_is_read_as_text(tmp_path, odd, as_text):
            + [dict(_until_the_task_call()[-1], tool_use_id=odd)], tmp_path)
     events = cursor_events.read_spool(cursor_events.spool_path(sdir, PARENT))
     assert list(cursor_export._open_task_calls(events)) == [as_text]
-    assert cursor_export.task_call_awaiting_subagent(
-        sdir, WORKSPACE) == (PARENT, as_text)
+    assert cursor_export.claim_awaiting_task_call(
+        sdir, WORKSPACE, CHILD) == (PARENT, as_text)
 
 
 def test_a_failing_search_links_nothing_and_raises_nothing(tmp_path, monkeypatch):
@@ -267,8 +285,8 @@ def test_a_failing_search_links_nothing_and_raises_nothing(tmp_path, monkeypatch
         raise RuntimeError("unreadable spool")
 
     monkeypatch.setattr(cursor_events, "read_spool", broken)
-    assert cursor_export.task_call_awaiting_subagent(sdir, WORKSPACE) is None
-    assert cursor_export.oldest_unclaimed_task_call(sdir, PARENT) == ""
+    assert cursor_export.claim_awaiting_task_call(sdir, WORKSPACE, CHILD) is None
+    assert cursor_export.claim_oldest_task_call(sdir, PARENT, CHILD) == ""
     cursor_hook.link_headless_subagent("preToolUse", STRANGER, {}, sdir,
                                        WORKSPACE)
     assert cursor_events.linked_children(sdir, PARENT) == []
@@ -276,16 +294,16 @@ def test_a_failing_search_links_nothing_and_raises_nothing(tmp_path, monkeypatch
 
 def test_a_link_is_replaced_whole_and_leaves_no_temp_file(tmp_path):
     sdir = str(tmp_path)
-    cursor_export.link_subagent(sdir, CHILD, PARENT, TASK_CALL)
+    cursor_export.link_subagent(sdir, CHILD, PARENT)
     cursor_export.link_subagent(sdir, CHILD, "other-parent")
-    assert _link(sdir, CHILD) == ("other-parent", "")
+    assert _link(sdir, CHILD) == "other-parent"
     assert [n for n in os.listdir(sdir) if n.endswith(".tmp")] == []
 
 
 def test_a_link_that_cannot_be_written_leaves_the_old_one_intact(tmp_path,
                                                                  monkeypatch):
     sdir = str(tmp_path)
-    cursor_export.link_subagent(sdir, CHILD, PARENT, TASK_CALL)
+    cursor_export.link_subagent(sdir, CHILD, PARENT)
 
     def refuse(src, dst, *args, **kwargs):
         raise OSError("disk full")
@@ -293,7 +311,7 @@ def test_a_link_that_cannot_be_written_leaves_the_old_one_intact(tmp_path,
     monkeypatch.setattr(platform_compat, "replace_atomic", refuse)
     with pytest.raises(OSError):
         cursor_export.link_subagent(sdir, CHILD, "other-parent")
-    assert _link(sdir, CHILD) == (PARENT, TASK_CALL)
+    assert _link(sdir, CHILD) == PARENT
     assert [n for n in os.listdir(sdir) if n.endswith(".tmp")] == []
 
 
@@ -301,8 +319,16 @@ def test_a_link_without_a_task_call_reads_as_before(tmp_path):
     sdir = str(tmp_path)
     with open(os.path.join(sdir, CHILD + ".parent"), "w") as fh:
         fh.write(PARENT)
-    assert _link(sdir, CHILD) == (PARENT, "")
+    assert _link(sdir, CHILD) == PARENT
     assert cursor_export.root_conversation(sdir, CHILD) == PARENT
+
+
+def test_a_link_with_a_second_line_still_names_its_parent(tmp_path):
+    sdir = str(tmp_path)
+    with open(os.path.join(sdir, CHILD + ".parent"), "w") as fh:
+        fh.write(PARENT + "\n" + TASK_CALL)
+    assert _link(sdir, CHILD) == PARENT
+    assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
 
 
 def test_every_event_records_the_workspace_root_apart_from_the_tool_cwd():
@@ -419,3 +445,137 @@ def test_a_chat_turned_off_keeps_its_subagents_untraced_too(home):
     config.set_session_override(PARENT, str(home), None)
     _fire(home, [_first_event_of(CHILD, tool_use_id="again")], env)
     assert os.path.exists(cursor_events.spool_path(sdir, CHILD))
+
+
+def _resumed_chat_event():
+    """The first event of the real resumed run's second run: a chat that
+    already has a transcript."""
+    real = payloads("real_headless_resume")
+    ended = next(i for i, e in enumerate(real)
+                 if e["hook_event_name"] == "sessionEnd")
+    event = dict(real[ended + 1])
+    assert event["transcript_path"]
+    return event
+
+
+def test_a_chat_with_a_transcript_is_a_resumed_chat_not_a_subagent(home):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    _fire(home, [_resumed_chat_event()])
+    assert cursor_events.linked_children(sdir, PARENT) == []
+
+
+def test_the_same_event_without_a_transcript_is_a_subagent(home):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    new = dict(_resumed_chat_event(), transcript_path=None,
+               conversation_id=STRANGER, session_id=STRANGER)
+    _fire(home, [new])
+    assert cursor_events.linked_children(sdir, PARENT) == [STRANGER]
+
+
+# --- claims ------------------------------------------------------------------
+
+def test_a_task_call_goes_to_one_subagent_and_stays_with_it(tmp_path):
+    sdir = str(tmp_path)
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", STRANGER)
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert cursor_export.claim_task_call(sdir, PARENT, "call-2", STRANGER)
+
+
+def test_a_claim_still_being_written_is_read_again(tmp_path):
+    sdir = str(tmp_path)
+    path = cursor_export._claim_path(sdir, PARENT, "call-1")
+    open(path, "w").close()
+    writer = threading.Timer(0.02, lambda: open(path, "w").write(CHILD))
+    writer.start()
+    try:
+        assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    finally:
+        writer.join()
+
+
+def test_a_claim_that_stays_empty_is_nobodys(tmp_path):
+    sdir = str(tmp_path)
+    open(cursor_export._claim_path(sdir, PARENT, "call-1"), "w").close()
+    assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+
+
+RACE = """
+import json, sys, time
+sys.path.insert(0, sys.argv[1])
+from rius_cc import agent, cursor_hook
+agent.activate(agent.CURSOR)
+home, payload, start = sys.argv[2], json.loads(sys.argv[3]), float(sys.argv[4])
+while time.time() < start:
+    pass
+cursor_hook.handle(payload["hook_event_name"], payload, {}, home)
+"""
+
+
+@posix_only("starts hook processes that must run at the same moment")
+def test_two_subagents_starting_together_never_share_a_task_call(tmp_path):
+    first_child = "c0de0000-0000-4000-8000-0000000000a1"
+    second_child = "c0de0000-0000-4000-8000-0000000000b1"
+    second_call = dict(_until_the_task_call()[-1], tool_use_id="tool_second")
+    trials = [tmp_path / ("home%d" % i) for i in range(8)]
+    for home in trials:
+        with agent.using(agent.CURSOR):
+            _set_up(home)
+            _spool(_until_the_task_call() + [second_call],
+                   cursor_export.spool_dir(str(home)))
+    start = time.time() + 4
+    runs = [subprocess.Popen(
+        [sys.executable, "-c", RACE, SCRIPTS, str(home),
+         json.dumps(_first_event_of(child)), str(start)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for home in trials for child in (first_child, second_child)]
+    for run in runs:
+        _, err = run.communicate(timeout=120)
+        assert run.returncode == 0, err
+    for home in trials:
+        with agent.using(agent.CURSOR):
+            sdir = cursor_export.spool_dir(str(home))
+        held = {_holder(sdir, TASK_CALL), _holder(sdir, "tool_second")}
+        assert held == {first_child, second_child}
+        assert cursor_events.linked_children(sdir, PARENT) == [first_child,
+                                                               second_child]
+
+
+# --- what is cleaned up with the spool ----------------------------------------
+
+def test_claims_go_with_their_conversations_spool(tmp_path):
+    sdir = str(tmp_path)
+    _spool(_until_the_task_call(), tmp_path)
+    cursor_export.claim_task_call(sdir, PARENT, TASK_CALL, CHILD)
+    claim = cursor_export._claim_path(sdir, PARENT, TASK_CALL)
+    later = time.time() + cursor_export.SPOOL_RETENTION_S + 60
+    for path in os.listdir(sdir):
+        os.utime(os.path.join(sdir, path), (later - 1e9, later - 1e9))
+    assert cursor_export.prune(sdir, [PARENT], now_s=later) == 0
+    assert os.path.exists(claim)
+    assert cursor_export.prune(sdir, [], now_s=later) == 2
+    assert not os.path.exists(claim)
+    assert os.listdir(sdir) == []
+
+
+def test_a_claim_is_kept_while_its_conversation_is_recent(tmp_path):
+    sdir = str(tmp_path)
+    _spool(_until_the_task_call(), tmp_path)
+    cursor_export.claim_task_call(sdir, PARENT, TASK_CALL, CHILD)
+    assert cursor_export.prune(sdir, []) == 0
+
+
+def test_a_link_temp_file_a_killed_hook_left_goes_after_a_while(tmp_path):
+    sdir = str(tmp_path)
+    old = os.path.join(sdir, ".link-abc.tmp")
+    new = os.path.join(sdir, ".link-def.tmp")
+    for path in (old, new):
+        open(path, "w").close()
+    now = time.time()
+    os.utime(old, (now - cursor_export.LINK_TEMP_TTL_S - 60,) * 2)
+    assert cursor_export.prune(sdir, [], now_s=now) == 1
+    assert os.listdir(sdir) == [".link-def.tmp"]

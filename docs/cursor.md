@@ -44,12 +44,24 @@ Other gaps:
 - Times are when each hook fired, not when the model call started.
 - Cloud and background agents fire no session hooks.
 - Tab completions are not traced.
-- `cursor-agent -p --resume` fires no `sessionStart`, so the plugin finds
-  the chat a Task subagent belongs to by looking for a chat in the same
-  folder with a Task call, started in the last 2 minutes, that no subagent
-  answers yet. Each Task call gets one subagent. If two chats in one folder
-  have such a call at once, the one active last gets the subagent. This
-  search runs only in a folder where tracing is on.
+- `cursor-agent -p --resume` fires no `sessionStart`, so the plugin has to
+  guess which chat a Task subagent belongs to. It looks for a chat in the
+  same folder (matched on the hook's `workspace_roots`) with a Task call that
+  began in the last 2 minutes and that no other subagent has claimed. A call
+  is claimed once, atomically, so two subagents never end up on the same
+  call. It is still a guess, with these limits:
+  - Only the newest 20 spools are searched, and only the last 256 KB of
+    each. A chat that wrote more than that after its Task call is not found,
+    and its subagent stays unlinked.
+  - A new chat in that folder whose first hook is neither `sessionStart` nor
+    `beforeSubmitPrompt`, and that has no transcript yet, can be taken for
+    the subagent of a waiting Task call. A chat that already has a transcript,
+    such as `--resume` of an earlier chat, never is, and neither is a
+    subagent that Cursor itself resumes.
+  - If two chats in one folder have a waiting Task call, the one active last
+    gets the subagent.
+  - The search runs only in a folder where tracing is on, and a Task call
+    that has no `tool_use_id` cannot be claimed.
 
 ## What gets sent
 
