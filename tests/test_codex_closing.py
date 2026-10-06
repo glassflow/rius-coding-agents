@@ -209,3 +209,36 @@ def test_a_grandchild_is_placed_by_the_state_of_its_spawner_as_it_is_now(tmp_pat
     _append(c_path, started(T0 + 210, "call_d", g_id), _item(T0 + 220, {
         "type": "function_call_output", "call_id": "call_d", "output": "{}"}))
     assert step()[g_id] == spans.span_id_for("call_d")
+
+
+def test_a_grandchild_of_a_child_not_yet_read_hangs_under_that_child_when_closing(
+        codex_home, tmp_path, sent):
+    """Both are known only by their hooks when the trace is closed: the child
+    is read first and the grandchild placed under its open turn, not under the
+    root's."""
+    folder = tmp_path / "sessions"
+    parent = _dying_parent(folder)
+    c_id = _uuid7_at(T0 + 40, "c" * 19)
+    g_id = _uuid7_at(T0 + 200, "d" * 19)
+    c_path = _rollout(folder / ("rollout-c-%s.jsonl" % c_id), [
+        _meta(c_id, PARENT, 41), _event(T0 + 42, {"type": "task_started", "turn_id": "tc"})])
+    g_path = _rollout(folder / ("rollout-g-%s.jsonl" % g_id), [
+        _meta(g_id, c_id, 201), _event(T0 + 202, {"type": "task_started", "turn_id": "tg"})])
+    for event, extra in (("UserPromptSubmit", {}),
+                         ("SubagentStop", {"agent_id": c_id, "agent_type": "default",
+                                           "agent_transcript_path": str(c_path)}),
+                         ("SubagentStop", {"agent_id": g_id, "agent_type": "default",
+                                           "agent_transcript_path": str(g_path)}),
+                         ("Stop", {})):
+        payload = {"session_id": PARENT, "cwd": "/tmp/proj", "hook_event_name": event,
+                   "transcript_path": str(parent)}
+        payload.update(extra)
+        exporter.run(event, payload, ENV, str(tmp_path))
+    del sent[:]
+    _sweep(tmp_path, _state(tmp_path)["last_ns"] + 2 * HOUR_NS)
+    rows = {s.span_id: s for _, out in sent for s in out}
+    parent_of = {agent: rows[spans.span_id_for("subagent:" + agent)].parent_span_id
+                 for agent in (c_id, g_id)}
+    assert parent_of == {c_id: spans.span_id_for("call_exec"),
+                         g_id: spans.span_id_for("turn:tc")}
+    assert not any(s.pending for s in rows.values())

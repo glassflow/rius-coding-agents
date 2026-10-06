@@ -206,8 +206,12 @@ def _link_unspawned(st: dict, ctx: Ctx, closing: bool = False) -> None:
         session = codex_rollout.read_session(sub["path"])
         if not closing and (created_ms is None or session is None):
             continue
-        spawner = _spawner_state(st, session.get("parent_thread_id") if session else "")
-        spawner = spawner or (st if closing else None)
+        parent_id = session.get("parent_thread_id") if session else ""
+        spawner = _spawner_state(st, parent_id)
+        if spawner is None and closing:
+            if _gets_a_state(st, parent_id):
+                continue    # its rollout is read in this round; place this one next
+            spawner = st
         if spawner is None:
             continue
         tool = codex_spans.spawning_tool(spawner, (created_ms or 0) * 10**6, closing)
@@ -215,6 +219,13 @@ def _link_unspawned(st: dict, ctx: Ctx, closing: bool = False) -> None:
             tool = codex_spans.adopting_span(spawner, ctx)
         if tool:
             spawner.setdefault("spawned", {})[agent_id] = tool
+
+
+def _gets_a_state(st: dict, agent_id: str) -> bool:
+    """Whether a trace that is closing will read the rollout of this subagent
+    (and so give it a state) in this round."""
+    return (state.is_valid_session_id(agent_id) and agent_id in st["codex_subs"]
+            and _with_path(st, agent_id) is not None)
 
 
 def _oldest_first(agent_ids) -> List[str]:
