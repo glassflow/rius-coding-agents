@@ -45,10 +45,11 @@ Other gaps:
 - Cloud and background agents fire no session hooks.
 - Tab completions are not traced.
 - `cursor-agent -p --resume` fires no `sessionStart`, so the plugin finds
-  the chat a Task subagent belongs to by looking for the chat in the same
-  folder that is waiting on a Task call (within the last 10 minutes). If two
-  chats in one folder wait on a Task call at once, the one active last gets
-  the subagent.
+  the chat a Task subagent belongs to by looking for a chat in the same
+  folder with a Task call, started in the last 2 minutes, that no subagent
+  answers yet. Each Task call gets one subagent. If two chats in one folder
+  have such a call at once, the one active last gets the subagent. This
+  search runs only in a folder where tracing is on.
 
 ## What gets sent
 
