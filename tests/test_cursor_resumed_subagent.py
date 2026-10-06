@@ -664,27 +664,23 @@ def test_a_claim_goes_stale_after_a_few_seconds():
     assert 2 <= cursor_export.CLAIM_STALE_S <= 30
 
 
-def test_hooks_finding_the_same_stale_claim_end_with_one_holder(tmp_path):
-    """Two hooks that both find an empty claim stale must not both take the
-    call, however their steps interleave."""
-    both_lost = []
-    for i in range(1500):
-        sdir = str(tmp_path / ("d%d" % i))
-        _leave_a_stale_empty_claim(sdir, "call-1")
-        gate = threading.Barrier(2)
-        results = {}
+def test_a_hook_that_found_a_claim_stale_cannot_take_what_another_then_took(
+        tmp_path, monkeypatch):
+    """Hook A finds the empty claim stale; before it goes on, hook B finds
+    it stale too and finishes its claim. Both must not end up holding it."""
+    sdir = str(tmp_path)
+    _leave_a_stale_empty_claim(sdir, "call-1")
+    real = cursor_export._held_by
+    other = {}
 
-        def hook(child):
-            gate.wait()
-            results[child] = cursor_export.claim_task_call(
-                sdir, PARENT, "call-1", child)
+    def interleaved(path, child):
+        held = real(path, child)
+        if held is None and child == CHILD:
+            other["took"] = cursor_export.claim_task_call(
+                sdir, PARENT, "call-1", STRANGER)
+        return held
 
-        hooks = [threading.Thread(target=hook, args=(child,))
-                 for child in (CHILD, STRANGER)]
-        for thread in hooks:
-            thread.start()
-        for thread in hooks:
-            thread.join()
-        if sorted(results.values()) != [False, True]:
-            both_lost.append(results)
-    assert both_lost == []
+    monkeypatch.setattr(cursor_export, "_held_by", interleaved)
+    mine = cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
+    assert (mine, other["took"]) == (False, True)
+    assert _holder(sdir, "call-1") == STRANGER
