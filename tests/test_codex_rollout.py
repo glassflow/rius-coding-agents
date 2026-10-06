@@ -7,6 +7,8 @@ base instructions and developer prompt are trimmed from it.
 """
 import json
 
+import pytest
+
 from rius_cc import codex_rollout as cr
 
 FIXTURE = "codex/mock_tools_mcp_resume.jsonl"
@@ -93,3 +95,14 @@ def test_unreadable_lines_are_skipped(tmp_path):
 
 def test_a_missing_file_reads_nothing(tmp_path):
     assert cr.read_from(str(tmp_path / "gone.jsonl"), 7) == ([], 7)
+
+
+@pytest.mark.parametrize("kind", [[], {}, [1], {"a": 1}, 5, None, True, 1.5])
+@pytest.mark.parametrize("line_type", ["event_msg", "response_item", "session_meta",
+                                       "turn_context"])
+def test_a_payload_type_that_is_not_a_string_is_not_a_record(line_type, kind):
+    """A list or a dict cannot be looked up in the table of kinds."""
+    line = json.dumps({"timestamp": "2026-10-05T16:14:00.000Z", "type": line_type,
+                       "payload": {"type": kind}})
+    record = cr.parse_line(line)
+    assert record is None or record.kind in (cr.SESSION, cr.TURN_CONTEXT)

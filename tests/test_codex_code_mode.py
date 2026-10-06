@@ -322,7 +322,7 @@ def test_a_secret_file_read_inside_exec_is_replaced_whole():
 
 def test_a_script_naming_no_secret_file_keeps_its_output():
     value = _exec_output(
-        'const k = obj.key; text(process.env.HOME); text("ls -la")',
+        'const k = obj.name; text(process.env.HOME); text("ls -la")',
         ["Script completed\nOutput:\n", "INTERNAL_HOST=db.internal.acme\n"])
     assert "INTERNAL_HOST=db.internal.acme" in value
 

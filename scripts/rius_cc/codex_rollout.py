@@ -182,7 +182,7 @@ def _fields_for(line_type: str, payload: Dict[str, Any]):
     if line_type == "turn_context":
         return TURN_CONTEXT, _turn_context(payload)
     table = _EVENTS if line_type == "event_msg" else _ITEMS if line_type == "response_item" else {}
-    kind, parse = table.get(payload.get("type"), (None, None))
+    kind, parse = table.get(_text(payload.get("type")), (None, None))
     if kind is None:
         return None, None
     return kind, parse(payload)

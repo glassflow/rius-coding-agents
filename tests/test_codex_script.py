@@ -139,7 +139,14 @@ HOSTILE = {
     "dollar braces": "`${" * 10000,
     "many literals": '"a" ' * 8000,
     "past the cap": '"a" ' * 400000,
+    "paren slash class": ")/[" * 21845,
+    "increment slash class": "a++/[" * 13000,
+    "paren slash word class": ")/x[" * 16000,
+    "paren space slash class": ") /[a" * 13000,
 }
+# Slashes that may divide or begin a regular expression, each with an
+# unclosed `[`: what made every one of them look to the end of the line.
+LOOKAHEAD_UNITS = [")/[", "a++/[", ")/x[", ") /[a", ") /a[b]", "x) /" + "y" * 60 + "[ "]
 
 
 def _call_and_output(script, capture):
@@ -310,22 +317,145 @@ def test_the_whole_text_is_checked_beside_the_literals(monkeypatch):
     assert codex_spans.reads_secret_file("run(ls)") is False
 
 
+def test_text_that_names_no_secret_file_is_not_a_read():
+    assert codex_spans.reads_secret_file("text(process.env.HOME);") is False
+    assert codex_spans.reads_secret_file("const k = obj.name; " + CALL) is False
+
+
 @pytest.mark.parametrize("script", [
-    "text(process.env.HOME);", "const k = obj.key; " + CALL,
-    "const v = (await tools.mcp__a__b({})).status.key;"])
-def test_a_property_named_like_a_secret_file_is_not_a_read(script):
-    assert codex_spans.reads_secret_file(script) is False
+    "const k = obj.key; " + CALL,
+    "const v = (await tools.mcp__a__b({})).status.key;",
+    "// the .env file is read elsewhere\n" + CALL,
+    "const cfg = credentials;",
+])
+def test_a_script_that_mentions_a_secret_file_name_anywhere_withholds_its_output(script):
+    """On purpose: the check does not rest on the scanner, so it cannot tell
+    a property or a comment from a file; it errs on withholding."""
+    assert codex_spans.reads_secret_file(script) is True
 
 
 @pytest.mark.parametrize("script", [
     "run('cat .env')", "run(`cat ${dir}/.env`)", "cat .env", "x = 'a' + '.env'",
-    "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')"])
+    "open('/home/u/.aws/credentials')", "read('~/.ssh/id_rsa')",
+    "run(`cat ${dir}/server.pem, then the rest`)", "list([a, server.pem])"])
 def test_a_secret_file_is_still_found_by_name(script):
     assert codex_spans.reads_secret_file(script) is True
 
 
-def test_a_script_not_read_to_its_end_is_withheld_whatever_it_names():
-    """No word of it looks like a secret file once its property accesses
-    are left out; it is the unfinished scan that withholds it."""
+def test_a_script_not_read_to_its_end_is_not_withheld_for_that():
+    """An unfinished scan means no names (plain `exec`), no more: the output
+    of an ordinary division script is kept."""
+    assert codex_spans.reads_secret_file("const a = 'never closed;\nls") is False
     assert codex_spans.reads_secret_file("const a = 'never closed;\ncat server.pem") is True
-    assert codex_spans.reads_secret_file("const a = 'closed';\ncat server.pem") is False
+
+
+@pytest.mark.parametrize("unit", LOOKAHEAD_UNITS)
+def test_what_is_looked_ahead_at_does_not_grow_with_the_script(unit):
+    """The same few thousand characters of lookahead at 4 KB and at 64 KB:
+    the work is linear, where each `/` once looked to the end of the line."""
+    looked = []
+    for size in (4096, 8192, 16384, 65000):
+        reader = codex_script._Reader(unit * (size // len(unit)))
+        reader.read()
+        looked.append(reader.looked)
+    bound = codex_script._LOOKAHEAD_TOTAL + codex_script._LOOKAHEAD
+    assert max(looked) <= bound, looked
+    started = time.perf_counter()
+    codex_script.read(unit * (65000 // len(unit)))
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_long_real_regular_expression_is_read_whole():
+    body = "a" * 5000 + "[/]" * 500
+    assert codex_script.called_tools("const re = /%s/; %s" % (body, CALL)) == ["exec_command"]
+    assert codex_script.called_tools("if (/%s/.test(x)) { %s }" % (body, CALL)) == ["exec_command"]
+
+
+def test_a_slash_that_cannot_be_decided_within_the_lookahead_names_nothing():
+    """After `)` the `/` may begin a regular expression; its end is not found
+    within 256 characters, so the script is not trusted to name a tool. A
+    shorter one, ending in time, is read as a division and names it."""
+    far = "if (a) /" + "x" * 300 + "/.test(b); " + CALL
+    near = "if (a) /" + "x" * 100 + "/.test(b); " + CALL
+    assert codex_script.called_tools(far) == []
+    assert codex_script.called_tools(near) == ["exec_command"]
+
+
+# --- the secret-file decision does not rest on the scanner ------------------
+
+FILE_BEHIND_A_MISLEXED_SCRIPT = [
+    "const n = rate.in / total; text(await tools.exec_command({cmd: 'cat server.pem'}));"
+    " const m = a / b;",
+    "const n = o.of / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.typeof / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.new / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.return / t; f('cat server.pem'); const m = a / b;",
+    "const n = o.case / t; f('cat server.pem'); const m = a / b;",
+    "const n = o?.in / t; f('cat server.pem'); const m = a / b;",
+    "1 / /'/.test(s) && f('cat server.pem') && 2 / /'/.test(t);",
+    "// note\rawait tools.exec_command({cmd:'cat server.pem'})",
+    "// note\u2028await tools.exec_command({cmd:'cat server.pem'})",
+    SECRET_BEHIND_REGEX,
+    CRLF_CONTINUATION,
+]
+
+
+def _output_value(script, output="TOKEN=abc123"):
+    state = codex_spans.new_state()
+    out = codex_spans.build([
+        codex_rollout.Record(codex_rollout.TURN_START, 1, {"turn_id": "t1"}),
+        codex_rollout.Record(codex_rollout.TOOL_CALL, 2, {
+            "call_id": "c1", "name": "exec", "arguments": script}),
+        codex_rollout.Record(codex_rollout.TOOL_OUTPUT, 3, {
+            "call_id": "c1", "output": output})], state, _ctx(True))
+    return [s for s in out if s.kind_oi == "TOOL" and not s.pending][0].attributes["output.value"]
+
+
+@pytest.mark.parametrize("script", FILE_BEHIND_A_MISLEXED_SCRIPT)
+def test_a_secret_file_read_has_its_output_replaced_however_the_script_is_lexed(script):
+    assert _output_value(script) == scrub.SECRET_FILE_MARKER
+
+
+def test_a_division_script_keeps_its_output():
+    script = 'const avg = (a+b) / 2; text("avg " + avg + " (" + dir + "/x)")'
+    assert _output_value(script, "avg 3 (/x)") == "avg 3 (/x)"
+
+
+# --- keeping the names right when the lexer meets odd but valid script ------
+
+@pytest.mark.parametrize("word", [
+    "in", "of", "typeof", "new", "return", "case", "delete", "void", "throw",
+    "else", "do", "yield", "await"])
+@pytest.mark.parametrize("access", [".", "?."])
+def test_a_keyword_named_property_followed_by_a_slash_divides(word, access):
+    script = "const n = o%s%s / total; %s const m = a / b;" % (access, word, CALL)
+    assert codex_script.called_tools(script) == ["exec_command"]
+
+
+def test_a_keyword_that_is_one_still_begins_a_regular_expression():
+    assert codex_script.called_tools("return /'/.test(y); " + CALL) == ["exec_command"]
+    assert codex_script.called_tools("x = typeof /'/; " + CALL) == ["exec_command"]
+
+
+def test_a_regular_expression_after_a_division_is_read_as_one():
+    script = "1 / /'/.test(s) && tools.a({}) && 2 / /'/.test(t);"
+    assert codex_script.called_tools(script) == ["a"]
+
+
+@pytest.mark.parametrize("end", ["\r", " ", " ", "\n", "\r\n"])
+def test_a_line_comment_ends_at_any_line_terminator(end):
+    assert codex_script.called_tools("// note" + end + CALL) == ["exec_command"]
+
+
+@pytest.mark.parametrize("script", [
+    "if (a) /tools.fake_name()/.test(b); " + CALL,
+    "{ } /tools.fake_name()/.test(b); " + CALL,
+    "i++ /tools.fake_name()/.test(b); " + CALL,
+])
+def test_the_text_of_a_regular_expression_never_names_a_tool(script):
+    assert codex_script.called_tools(script) == []
+
+
+def test_a_regular_expression_that_is_certain_names_nothing_either():
+    assert codex_script.called_tools("if (/tools.fake_name()/.test(b)) { " + CALL + " }") \
+        == ["exec_command"]

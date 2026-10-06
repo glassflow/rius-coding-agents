@@ -355,25 +355,23 @@ def reads_secret_file(arguments: str) -> bool:
         json.dumps({"command": command}))
 
 
-# `process.env.HOME`, `item.key`: a property, not a file named `.env` or `*.key`.
-_PROPERTY_DOT = re.compile(r"(?<=[\w$)\]])\.(?=[A-Za-z_$])")
+# What also ends a word of a script: the punctuation of its objects and arrays.
+_SCRIPT_PUNCTUATION = re.compile(r"[,{}\[\]:]")
 
 
 def _script_reads_secret_file(script: str) -> bool:
     """Code mode's `exec` runs a script, such as
-    `tools.exec_command({cmd: "cat .env"})`, not JSON arguments: any of its
-    string literals naming a secret-shaped file, as a path or a word of a
-    command, counts as reading it. The text as a whole is checked too (apart
-    from property accesses), so a literal the scanner misread cannot hide a
-    read, and a script that is too long, or that the scanner could not read to
-    its end, is taken to."""
+    `tools.exec_command({cmd: "cat .env"})`, not JSON arguments. It reads a
+    secret file when a secret-shaped name (`.env*`, `*.pem`, `*.key`, ...)
+    stands anywhere in its text, as a path or as a word of a command: this
+    does not rest on the scanner, which is only a best effort, so it also
+    counts a property (`obj.key`) or a comment that names one. The literals the
+    scanner found are checked too. A script too long to read is taken to."""
     if len(script) > codex_script.MAX_CHARS:
         return True
-    literals, _, complete = codex_script.read(script)
-    if not complete:
-        return True
+    literals = codex_script.string_literals(script)
     return any(scrub.reads_secret_file(json.dumps({"command": text}))
-               for text in (" ".join(literals), _PROPERTY_DOT.sub(" ", script)))
+               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals)))
 
 
 _EXEC_NAME_TOOLS = 3
