@@ -248,6 +248,8 @@ def _on_mcp_result(rec, state, ctx, out):
 
 
 def _on_subagent_started(rec, state, ctx, out):
+    """multi_agent_v2: the call that started a thread is named by the event,
+    not by the call's output."""
     tool = state["open_tools"].get(rec.get("call_id"))
     if tool is not None and rec.get("agent_id"):
         state.setdefault("spawned", {})[rec.get("agent_id")] = tool["span_id"]
@@ -434,8 +436,8 @@ def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     Of the calls that may spawn and were running then, the earliest that has
     spawned nothing yet: calls running at the same time each get their own
     subagent, in the order they began, however late the others began. Any
-    other call is left to spawn_agent's output, which names the agent
-    exactly."""
+    other call is left to what names the agent exactly: spawn_agent's output,
+    or multi_agent_v2's sub_agent_activity."""
     started = [call for call in state.get("execs") or []
                if call["may_spawn"] and call["start_ns"] <= created_ns]
     running = [call for call in started
