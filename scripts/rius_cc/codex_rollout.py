@@ -26,13 +26,16 @@ MCP_RESULT = "mcp_result"
 
 
 class Record:
-    __slots__ = ("kind", "timestamp_ns", "offset", "fields")
+    """One rollout line. Read from a file, it also knows where: `path` and
+    `offset`, the start of its line."""
+    __slots__ = ("kind", "timestamp_ns", "offset", "path", "fields")
 
     def __init__(self, kind: str, timestamp_ns: int, fields: Dict[str, Any]) -> None:
         self.kind = kind
         self.timestamp_ns = timestamp_ns
         self.fields = fields
         self.offset = -1
+        self.path = ""
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.fields.get(key, default)
@@ -231,5 +234,17 @@ def read_from(path: str, offset: int) -> Tuple[List[Record], int]:
         start = nl + 1
         if record is not None:
             record.offset = line_offset
+            record.path = path
             records.append(record)
     return records, offset + start
+
+
+def read_at(path: str, offset: int) -> Optional[Record]:
+    """The record whose line starts at `offset`, or None."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            line = fh.readline()
+    except OSError:
+        return None
+    return parse_line(line.decode("utf-8", errors="replace"))

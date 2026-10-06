@@ -15,7 +15,9 @@ which is what argus-core pricing expects, so it is sent as given with
 `cached_input_tokens` as the cache-read subset. Reasoning tokens are part of
 `output_tokens` and are only reported as their own split.
 
-Everything in `state` is plain JSON, persisted between hook invocations.
+Everything in `state` is plain JSON, persisted between hook invocations, and
+holds no content: a prompt, a reply or a tool's input is read again from the
+rollout when the span it belongs to is finished (see `_hold`).
 """
 from __future__ import annotations
 
@@ -103,9 +105,26 @@ def _finished(ctx: Ctx, span_id: str, parent: Optional[str], name: str,
                 pending=False, events=events)
 
 
-def _kept(ctx: Ctx, text: str) -> str:
-    """Content that may wait in the state file: none with capture off."""
-    return text if ctx.capture_content else ""
+def _hold(ctx: Ctx, rec) -> Optional[list]:
+    """Where `rec`'s content can be read again, for when a span is finished.
+    That, not the content, is what the state keeps: it is saved in plaintext
+    on every hook event, so it never holds a prompt, a reply or a tool's
+    input."""
+    if not ctx.capture_content or not rec.path or rec.offset < 0:
+        return None
+    return [rec.path, rec.offset, rec.timestamp_ns]
+
+
+def _recall(ctx: Ctx, held: Optional[list], field: str) -> str:
+    """What `_hold` pointed at: nothing if capture is off by now, or the
+    line is no longer where it was."""
+    if not held or not ctx.capture_content:
+        return ""
+    path, offset, timestamp_ns = held
+    rec = cr.read_at(path, offset)
+    if rec is None or rec.timestamp_ns != timestamp_ns:
+        return ""
+    return rec.get(field) or ""
 
 
 def uuid7_ms(value: str) -> Optional[int]:
@@ -140,8 +159,8 @@ def _on_turn_start(rec, state, ctx, out):
         out += _close_turn(state, ctx, rec.timestamp_ns, None)
     turn_id = rec.get("turn_id")
     state["turn"] = {"turn_id": turn_id, "span_id": span_id_for("turn:" + turn_id),
-                     "start_ns": rec.timestamp_ns, "text": "", "reply": "",
-                     "llm_index": 0, "llm_start_ns": rec.timestamp_ns}
+                     "start_ns": rec.timestamp_ns, "text_at": None,
+                     "reply_at": [], "llm_index": 0, "llm_start_ns": rec.timestamp_ns}
     out.append(_pending(ctx, state["turn"]["span_id"],
                         _root_span_id(state, ctx), "turn", "CHAIN",
                         rec.timestamp_ns, {}))
@@ -149,13 +168,14 @@ def _on_turn_start(rec, state, ctx, out):
 
 def _on_user_message(rec, state, ctx, out):
     turn = state["turn"]
-    turn["text"] = _kept(ctx, rec.get("text"))
+    turn["text_at"] = _hold(ctx, rec)
     turn["llm_start_ns"] = rec.timestamp_ns
 
 
 def _on_agent_message(rec, state, ctx, out):
-    turn = state["turn"]
-    turn["reply"] += _kept(ctx, rec.get("text"))
+    held = _hold(ctx, rec)
+    if held:
+        state["turn"].setdefault("reply_at", []).append(held)
 
 
 def _usage_attrs(ctx: Ctx, model: str, rec) -> Dict[str, Any]:
@@ -183,18 +203,23 @@ def _repeats_last_call(rec, state: dict) -> bool:
     return False
 
 
+def _reply(ctx: Ctx, turn: dict) -> str:
+    return "".join(_recall(ctx, held, "text")
+                   for held in turn.get("reply_at") or [])
+
+
 def _on_usage(rec, state, ctx, out):
     if _repeats_last_call(rec, state):
         return
     turn = state["turn"]
     attrs = _usage_attrs(ctx, state["model"], rec)
-    _content_attr(ctx, attrs, "output.value", turn["reply"])
+    _content_attr(ctx, attrs, "output.value", _reply(ctx, turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
                          turn["llm_start_ns"], rec.timestamp_ns, attrs))
     turn["llm_index"] += 1
     turn["llm_start_ns"] = rec.timestamp_ns
-    turn["reply"] = ""
+    turn["reply_at"] = []
 
 
 def _on_tool_call(rec, state, ctx, out):
@@ -204,7 +229,9 @@ def _on_tool_call(rec, state, ctx, out):
     tool = {"span_id": span_id_for(call_id), "parent_span_id": _llm_span_id(state["turn"]),
             "start_ns": rec.timestamp_ns, "tool_name": name,
             "span_name": _span_name(name, wrapped),
-            "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
+            "input_at": _hold(ctx, rec),
+            "secret_file": reads_secret_file(rec.get("arguments")),
+            "mcp_failed": False, "error_at": None}
     state["open_tools"][call_id] = tool
     if name == EXEC_TOOL:
         _remember_exec(state, tool, wrapped)
@@ -216,7 +243,8 @@ def _on_tool_call(rec, state, ctx, out):
 def _on_mcp_result(rec, state, ctx, out):
     tool = state["open_tools"].get(rec.get("call_id"))
     if tool is not None and rec.get("is_error"):
-        tool["mcp_error"] = _kept(ctx, rec.get("error"))
+        tool["mcp_failed"] = True
+        tool["error_at"] = _hold(ctx, rec)
 
 
 def _command_output(output: str) -> str:
@@ -246,16 +274,17 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
     match = _EXIT_CODE.search(output.partition(_OUTPUT_MARKER)[0])
     if match and match.group(1) != "0":
         return "%s.exit_%s" % (tool["tool_name"], match.group(1))
-    if tool.get("mcp_error") is not None:
+    if tool.get("mcp_failed"):
         return tool["tool_name"] + ".tool_error"
     return None
 
 
-def _error_detail(tool: dict, output: str) -> str:
-    if tool["mcp_error"]:
-        return tool["mcp_error"]
+def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
+    error = _recall(ctx, tool.get("error_at"), "error")
+    if error:
+        return error
     body = _command_output(output)
-    return _mcp_text(body) if tool["mcp_error"] is not None else body
+    return _mcp_text(body) if tool.get("mcp_failed") else body
 
 
 def error_line(text: str) -> str:
@@ -328,6 +357,10 @@ def _name(tool: dict) -> str:
     return tool.get("span_name") or tool["tool_name"]
 
 
+def _arguments(ctx: Ctx, tool: dict) -> str:
+    return _recall(ctx, tool.get("input_at"), "arguments")
+
+
 def _on_tool_output(rec, state, ctx, out):
     tool = state["open_tools"].pop(rec.get("call_id"), None)
     if state["turn"] is not None:
@@ -340,9 +373,10 @@ def _on_tool_output(rec, state, ctx, out):
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
+    arguments = _arguments(ctx, tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
-    _content_attr(ctx, attrs, "input.value", tool["input_json"], json_text=True)
-    secret_file = reads_secret_file(tool["input_json"])
+    _content_attr(ctx, attrs, "input.value", arguments, json_text=True)
+    secret_file = tool.get("secret_file", True)    # no verdict: begun before an upgrade
     _content_attr(ctx, attrs, "output.value",
                   scrub.SECRET_FILE_MARKER if secret_file else output,
                   json_text=True)
@@ -355,7 +389,7 @@ def _on_tool_output(rec, state, ctx, out):
         elif secret_file:
             status_message = error_type
         else:
-            status_message = error_line(_error_detail(tool, output)) or error_type
+            status_message = error_line(_error_detail(ctx, tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
             "exception.type": error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
@@ -425,7 +459,7 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
         _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", tool["input_json"],
+        _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
                       json_text=True)
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                              _name(tool), "TOOL", tool["start_ns"],
@@ -447,7 +481,8 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
         if rec.get("aborted"):
             attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
         _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
-    _content_attr(ctx, attrs, "input.value", turn["text"])
+    _content_attr(ctx, attrs, "input.value",
+                  _recall(ctx, turn.get("text_at"), "text"))
     out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
                          "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
     state["turn"] = None
