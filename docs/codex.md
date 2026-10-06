@@ -86,7 +86,7 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | CHAIN `turn` | one per turn: prompt, final reply, `codex.turn.duration_ms`, `codex.turn.ttft_ms` |
 | LLM `<model>` | one per model call: `input_tokens` (includes cached), `cache_read.input_tokens`, `output_tokens`, `reasoning.output_tokens` |
 | TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>`, an MCP error is `<tool>.tool_error` |
-| AGENT `<role>` | a subagent, under the `spawn_agent` call that started it, with its own turns and calls |
+| AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
 
 Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,
 `codex.originator`. Content rules are the same as for Claude Code:
@@ -136,11 +136,14 @@ turn things off.
 - OpenAI does not report cache-write tokens, so none are sent.
 - Code mode (`code_mode_host`, on by default in codex-cli 0.144.1) runs
   every tool through one `exec` call that runs a script. Each such call is
-  one TOOL span named `exec`; the commands, patches and spawns inside it
-  get no spans of their own. Its output carries no exit code, so a failed
-  command inside `exec` reads as success. A subagent spawned inside `exec`
-  is placed under the last `exec` call begun before it was created, so with
-  two `exec` calls running at once it can land under the other one.
+  one TOOL span, named after the tools its script calls (`exec_command`,
+  `apply_patch`, `mcp__<server>__<tool>`; plain `exec` when it calls none);
+  the commands, patches and spawns inside it get no spans of their own. Its
+  output carries no exit code, so a failed command inside `exec` reads as
+  success. A subagent spawned inside `exec` goes under the call that was
+  running when it was created and whose script can spawn one; when several
+  such calls run at once and nothing in the rollout says which spawned it,
+  they take their subagents in the order they began.
 - Interrupted turns are parsed from their documented shape but were not
   seen in a recorded run.
 - A failed tool call is only marked as an error when it is a non-zero exit

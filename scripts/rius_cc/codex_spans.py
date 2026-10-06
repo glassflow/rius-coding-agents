@@ -247,6 +247,12 @@ def _on_mcp_result(rec, state, ctx, out):
         tool["error_at"] = _hold(ctx, rec)
 
 
+def _on_subagent_started(rec, state, ctx, out):
+    tool = state["open_tools"].get(rec.get("call_id"))
+    if tool is not None and rec.get("agent_id"):
+        state.setdefault("spawned", {})[rec.get("agent_id")] = tool["span_id"]
+
+
 def _command_output(output: str) -> str:
     head, marker, body = output.partition(_OUTPUT_MARKER)
     return body if marker else output
@@ -502,6 +508,7 @@ _HANDLERS = {
     cr.USAGE: _on_usage,
     cr.TOOL_CALL: _on_tool_call,
     cr.MCP_RESULT: _on_mcp_result,
+    cr.SUBAGENT_STARTED: _on_subagent_started,
     cr.TOOL_OUTPUT: _on_tool_output,
     cr.TURN_END: _on_turn_end,
 }

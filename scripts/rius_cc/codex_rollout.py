@@ -23,6 +23,7 @@ USAGE = "usage"
 TOOL_CALL = "tool_call"
 TOOL_OUTPUT = "tool_output"
 MCP_RESULT = "mcp_result"
+SUBAGENT_STARTED = "subagent_started"
 
 
 class Record:
@@ -113,6 +114,15 @@ def _mcp_result(p: Dict[str, Any]) -> Dict[str, Any]:
             "error": _text(err)}
 
 
+def _subagent_started(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """multi_agent_v2 says which call started which thread; the call's own
+    output only names the new agent by path."""
+    if p.get("kind") != "started":
+        return None
+    return {"call_id": _text(p.get("event_id")),
+            "agent_id": _text(p.get("agent_thread_id"))}
+
+
 _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]] = {
     "task_started": (TURN_START, lambda p: {"turn_id": _text(p.get("turn_id"))}),
     "task_complete": (TURN_END, _turn_end),
@@ -121,6 +131,7 @@ _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]
     "agent_message": (AGENT_MESSAGE, lambda p: {"text": _text(p.get("message"))}),
     "token_count": (USAGE, _usage),
     "mcp_tool_call_end": (MCP_RESULT, _mcp_result),
+    "sub_agent_activity": (SUBAGENT_STARTED, _subagent_started),
 }
 
 
