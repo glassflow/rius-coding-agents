@@ -176,9 +176,9 @@ ENV_FILE = ("DATABASE_URL=postgres://admin:S3cr3tPw@db.internal:5432/prod\n"
             "INTERNAL_HOST=db.internal.acme\n")
 
 
-def _exec_output(script, texts):
-    """One `exec` call and its output parts, built into a tool span with
-    content on."""
+def _exec_rows(script, texts, capture=True):
+    """One `exec` call and its output parts, built into the tool span's
+    pending and finished rows."""
     lines = [
         {"timestamp": "2026-10-05T16:14:00.000Z", "type": "session_meta",
          "payload": {"id": PARENT, "cwd": "/tmp/proj",
@@ -198,10 +198,15 @@ def _exec_output(script, texts):
     assert None not in records
     ctx = spans.Ctx(session_id=PARENT, cwd="/tmp/proj", git_branch="",
                     cc_version="", service_name="codex",
-                    capture_content=True, max_attr_bytes=32768)
+                    capture_content=capture, max_attr_bytes=32768)
     out = codex_spans.build(records, codex_spans.new_state(), ctx)
-    tool = [s for s in out if s.name == "exec" and not s.pending][0]
-    return tool.attributes["output.value"]
+    return [s for s in out if s.kind_oi == "TOOL"]
+
+
+def _exec_output(script, texts):
+    """The output of one `exec` call, built into a tool span with content on."""
+    return [s for s in _exec_rows(script, texts)
+            if not s.pending][0].attributes["output.value"]
 
 
 def test_each_exec_output_part_is_its_own_line():
@@ -239,3 +244,48 @@ def test_a_script_naming_no_secret_file_keeps_its_output():
         'const k = obj.key; text(process.env.HOME); text("ls -la")',
         ["Script completed\nOutput:\n", "INTERNAL_HOST=db.internal.acme\n"])
     assert "INTERNAL_HOST=db.internal.acme" in value
+
+
+def _exec_name(script, capture=True):
+    pending, finished = _exec_rows(script, ["Script completed\nOutput:\n"],
+                                   capture)
+    assert pending.pending and not finished.pending
+    assert pending.name == finished.name
+    assert finished.attributes["gen_ai.tool.name"] == "exec"
+    return finished.name
+
+
+def test_an_exec_span_is_named_after_the_tools_its_script_calls():
+    assert _exec_name('const r = await tools.exec_command({cmd: "ls"});'
+                      'text(r.output);') == "exec_command"
+    assert _exec_name("text(await tools.apply_patch(patch))") == "apply_patch"
+    assert _exec_name("await tools.mcp__rius__list_agents({})") \
+        == "mcp__rius__list_agents"
+
+
+def test_an_exec_that_calls_several_tools_lists_them_once_in_order():
+    script = ('await Promise.all([tools.exec_command({cmd: "a"}),'
+              ' tools.exec_command({cmd: "b"}), tools.apply_patch(p)]);')
+    assert _exec_name(script) == "exec_command, apply_patch"
+    many = " ".join("tools.t%d({});" % n for n in range(1, 6))
+    assert _exec_name(many) == "t1, t2, t3 +2"
+
+
+def test_an_exec_that_calls_no_tool_stays_exec():
+    assert _exec_name("text(ALL_TOOLS.filter(x => x.name.length > 3))") == "exec"
+    assert _exec_name("") == "exec"
+
+
+def test_what_a_script_says_in_a_string_never_names_the_span():
+    assert _exec_name('text("tools.sk_live_1234567890abcdef");') == "exec"
+    script = ("const note = 'run tools.deploy_prod now';"
+              "await tools.exec_command({cmd: `echo tools.secret_name`});")
+    assert _exec_name(script) == "exec_command"
+
+
+def test_an_exec_span_has_its_name_with_content_off_and_no_content():
+    script = 'const r = await tools.exec_command({cmd: "ls /private"});'
+    assert _exec_name(script, capture=False) == "exec_command"
+    for row in _exec_rows(script, ["Script completed\nOutput:\n"], capture=False):
+        assert "input.value" not in row.attributes
+        assert "ls /private" not in row.name

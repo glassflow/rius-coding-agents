@@ -197,15 +197,18 @@ def _on_usage(rec, state, ctx, out):
 
 def _on_tool_call(rec, state, ctx, out):
     call_id = rec.get("call_id")
+    name = rec.get("name")
+    wrapped = wrapped_tools(rec.get("arguments")) if name == EXEC_TOOL else []
     tool = {"span_id": span_id_for(call_id), "parent_span_id": _llm_span_id(state["turn"]),
-            "start_ns": rec.timestamp_ns, "tool_name": rec.get("name"),
+            "start_ns": rec.timestamp_ns, "tool_name": name,
+            "span_name": _span_name(name, wrapped),
             "input_json": _kept(ctx, rec.get("arguments")), "mcp_error": None}
     state["open_tools"][call_id] = tool
     starts = state.setdefault("tool_starts", [])
     starts.append([rec.timestamp_ns, tool["span_id"], tool["tool_name"]])
     del starts[:-_TOOL_STARTS_KEPT]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
-                        tool["tool_name"], "TOOL", rec.timestamp_ns,
+                        _name(tool), "TOOL", rec.timestamp_ns,
                         {"gen_ai.tool.name": tool["tool_name"]}))
 
 
@@ -297,6 +300,33 @@ def _script_reads_secret_file(script: str) -> bool:
     return False
 
 
+# What code mode's script calls a tool by: `tools.exec_command(...)`.
+_SCRIPT_TOOL = re.compile(r"\btools\.([A-Za-z_]\w{0,127})")
+_EXEC_NAME_TOOLS = 3
+
+
+def wrapped_tools(script: str) -> List[str]:
+    """The tools a code-mode script calls, in order, each once. Looked for
+    outside its string literals, so only a tool's name, never what the script
+    is about, can come out of it: this is safe to keep and send with content
+    off."""
+    code = _SCRIPT_STRING.sub('""', script or "")
+    return list(dict.fromkeys(_SCRIPT_TOOL.findall(code)))
+
+
+def _span_name(tool_name: str, wrapped: List[str]) -> str:
+    """Every code-mode call is `exec`, so it is named after the tools its
+    script calls instead; `exec` stays for one that calls none."""
+    if not wrapped:
+        return tool_name
+    extra = len(wrapped) - _EXEC_NAME_TOOLS
+    return ", ".join(wrapped[:_EXEC_NAME_TOOLS]) + (" +%d" % extra if extra > 0 else "")
+
+
+def _name(tool: dict) -> str:
+    return tool.get("span_name") or tool["tool_name"]
+
+
 def _on_tool_output(rec, state, ctx, out):
     tool = state["open_tools"].pop(rec.get("call_id"), None)
     if state["turn"] is not None:
@@ -327,7 +357,7 @@ def _on_tool_output(rec, state, ctx, out):
         events.append((rec.timestamp_ns, "exception", {
             "exception.type": error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                         tool["tool_name"], "TOOL", tool["start_ns"],
+                         _name(tool), "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
                          "ERROR" if error_type else "OK", status_message, events))
 
@@ -366,7 +396,7 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
         _content_attr(ctx, attrs, "input.value", tool["input_json"],
                       json_text=True)
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                             tool["tool_name"], "TOOL", tool["start_ns"],
+                             _name(tool), "TOOL", tool["start_ns"],
                              now_ns, attrs, status_code="UNSET"))
     state["open_tools"] = {}
     return out
