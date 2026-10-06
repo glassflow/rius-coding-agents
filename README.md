@@ -31,9 +31,15 @@ waterfall that fills in while the session is still running.
 
 ## What Rius sends
 
-The plugin works in Claude Code only: the terminal, the desktop app and the
-IDE extensions. It doesn't run in claude.ai or Cowork and sees nothing from
+Rius is built for Claude Code: the terminal, the desktop app and the IDE
+extensions. It doesn't run in claude.ai or Cowork and sees nothing from
 them.
+
+The same repository also ships beta support for two other coding agents,
+[Codex](#codex-beta) and [Cursor](#cursor-beta). They send the same traces to
+the same Rius hosts described below, and each keeps its own sign-in, key and
+settings. Everything in this README describes Claude Code unless it says
+otherwise.
 
 Installing it sends nothing. You sign in with `/rius:login`, then choose
 each folder to trace. Only you can run these commands: Claude can't run them
@@ -138,9 +144,9 @@ session start and `/rius:status` tell you so.
 - **A browser window at `/rius:login`**, on a desktop session only. Over SSH
   or with no display, you open the printed link yourself.
 
-Nothing runs at install. The plugin never updates itself, downloads code or
-installs packages: it is Python standard library only, and updates come only
-when you run `claude plugin update`.
+Nothing runs at install. The plugin never downloads code or installs
+packages: it is Python standard library only. See
+[Updating](#updating) for how new versions reach you.
 
 ## Quick start
 
