@@ -1,53 +1,81 @@
-"""OTLP protobuf encoding and export for span trees.
+"""OTLP/JSON encoding and export for span trees.
 
-Builds an ExportTraceServiceRequest by hand, using only the wire-format
-primitives in proto.py. No protobuf runtime dependency -- see proto.py's
-docstring for why. Field numbers and wire types are verified ground truth
-(see task-6 brief); the round-trip test decodes our bytes with the real
-opentelemetry-proto library to guarantee correctness.
+Builds an ExportTraceServiceRequest as OTLP/HTTP JSON, using only the standard
+library's json module. The receiver accepts it on the same /v1/traces endpoint
+as protobuf (RIUS-1229).
+
+The spec details that matter, each checked against the receiver's decoder:
+- traceId, spanId and parentSpanId are lowercase HEX strings, not base64.
+- 64-bit integers (timestamps, intValue) are decimal STRINGS, so a value above
+  2**53 survives a JSON number round-trip.
+- Enums (span kind, status code) are integers.
+- An AnyValue holds exactly one member (stringValue, boolValue, intValue,
+  doubleValue, arrayValue, bytesValue); the member is written even when it holds
+  0, 0.0, "" or false -- an AnyValue with nothing set means "no value".
+- bytesValue is base64.
+- NaN and the infinities are the strings "NaN", "Infinity", "-Infinity";
+  Python's json would otherwise write bare NaN, which is not JSON.
 """
 from __future__ import annotations
 
+import base64
 import json
+import math
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List
 
-from . import net, proto
+from . import net
 
 SCOPE_NAME = "glassflow"
 RETRY_DELAY_S = 0.5
+CONTENT_TYPE = "application/json"
+
+SPAN_KIND_INTERNAL = 1
+_STATUS_CODE = {"OK": 1, "ERROR": 2}
+_INT64_MIN = -(1 << 63)
+_INT64_MAX = (1 << 63) - 1
 
 
-def _any_value(value: Any) -> bytes:
-    """AnyValue.value is a oneof, so the member is written even when it holds
-    0, 0.0 or "" -- an AnyValue with nothing set means "no value"."""
+def _text(value: str) -> str:
+    # A lone surrogate is legal in a Python str but not in UTF-8.
+    return value.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _double(value: float) -> Any:
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    return value
+
+
+def _any_value(value: Any) -> Dict[str, Any]:
     # Falling through to str(value) would emit the literal string "None".
     if value is None:
-        return b""
+        return {}
     # bool MUST be checked before int -- bool is an int subclass in Python.
     if isinstance(value, bool):
-        return proto.tag(2, proto.WIRE_VARINT) + proto.varint(1 if value else 0)
+        return {"boolValue": value}
     if isinstance(value, int):
         return _int_value(value)
     if isinstance(value, float):
-        return proto.double_member(4, value)
+        return {"doubleValue": _double(value)}
     if isinstance(value, (list, tuple)):
-        inner = b"".join(proto.ld(1, _any_value(v)) for v in value)
-        return proto.ld(5, inner)
+        return {"arrayValue": {"values": [_any_value(v) for v in value]}}
     if isinstance(value, (bytes, bytearray)):
-        return proto.ld(7, bytes(value))
+        return {"bytesValue": base64.b64encode(bytes(value)).decode("ascii")}
     if isinstance(value, dict):
-        return proto.string_member(1, _json_text(value))
-    return proto.string_member(1, str(value))
+        return {"stringValue": _text(_json_text(value))}
+    return {"stringValue": _text(str(value))}
 
 
-def _int_value(value: int) -> bytes:
+def _int_value(value: int) -> Dict[str, Any]:
     # Beyond int64 there is no OTLP int that holds it; the digits survive as text.
-    if proto.INT64_MIN <= value <= proto.INT64_MAX:
-        return proto.int64_member(3, value)
-    return proto.string_member(1, str(value))
+    if _INT64_MIN <= value <= _INT64_MAX:
+        return {"intValue": str(value)}
+    return {"stringValue": str(value)}
 
 
 def _json_text(value: dict) -> str:
@@ -57,72 +85,58 @@ def _json_text(value: dict) -> str:
         return str(value)
 
 
-def _attributes(field: int, attrs: Dict[str, Any]) -> bytes:
-    out = bytearray()
-    for k, v in attrs.items():
-        payload = proto.string_field(1, k) + proto.ld(2, _any_value(v))
-        out += proto.ld(field, payload)
-    return bytes(out)
+def _attributes(attrs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [{"key": _text(k), "value": _any_value(v)} for k, v in attrs.items()]
 
 
-_STATUS_CODE = {"OK": 1, "ERROR": 2}
-
-
-def _status(status_code, status_message) -> bytes:
-    if status_code is None and not status_message:
-        return b""
-    payload = b""
+def _status(status_code, status_message) -> Dict[str, Any]:
+    status: Dict[str, Any] = {}
     if status_message:
-        payload += proto.string_field(2, status_message)
+        status["message"] = _text(status_message)
     code = _STATUS_CODE.get(status_code, 0)
     if code:
-        payload += proto.varint_field(3, code)
-    if not payload:
-        return b""
-    return proto.ld(15, payload)
+        status["code"] = code
+    return status
 
 
-def _event(time_ns: int, name: str, attrs: Dict[str, Any]) -> bytes:
-    """Span.Event: time_unix_nano=1 (fixed64), name=2, attributes=3."""
-    payload = proto.fixed64_field(1, time_ns)
-    payload += proto.string_field(2, name)
-    payload += _attributes(3, attrs)
-    return proto.ld(11, payload)
+def _event(time_ns: int, name: str, attrs: Dict[str, Any]) -> Dict[str, Any]:
+    event: Dict[str, Any] = {"timeUnixNano": str(time_ns), "name": _text(name)}
+    if attrs:
+        event["attributes"] = _attributes(attrs)
+    return event
 
 
-def _encode_span(span) -> bytes:
-    payload = b""
-    payload += proto.bytes_field(1, bytes.fromhex(span.trace_id))
-    payload += proto.bytes_field(2, bytes.fromhex(span.span_id))
+def _encode_span(span) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"traceId": span.trace_id, "spanId": span.span_id}
     if span.parent_span_id:
-        payload += proto.bytes_field(4, bytes.fromhex(span.parent_span_id))
-    payload += proto.string_field(5, span.name)
-    payload += proto.tag(6, proto.WIRE_VARINT) + proto.varint(1)  # SpanKind.INTERNAL
-    payload += proto.fixed64_field(7, span.start_ns)
-    payload += proto.fixed64_field(8, span.end_ns)
-    payload += _attributes(9, span.attributes)
-    for time_ns, name, attrs in getattr(span, "events", None) or []:
-        payload += _event(time_ns, name, attrs)
-    payload += _status(span.status_code, span.status_message)
-    return proto.ld(2, payload)
+        out["parentSpanId"] = span.parent_span_id
+    out["name"] = _text(span.name)
+    out["kind"] = SPAN_KIND_INTERNAL
+    out["startTimeUnixNano"] = str(span.start_ns)
+    out["endTimeUnixNano"] = str(span.end_ns)
+    if span.attributes:
+        out["attributes"] = _attributes(span.attributes)
+    events = [_event(*e) for e in getattr(span, "events", None) or []]
+    if events:
+        out["events"] = events
+    status = _status(span.status_code, span.status_message)
+    if status:
+        out["status"] = status
+    return out
 
 
 def encode(resource_attrs: Dict[str, object], span_list: List[Any]) -> bytes:
     if not span_list:
         return b""
-
-    scope_payload = proto.string_field(1, SCOPE_NAME)
-    spans_bytes = b"".join(_encode_span(s) for s in span_list)
-    scope_spans_payload = proto.ld(1, scope_payload) + spans_bytes
-    scope_spans = proto.ld(2, scope_spans_payload)
-
-    resource_payload = _attributes(1, resource_attrs)
-    resource = proto.ld(1, resource_payload)
-
-    resource_spans_payload = resource + scope_spans
-    resource_spans = proto.ld(1, resource_spans_payload)
-
-    return resource_spans
+    request = {"resourceSpans": [{
+        "resource": {"attributes": _attributes(resource_attrs)},
+        "scopeSpans": [{
+            "scope": {"name": SCOPE_NAME},
+            "spans": [_encode_span(s) for s in span_list],
+        }],
+    }]}
+    return json.dumps(request, ensure_ascii=False, allow_nan=False,
+                      separators=(",", ":")).encode("utf-8")
 
 
 def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0,
@@ -137,7 +151,7 @@ def export(endpoint: str, api_key: str, body: bytes, timeout: float = 5.0,
     exists for, and it needs a moment.
     """
     headers = {
-        "Content-Type": "application/x-protobuf",
+        "Content-Type": CONTENT_TYPE,
         "Authorization": "Bearer " + api_key,
     }
     url = endpoint.rstrip("/") + "/v1/traces"

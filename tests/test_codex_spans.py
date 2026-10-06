@@ -344,13 +344,10 @@ def test_resource_attributes_come_from_the_session(fixtures_dir):
 
 def test_spans_decode_as_otlp(fixtures_dir):
     pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
-    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-        ExportTraceServiceRequest,
-    )
+    from tests import otlp_json
     out, state = _build(fixtures_dir)
     body = otlp.encode(dict(cs.resource_attributes(state), **{"service.name": "codex"}), out)
-    req = ExportTraceServiceRequest()
-    req.ParseFromString(body)
+    req = otlp_json.to_request(body)
     decoded = req.resource_spans[0].scope_spans[0].spans
     assert len(decoded) == len(out)
     llm = [s for s in decoded if s.name == "mock-model"][0]

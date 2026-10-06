@@ -17,9 +17,7 @@ from tests.signed_in import sign_in
 from tests.platforms import BASH, minimal_env, posix_only
 
 pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
-    ExportTraceServiceRequest,
-)
+from tests import otlp_json  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
 LAUNCHER = str(ROOT / "scripts" / "hook.sh")
@@ -61,8 +59,7 @@ def _latest_spans():
     """Each span's last version, as the backend keeps it."""
     latest = {}
     for _, body in Receiver.bodies:
-        req = ExportTraceServiceRequest()
-        req.ParseFromString(body)
+        req = otlp_json.to_request(body)
         for rs in req.resource_spans:
             resource = _attrs(rs.resource)
             for span in rs.scope_spans[0].spans:

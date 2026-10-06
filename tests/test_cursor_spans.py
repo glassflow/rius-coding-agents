@@ -220,14 +220,12 @@ def test_resource_attributes(tmp_path):
 
 def test_spans_encode_and_decode_as_otlp(tmp_path):
     pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
-    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-        ExportTraceServiceRequest)
+    from tests import otlp_json
 
     cid = spool("docs_session", tmp_path)
     events = cursor_events.read_conversation(str(tmp_path), cid)
     out = cursor_spans.build(events, cursor_spans.Ctx(cid, True, 32768))
-    req = ExportTraceServiceRequest()
-    req.ParseFromString(otlp.encode(cursor_spans.resource_attributes(events), out))
+    req = otlp_json.to_request(otlp.encode(cursor_spans.resource_attributes(events), out))
 
     decoded = req.resource_spans[0].scope_spans[0].spans
     assert len(decoded) == len(out)

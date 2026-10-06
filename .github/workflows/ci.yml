@@ -28,7 +28,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install test-only dependencies
         # opentelemetry-proto is TEST-ONLY and never ships. It is what pins our
-        # hand-rolled OTLP encoder to the real wire format.
+        # OTLP/JSON encoder to the real OTLP message definitions.
         run: python -m pip install --upgrade pip 'pytest>=7.0' 'opentelemetry-proto==1.43.0'
       - run: python -m pytest -q
 
@@ -53,7 +53,7 @@ jobs:
     # The shipped plugin runs under whatever `python3` a user already has, via
     # a shebang. 3.9 is the floor we support, and opentelemetry-proto needs
     # 3.10+, so this job proves the SHIPPED code runs on 3.9 even though the
-    # proto round-trip tests skip themselves here.
+    # OTLP round-trip tests skip themselves here.
     name: runtime floor (py3.9, no proto)
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +71,7 @@ jobs:
           for f in files:
               ast.parse(pathlib.Path(f).read_text(), filename=f)
           sys.path.insert(0, "scripts")
-          for mod in ("rius_cc.proto", "rius_cc.transcript", "rius_cc.spans",
+          for mod in ("rius_cc.transcript", "rius_cc.spans",
                       "rius_cc.config", "rius_cc.state", "rius_cc.otlp",
                       "rius_cc.subagents", "rius_cc.agent",
                       "rius_cc.codex_rollout", "rius_cc.codex_spans",
@@ -100,7 +100,7 @@ jobs:
           python - <<'PY'
           import ast, glob, pathlib, sys
           stdlib = set(sys.stdlib_module_names)
-          local = {"rius_cc", "proto", "transcript", "spans", "config", "state",
+          local = {"rius_cc", "transcript", "spans", "config", "state",
                    "otlp", "subagents", "log", "exporter", "heartbeat"}
           bad = []
           for f in sorted(glob.glob("scripts/**/*.py", recursive=True)):

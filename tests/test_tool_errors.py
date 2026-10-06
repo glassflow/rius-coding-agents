@@ -104,11 +104,9 @@ def test_a_successful_tool_has_no_event(fixtures_dir):
 
 def test_the_event_survives_the_wire(fixtures_dir):
     pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
-    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-        ExportTraceServiceRequest)
+    from tests import otlp_json
     span = _tool(fixtures_dir, "toolu_py")
-    req = ExportTraceServiceRequest()
-    req.ParseFromString(otlp.encode({"service.name": "claude-code"}, [span]))
+    req = otlp_json.to_request(otlp.encode({"service.name": "claude-code"}, [span]))
     got = req.resource_spans[0].scope_spans[0].spans[0]
     assert len(got.events) == 1
     event = got.events[0]

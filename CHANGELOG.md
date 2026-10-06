@@ -9,6 +9,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 Fixes for the Codex and Cursor betas. Claude Code: no change in what is
 traced or sent.
 
+### All agents
+
+- Traces are now sent as OTLP/JSON (`application/json`) instead of OTLP
+  protobuf, so the wire format is readable text and the hand-written binary
+  encoder is gone. The receiver has accepted both since 2026-10-05. Same
+  spans, same attributes; nothing changes in what is traced.
+
 ### Codex (beta)
 
 - A code-mode tool span is now named after the tools its script calls

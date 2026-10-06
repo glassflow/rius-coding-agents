@@ -383,9 +383,9 @@ def test_subagent_spans_reach_the_wire(home, captured, fixtures_dir):
     n = exporter.run("Stop", _sub_payload(fixtures_dir, "Stop"), ENV, home)
     assert n > 0
     body = captured[0][2]
-    # span ids go on the wire as raw bytes, not as their hex spelling
-    assert bytes.fromhex(_spans.span_id_for("subagent:agent-aaa111")) in body
-    assert bytes.fromhex(_spans.span_id_for("subagent:agent-bbb222")) in body
+    # span ids go on the wire as hex text, the OTLP/JSON spelling
+    assert ('"spanId":"%s"' % _spans.span_id_for("subagent:agent-aaa111")).encode() in body
+    assert ('"spanId":"%s"' % _spans.span_id_for("subagent:agent-bbb222")).encode() in body
     assert b"gen_ai.agent.name" in body and b"general-purpose" in body
     assert b"claude-haiku-4-5-20251001" in body   # the subagent's own model
 

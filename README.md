@@ -497,8 +497,8 @@ python -m pytest -q
 claude plugin validate .
 ```
 
-`opentelemetry-proto` is test-only: it checks the hand-written OTLP encoder
-against the real wire format and never ships.
+`opentelemetry-proto` is test-only: it checks that the OTLP/JSON the plugin
+sends decodes into the real OTLP messages, and never ships.
 
 ## License
 

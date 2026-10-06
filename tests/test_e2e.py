@@ -18,9 +18,7 @@ from tests.platforms import minimal_env
 from tests.signed_in import sign_in
 
 pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
-    ExportTraceServiceRequest,
-)
+from tests import otlp_json  # noqa: E402
 
 ROOT = pathlib.Path(__file__).parent.parent
 HOOK = str(ROOT / "scripts" / "hook.py")
@@ -79,10 +77,9 @@ def test_hook_to_receiver_full_path(server, tmp_path, fixtures_dir):
     got = received[0]
     assert got["path"] == "/v1/traces"
     assert got["auth"] == "Bearer glassflow_testkey"
-    assert got["ctype"] == "application/x-protobuf"
+    assert got["ctype"] == "application/json"
 
-    req = ExportTraceServiceRequest()
-    req.ParseFromString(got["body"])
+    req = otlp_json.to_request(got["body"])
     spans_out = req.resource_spans[0].scope_spans[0].spans
     assert req.resource_spans[0].scope_spans[0].scope.name == "glassflow"
 
