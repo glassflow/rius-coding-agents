@@ -1,7 +1,8 @@
-"""Decode our hand-rolled encoder's output with the REAL library.
+"""Decode our OTLP/JSON output into the REAL opentelemetry-proto messages.
 
 opentelemetry-proto is a test-only dependency. It never ships. Its entire job
-is to make it impossible for a field number or wire type to drift silently.
+is to make it impossible for a field name or JSON shape to drift silently:
+json_format.ParseDict rejects unknown fields and wrongly typed values.
 """
 import json
 
@@ -15,11 +16,9 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: 
     ExportTraceServiceRequest,
 )
 
+from tests import otlp_json  # noqa: E402
 
-def _decode(body):
-    req = ExportTraceServiceRequest()
-    req.ParseFromString(body)
-    return req
+_decode = otlp_json.to_request
 
 
 def test_roundtrip_full_span():
@@ -137,17 +136,17 @@ def test_roundtrip_dict_is_json_text_and_bytes_are_bytes():
     assert attrs["raw"].bytes_value == b"\x00\x01"
 
 
-def test_bytes_identical_to_reference_serializer_with_zero_values():
-    """Default omission elsewhere and always-emit inside the oneof are what
-    the reference serializer does; the bytes must match exactly."""
+def test_message_equals_the_reference_message_with_zero_values():
+    """Build the expected message straight from the protobuf classes and
+    compare it whole: every field, zero and empty value included."""
     from opentelemetry.proto.common.v1.common_pb2 import AnyValue, ArrayValue, KeyValue
     from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, Span as PbSpan
 
     attributes = {"i": 0, "d": 0.0, "s": "", "b": False, "arr": [0, ""], "n": 7}
-    ours = otlp.encode({}, [spans.Span(
+    ours = _decode(otlp.encode({}, [spans.Span(
         trace_id="a" * 32, span_id="b" * 16, parent_span_id=None, name="n",
         kind_oi="LLM", start_ns=1, end_ns=2, attributes=attributes,
-        status_code=None, status_message=None, pending=False)])
+        status_code=None, status_message=None, pending=False)]))
 
     rs = ResourceSpans()
     rs.resource.SetInParent()
@@ -166,5 +165,36 @@ def test_bytes_identical_to_reference_serializer_with_zero_values():
             AnyValue(int_value=0), AnyValue(string_value="")]))),
         KeyValue(key="n", value=AnyValue(int_value=7)),
     ])
-    req = ExportTraceServiceRequest(resource_spans=[rs])
-    assert ours == req.SerializeToString(deterministic=True)
+    expected = ExportTraceServiceRequest(resource_spans=[rs])
+    assert ours.SerializeToString(deterministic=True) == \
+        expected.SerializeToString(deterministic=True)
+
+
+def test_roundtrip_events_and_non_finite_doubles():
+    s = spans.Span(trace_id="a" * 32, span_id="b" * 16, parent_span_id=None,
+                   name="n", kind_oi="LLM", start_ns=1, end_ns=2,
+                   attributes={"nan": float("nan"), "inf": float("inf")},
+                   status_code=None, status_message=None, pending=False)
+    s.events = [(1758535201000000000, "ev", {"k": 0, "t": "x"})]
+    got = _decode(otlp.encode({}, [s])).resource_spans[0].scope_spans[0].spans[0]
+    attrs = {kv.key: kv.value for kv in got.attributes}
+    assert attrs["nan"].double_value != attrs["nan"].double_value
+    assert attrs["inf"].double_value == float("inf")
+    ev = got.events[0]
+    assert (ev.time_unix_nano, ev.name) == (1758535201000000000, "ev")
+    assert {kv.key: kv.value.WhichOneof("value") for kv in ev.attributes} == {
+        "k": "int_value", "t": "string_value"}
+
+
+def test_roundtrip_fails_on_base64_ids():
+    """The helper must be as strict as the receiver: an id that is not lowercase
+    hex of the right length is an error, never silently accepted."""
+    import base64
+    good = json.loads(otlp.encode({}, [spans.Span(
+        trace_id="a" * 32, span_id="b" * 16, parent_span_id=None, name="n",
+        kind_oi="LLM", start_ns=1, end_ns=2, attributes={}, status_code=None,
+        status_message=None, pending=False)]))
+    sp = good["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    sp["traceId"] = base64.b64encode(bytes.fromhex("a" * 32)).decode()
+    with pytest.raises(AssertionError):
+        _decode(json.dumps(good).encode())

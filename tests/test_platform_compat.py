@@ -555,7 +555,7 @@ def test_every_shipped_module_imports_without_fcntl(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     shipped = ("rius_cc.platform_compat", "rius_cc.state", "rius_cc.config",
-               "rius_cc.log", "rius_cc.otlp", "rius_cc.proto",
+               "rius_cc.log", "rius_cc.otlp",
                "rius_cc.spans", "rius_cc.subagents", "rius_cc.transcript")
     # Reimporting rebinds BOTH sys.modules and the rius_cc package's
     # attributes, and other test modules already hold references to the
