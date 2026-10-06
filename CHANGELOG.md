@@ -4,7 +4,39 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.6.0 (unreleased)
+## 0.6.1 (unreleased)
+
+Fixes for the Codex and Cursor betas. Claude Code: no change in what is
+traced or sent.
+
+### Codex (beta)
+
+- A code-mode tool span is now named after the tools its script calls
+  (`exec_command`, `apply_patch`, `mcp__server__tool`) instead of every
+  span being `exec`. Only identifiers outside string literals reach the
+  name, so it is the same with content capture off.
+- When several code-mode calls run at once, a subagent is placed under the
+  call that spawned it rather than the last one begun.
+- With the opt-in `multi_agent_v2`, subagents are no longer dropped from
+  the trace.
+- The state file no longer holds turn text, replies, tool input or MCP
+  errors while content capture is on. It keeps a reference into the
+  rollout and the text is read back when the span is finished.
+
+### Cursor (beta)
+
+- A subagent started in a `cursor-agent --resume` run is now sent. Cursor
+  does not fire `sessionStart` on resume, so the subagent is linked to the
+  chat in the same folder that is waiting on a Task call.
+
+### Both
+
+- The `rius_ctl` usage text lists every action with the flags it takes,
+  and the `--path` label says it is the path of a hooks.json file.
+- The "no key" hints tell Codex and Cursor users to run `use-key` with
+  `--agent`, so the key lands where their agent looks for it.
+
+## 0.6.0 (2026-10-05)
 
 Rius for Codex and Cursor, in beta, with the 0.5.0 hardening applied to
 both. Claude Code: no change in what is traced or sent.
