@@ -406,3 +406,16 @@ def test_a_folder_that_is_off_still_follows_an_env_that_names_a_parent(home):
     _fire(home, [dict(_first_event_of(CHILD))],
           {cursor_hook.SESSION_ENV: PARENT})
     assert cursor_events.linked_children(sdir, PARENT) == [CHILD]
+
+
+def test_a_chat_turned_off_keeps_its_subagents_untraced_too(home):
+    _set_up(home)
+    sdir = cursor_export.spool_dir(str(home))
+    _spool(_until_the_task_call(), sdir)
+    env = {cursor_hook.SESSION_ENV: PARENT}
+    config.set_session_override(PARENT, str(home), False)
+    _fire(home, [_first_event_of(CHILD)], env)
+    assert not os.path.exists(cursor_events.spool_path(sdir, CHILD))
+    config.set_session_override(PARENT, str(home), None)
+    _fire(home, [_first_event_of(CHILD, tool_use_id="again")], env)
+    assert os.path.exists(cursor_events.spool_path(sdir, CHILD))
