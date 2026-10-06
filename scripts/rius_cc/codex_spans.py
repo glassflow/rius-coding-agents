@@ -473,9 +473,11 @@ def _awaits_spawn_output(state: dict) -> bool:
                for tool in state["open_tools"].values())
 
 
-def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
+def spawning_tool(state: dict, created_ns: int,
+                  closing: bool = False) -> Optional[str]:
     """The span id of the `exec` call that spawned a subagent created at
-    `created_ns`, or None while a spawn_agent call is still open. In code
+    `created_ns`, or None while a spawn_agent call is still open (unless the
+    trace is `closing`: nothing more will say). In code
     mode (`code_mode_host`, on by default) a spawn runs inside an `exec` call
     whose output need not name the agent, so what is left to go by is when
     the agent was created and what the scripts say. The calls that were
@@ -484,7 +486,7 @@ def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     earliest that has spawned nothing yet: calls running at the same time
     each get their own subagent, in the order they began, however late the
     others began."""
-    if _awaits_spawn_output(state):
+    if not closing and _awaits_spawn_output(state):
         return None
     begun = [call for call in state.get("execs") or []
              if call["start_ns"] <= created_ns]
@@ -496,6 +498,13 @@ def spawning_tool(state: dict, created_ns: int) -> Optional[str]:
     free = [call for call in candidates if call["span_id"] not in held]
     chosen = (free or candidates)[:1]
     return chosen[0]["span_id"] if chosen else None
+
+
+def adopting_span(state: dict, ctx: Ctx) -> str:
+    """The span a subagent that no call can be found for hangs under when
+    the trace is closing: its spawner's open turn, else its root."""
+    turn = state.get("turn")
+    return turn["span_id"] if turn else _root_span_id(state, ctx)
 
 
 def _spawners(calls: List[dict]) -> List[dict]:

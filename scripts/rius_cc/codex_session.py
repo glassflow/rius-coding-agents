@@ -126,11 +126,18 @@ def _spawned(st: dict) -> Dict[str, str]:
     return spawned
 
 
-def _build_subagents(st: dict, ctx: Ctx) -> List[Span]:
+def _build_subagents(st: dict, ctx: Ctx, closing: bool = False) -> List[Span]:
     out: List[Span] = []
     built = set()
+    # What the subagents already placed have written comes first: a
+    # grandchild is placed by the state of the agent that spawned it, which
+    # must not be older than that agent's rollout.
+    for agent_id, parent_span_id in _spawned(st).items():
+        if (st["codex_subs"].get(agent_id) or {}).get("state") is not None:
+            built.add(agent_id)
+            out += _build_subagent(st, ctx, agent_id, parent_span_id)
     for _ in range(_MAX_LINK_ROUNDS):
-        _link_unspawned(st)
+        _link_unspawned(st, ctx, closing)
         todo = [(agent_id, parent) for agent_id, parent in _spawned(st).items()
                 if agent_id not in built]
         if not todo:
@@ -181,22 +188,31 @@ def _with_path(st: dict, agent_id: str) -> Optional[dict]:
     return sub
 
 
-def _link_unspawned(st: dict) -> None:
+def _link_unspawned(st: dict, ctx: Ctx, closing: bool = False) -> None:
     """Hang each subagent a hook named, but no spawn_agent output did, under
     the call that spawned it. In code mode the spawn runs inside an `exec`
     call, so its rollout's own session record says which agent spawned it
-    and its thread id (a UUIDv7) when."""
+    and its thread id (a UUIDv7) when. A trace that is closing waits for
+    nothing: a subagent whose rollout exists is placed, if need be under
+    the turn, or the root, of the agent that spawned it."""
     spawned = _spawned(st)
     for agent_id in _oldest_first(st["codex_subs"]):
         if agent_id in spawned or not state.is_valid_session_id(agent_id):
             continue
         created_ms = codex_spans.uuid7_ms(agent_id)
         sub = _with_path(st, agent_id)
-        session = codex_rollout.read_session(sub["path"]) if sub else None
-        if created_ms is None or session is None:
+        if sub is None:
             continue
-        spawner = _spawner_state(st, session.get("parent_thread_id"))
-        tool = spawner and codex_spans.spawning_tool(spawner, created_ms * 10**6)
+        session = codex_rollout.read_session(sub["path"])
+        if not closing and (created_ms is None or session is None):
+            continue
+        spawner = _spawner_state(st, session.get("parent_thread_id") if session else "")
+        spawner = spawner or (st if closing else None)
+        if spawner is None:
+            continue
+        tool = codex_spans.spawning_tool(spawner, (created_ms or 0) * 10**6, closing)
+        if closing and not tool:
+            tool = codex_spans.adopting_span(spawner, ctx)
         if tool:
             spawner.setdefault("spawned", {})[agent_id] = tool
 
@@ -231,8 +247,14 @@ def _beside_parent(st: dict, agent_id: str) -> str:
 
 
 def finalize(st: dict, ctx: Ctx, end_ns: int) -> List[Span]:
-    """Close every open span of the session and of its subagents."""
+    """Close every open span of the session and of its subagents. A subagent
+    that was never placed (the session died while its spawn call was open,
+    say) is placed first, and its rollout read, so that it is not lost with
+    its tokens; a session that was stopped, though, sends nothing more."""
     out: List[Span] = []
+    if not st.get("content_stopped"):
+        out += _build_subagents(st, ctx, closing=True)
+        end_ns = max(end_ns, st.get("last_ns") or 0)
     for sub in st["codex_subs"].values():
         if sub.get("state") is not None:
             out += codex_spans.finalize_session(sub["state"], ctx, end_ns)
