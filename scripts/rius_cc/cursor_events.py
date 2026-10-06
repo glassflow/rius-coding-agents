@@ -20,7 +20,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from . import scrub
 from .spans import exportable
@@ -128,7 +128,8 @@ def shell_exit_code(tool_output: Any) -> Optional[int]:
     if isinstance(tool_output, str):
         try:
             tool_output = json.loads(tool_output)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # A string of 12000 "[" is not JSON Python can parse.
             return None
     if not isinstance(tool_output, dict):
         return None
@@ -286,19 +287,17 @@ def call_id(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
-def read_link(path: str) -> Tuple[str, str]:
-    """(parent conversation, Task call it answers) from a `.parent` sidecar.
-    The Task call is "" for a link made without one."""
+def read_link(path: str) -> str:
+    """The parent conversation a `.parent` sidecar names, "" if unreadable."""
     try:
         with open(path, encoding="utf-8") as fh:
-            parent, _, task = fh.read().partition("\n")
+            return fh.read().partition("\n")[0].strip()
     except (OSError, UnicodeDecodeError):
-        return "", ""
-    return parent.strip(), task.strip()
+        return ""
 
 
-def read_links(spool_dir: str) -> Dict[str, Tuple[str, str]]:
-    """Every subagent's (parent, Task call it answers), by subagent id."""
+def read_links(spool_dir: str) -> Dict[str, str]:
+    """Every subagent's parent conversation, by subagent id."""
     try:
         names = os.listdir(spool_dir)
     except OSError:
@@ -314,7 +313,7 @@ def read_links(spool_dir: str) -> Dict[str, Tuple[str, str]]:
 def linked_children(spool_dir: str, conversation_id: str) -> List[str]:
     """Conversations whose `.parent` sidecar names this one: subagents
     linked without a subagentStart (cursor_hook.link_headless_subagent)."""
-    return sorted(child for child, (parent, _) in read_links(spool_dir).items()
+    return sorted(child for child, parent in read_links(spool_dir).items()
                   if parent == conversation_id and child != conversation_id)
 
 
