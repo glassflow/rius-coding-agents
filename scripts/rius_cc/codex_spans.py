@@ -115,10 +115,10 @@ def _hold(ctx: Ctx, rec) -> Optional[list]:
     return [rec.path, rec.offset, rec.timestamp_ns]
 
 
-def _recall(ctx: Ctx, held: Optional[list], field: str) -> str:
-    """What `_hold` pointed at: nothing if capture is off by now, or the
-    line is no longer where it was."""
-    if not held or not ctx.capture_content:
+def _recall(held: Optional[list], field: str) -> str:
+    """What `_hold` pointed at, or nothing if the line is no longer there.
+    Whether it may be sent is `_content_attr`'s to say, as ever."""
+    if not held:
         return ""
     path, offset, timestamp_ns = held
     rec = cr.read_at(path, offset)
@@ -203,8 +203,8 @@ def _repeats_last_call(rec, state: dict) -> bool:
     return False
 
 
-def _reply(ctx: Ctx, turn: dict) -> str:
-    return "".join(_recall(ctx, held, "text")
+def _reply(turn: dict) -> str:
+    return "".join(_recall(held, "text")
                    for held in turn.get("reply_at") or [])
 
 
@@ -213,7 +213,7 @@ def _on_usage(rec, state, ctx, out):
         return
     turn = state["turn"]
     attrs = _usage_attrs(ctx, state["model"], rec)
-    _content_attr(ctx, attrs, "output.value", _reply(ctx, turn))
+    _content_attr(ctx, attrs, "output.value", _reply(turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
                          turn["llm_start_ns"], rec.timestamp_ns, attrs))
@@ -279,8 +279,8 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
     return None
 
 
-def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
-    error = _recall(ctx, tool.get("error_at"), "error")
+def _error_detail(tool: dict, output: str) -> str:
+    error = _recall(tool.get("error_at"), "error")
     if error:
         return error
     body = _command_output(output)
@@ -357,8 +357,8 @@ def _name(tool: dict) -> str:
     return tool.get("span_name") or tool["tool_name"]
 
 
-def _arguments(ctx: Ctx, tool: dict) -> str:
-    return _recall(ctx, tool.get("input_at"), "arguments")
+def _arguments(tool: dict) -> str:
+    return _recall(tool.get("input_at"), "arguments")
 
 
 def _on_tool_output(rec, state, ctx, out):
@@ -373,7 +373,7 @@ def _on_tool_output(rec, state, ctx, out):
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
-    arguments = _arguments(ctx, tool)
+    arguments = _arguments(tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
     _content_attr(ctx, attrs, "input.value", arguments, json_text=True)
     secret_file = tool.get("secret_file", True)    # no verdict: begun before an upgrade
@@ -389,7 +389,7 @@ def _on_tool_output(rec, state, ctx, out):
         elif secret_file:
             status_message = error_type
         else:
-            status_message = error_line(_error_detail(ctx, tool, output)) or error_type
+            status_message = error_line(_error_detail(tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
             "exception.type": error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
@@ -459,7 +459,7 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
         _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
+        _content_attr(ctx, attrs, "input.value", _arguments(tool),
                       json_text=True)
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                              _name(tool), "TOOL", tool["start_ns"],
@@ -482,7 +482,7 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
             attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
         _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
     _content_attr(ctx, attrs, "input.value",
-                  _recall(ctx, turn.get("text_at"), "text"))
+                  _recall(turn.get("text_at"), "text"))
     out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
                          "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
     state["turn"] = None

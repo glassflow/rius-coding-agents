@@ -238,9 +238,9 @@ def test_a_line_that_is_not_where_it_was_is_not_read_as_content(tmp_path):
     record = cr.read_from(str(rollout), 0)[0][0]
     ctx = _ctx(capture=True)
     here = cs._hold(ctx, record)
-    assert cs._recall(ctx, here, "text") == "an unrelated prompt"
-    assert cs._recall(ctx, [here[0], here[1], here[2] + 1], "text") == ""
-    assert cs._recall(ctx, [str(tmp_path / "gone"), 0, here[2]], "text") == ""
+    assert cs._recall(here, "text") == "an unrelated prompt"
+    assert cs._recall([here[0], here[1], here[2] + 1], "text") == ""
+    assert cs._recall([str(tmp_path / "gone"), 0, here[2]], "text") == ""
 
 
 @pytest.mark.parametrize("chunks", [[5], [12, 13], [9, 18, 27, 36], list(range(1, 46))])
