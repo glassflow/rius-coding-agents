@@ -70,7 +70,7 @@ def _note_spawn(st: dict, payload: Mapping[str, Any]) -> None:
     if isinstance(response, str):
         try:
             response = json.loads(response)
-        except ValueError:
+        except (ValueError, RecursionError):
             return
     child = response.get("agent_id") if isinstance(response, dict) else None
     if isinstance(child, str) and state.is_valid_session_id(child):

@@ -15,12 +15,13 @@ from rius_cc import codex_rollout, codex_script, codex_spans, scrub, spans, stat
 from tests.test_codex_export import ENV, codex_home, exporter, sent  # noqa: F401
 
 CALL = 'await tools.exec_command({cmd: "ls"});'
+# Shaped like a live key, made of nothing: it must be built here, not typed.
+FAKE_KEY = "sk_live_" + "s" * 24
 # Each of these once put text of the script itself into the span name.
 LOOKS_LIKE_A_CALL_BUT_IS_NOT = [
     ('const note = "email the board about tools.project_falcon_layoffs"; ' + CALL),
     ("const note = 'tools.project_falcon_layoffs('; " + CALL),
-    ('const re = /"/; const note = "deploy key tools.sk_live_' '4eC39HqLyjWDarjtT1zdp7dc("; '
-     + CALL),
+    ('const re = /"/; const note = "deploy key tools.' + FAKE_KEY + '("; ' + CALL),
     ('const p = out.split(/"/); const note = "tools.project_falcon_layoffs()"; ' + CALL),
     "// note tools.hunter2_the_customer_is_AcmeCorp()\n" + CALL,
     "// press ` to open the menu\nconst msg = `deploy tools.acme_secret_merger() now`; " + CALL,
@@ -119,7 +120,7 @@ def test_an_unreadable_script_is_plain_exec_with_nothing_of_it_in_the_name():
 
 
 def test_a_name_goes_through_the_scrubber():
-    key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+    key = FAKE_KEY
     assert key not in scrub.scrub("tools." + key)
     out, state = _tool_call_spans("await tools.%s({});" % key)
     name = [s for s in out if s.kind_oi == "TOOL"][0].name
@@ -209,3 +210,32 @@ def test_a_session_with_a_deeply_nested_call_still_exports_and_saves_its_state(
     tools = [s for _, out in sent for s in out if s.kind_oi == "TOOL" and not s.pending]
     assert len(tools) == 1
     assert "ONLY_IN_THE_OUTPUT" not in json.dumps(tools[0].attributes)
+
+
+# --- JSON nested deeper than the parser reads --------------------------------
+
+DEEP = "[" * 12000 + "]" * 12000
+
+
+def test_a_rollout_line_nested_too_deep_is_skipped_not_raised():
+    assert codex_rollout.parse_line(DEEP) is None
+
+
+def test_a_spawn_output_nested_too_deep_names_no_agent():
+    state = codex_spans.new_state()
+    codex_spans.build([
+        codex_rollout.Record(codex_rollout.TURN_START, 1, {"turn_id": "t1"}),
+        codex_rollout.Record(codex_rollout.TOOL_CALL, 2, {
+            "call_id": "c1", "name": codex_spans.SPAWN_TOOL, "arguments": "{}"}),
+        codex_rollout.Record(codex_rollout.TOOL_OUTPUT, 3, {
+            "call_id": "c1", "output": DEEP})], state, _ctx(False))
+    assert state["spawned"] == {}
+
+
+def test_a_spawn_hook_response_nested_too_deep_is_ignored():
+    from rius_cc import codex_session
+    st = codex_session.load({})
+    codex_session.note_payload(st, "PostToolUse", {
+        "tool_name": "spawn_agent", "tool_response": DEEP,
+        "transcript_path": "/tmp/rollout-x.jsonl"})
+    assert st["codex_subs"] == {}

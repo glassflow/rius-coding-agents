@@ -496,7 +496,7 @@ def _note_spawned(state: dict, tool: dict, output: str) -> None:
     """spawn_agent answers with the new agent's id, which names its rollout."""
     try:
         agent_id = json.loads(output).get("agent_id")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return
     if isinstance(agent_id, str) and agent_id:
         state.setdefault("spawned", {})[agent_id] = tool["span_id"]
