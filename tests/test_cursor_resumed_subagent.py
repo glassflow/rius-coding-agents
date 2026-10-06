@@ -92,7 +92,7 @@ def _leave_a_stale_empty_claim(sdir, call, parent=PARENT):
     path = cursor_export._claim_path(str(sdir), parent, call)
     os.makedirs(str(sdir), exist_ok=True)
     open(path, "w").close()
-    old = time.time() - 2 * cursor_export.CLAIM_STALE_S
+    old = time.time() - 60
     os.utime(path, (old, old))
     return path
 
@@ -620,7 +620,7 @@ def test_an_old_claim_with_a_holder_is_never_passed_over(tmp_path):
     sdir = str(tmp_path)
     assert cursor_export.claim_task_call(sdir, PARENT, "call-1", CHILD)
     path = cursor_export._claim_path(sdir, PARENT, "call-1")
-    old = time.time() - 10 * cursor_export.CLAIM_STALE_S
+    old = time.time() - 3600
     os.utime(path, (old, old))
     assert not cursor_export.claim_task_call(sdir, PARENT, "call-1", STRANGER)
     assert not os.path.exists(cursor_export._claim_path(sdir, PARENT,
@@ -658,3 +658,33 @@ def test_a_claim_of_a_later_generation_goes_with_its_conversation(tmp_path):
     assert cursor_export.prune(sdir, [], now_s=later) == 3
     assert os.listdir(sdir) == []
 
+
+
+def test_a_claim_goes_stale_after_a_few_seconds():
+    assert 2 <= cursor_export.CLAIM_STALE_S <= 30
+
+
+def test_hooks_finding_the_same_stale_claim_end_with_one_holder(tmp_path):
+    """Two hooks that both find an empty claim stale must not both take the
+    call, however their steps interleave."""
+    both_lost = []
+    for i in range(1500):
+        sdir = str(tmp_path / ("d%d" % i))
+        _leave_a_stale_empty_claim(sdir, "call-1")
+        gate = threading.Barrier(2)
+        results = {}
+
+        def hook(child):
+            gate.wait()
+            results[child] = cursor_export.claim_task_call(
+                sdir, PARENT, "call-1", child)
+
+        hooks = [threading.Thread(target=hook, args=(child,))
+                 for child in (CHILD, STRANGER)]
+        for thread in hooks:
+            thread.start()
+        for thread in hooks:
+            thread.join()
+        if sorted(results.values()) != [False, True]:
+            both_lost.append(results)
+    assert both_lost == []
