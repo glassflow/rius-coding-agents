@@ -43,6 +43,8 @@ class AgentProfile:
     # Claude Code runs a hook through a shell, so its pid is hook.py's
     # grandparent; Codex runs the hook command itself.
     hook_parent_is_agent: bool = False
+    # Cursor's hooks carry no token counts.
+    sends_tokens: bool = True
 
     def rius_dir(self, home: str) -> str:
         """Where this agent's key, settings and state live: under the OS
@@ -69,7 +71,10 @@ class AgentProfile:
         agent's."""
         if self is CLAUDE_CODE:
             return text
+        if not self.sends_tokens:
+            text = text.replace("(models, tokens, timing)", "(models, timing)")
         return (text.replace(CLAUDE_CODE.command_prefix, self.command_prefix)
+                .replace(CLAUDE_CODE.env_prefix, self.env_prefix)
                 .replace(CLAUDE_CODE.display_name, self.display_name)
                 .replace("files Claude reads",
                          "files %s reads" % self.display_name)
@@ -101,7 +106,7 @@ CURSOR = AgentProfile(
     service_name="cursor", root_name="cursor session",
     provider="", home_parts=(".cursor",),
     attr_prefix="cursor.", env_prefix="RIUS_CURSOR_", command_prefix="/rius-",
-    login_wait_budget=540, sends_agent_on_link=True)
+    login_wait_budget=540, sends_agent_on_link=True, sends_tokens=False)
 
 PROFILES = {p.name: p for p in (CLAUDE_CODE, CODEX, CURSOR)}
 
