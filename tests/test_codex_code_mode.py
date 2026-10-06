@@ -121,6 +121,7 @@ def test_subagent_stop_alone_is_enough_to_link_the_child(
 SPAWN_SCRIPT = ("const r = await tools.multi_agent_v1__spawn_agent({message: 'x'});"
                 "text(r.agent_id);")
 SHELL_SCRIPT = 'text((await tools.exec_command({cmd: "sleep 5"})).output);'
+WAIT_SCRIPT = "await tools.multi_agent_v1__wait_agent({targets: [id]});"
 NO_TOOL_SCRIPT = "text(new Date().toISOString())"
 
 
@@ -176,9 +177,9 @@ def test_a_call_that_ended_before_the_child_existed_is_passed_over():
 
 
 def test_a_call_that_runs_other_tools_never_takes_the_subagent():
-    """`b` began last and is still running, as the old rule would have it."""
-    st = _agent_after([("a", 100, None, SPAWN_SCRIPT), ("b", 200, None, SHELL_SCRIPT),
-                       ("c", 210, None, SPAWN_SCRIPT.replace("spawn", "wait"))])
+    st = _agent_after([("shell", 100, None, SHELL_SCRIPT),
+                       ("a", 200, None, SPAWN_SCRIPT),
+                       ("wait", 210, None, WAIT_SCRIPT)])
     assert codex_spans.spawning_tool(st, 250) == _id("a")
 
 
@@ -412,18 +413,17 @@ T0 = 1791216846000
 
 
 def _concurrent_rollouts(folder):
-    """A parent that ran three `exec` calls at once, two of which spawn an
-    agent while the third (begun last) runs a command, and the two children
-    (ids made 20 and 30 ms in)."""
+    """A parent that ran three `exec` calls at once: one runs a command, two
+    spawn an agent; and the two children (ids made 20 and 30 ms in)."""
     folder.mkdir()
     first, second = _uuid7_at(T0 + 20, "a" * 19), _uuid7_at(T0 + 30, "b" * 19)
     parent = _rollout(folder / ("rollout-p-%s.jsonl" % PARENT), [
         _line(T0 - 100, "session_meta", {"id": PARENT, "cwd": "/tmp/proj",
                                         "cli_version": "0.144.1"})]
         + _turn(T0, "t1",
-                _exec_call(T0 + 1, "call_a", SPAWN_SCRIPT),
-                _exec_call(T0 + 2, "call_b", SPAWN_SCRIPT),
-                _exec_call(T0 + 3, "call_shell", SHELL_SCRIPT),
+                _exec_call(T0 + 1, "call_shell", SHELL_SCRIPT),
+                _exec_call(T0 + 2, "call_a", SPAWN_SCRIPT),
+                _exec_call(T0 + 3, "call_b", SPAWN_SCRIPT),
                 _exec_done(T0 + 500, "call_a"), _exec_done(T0 + 501, "call_b"),
                 _exec_done(T0 + 502, "call_shell")))
     children = {}
@@ -440,7 +440,7 @@ def _concurrent_rollouts(folder):
 def test_calls_running_together_each_keep_their_own_subagent(
         codex_home, tmp_path, sent):
     """Judged by which call began last, both children would hang under the
-    command."""
+    second spawn; judged by time alone, under the command."""
     parent, children, first, second = _concurrent_rollouts(tmp_path / "sessions")
     _run(tmp_path, "UserPromptSubmit", parent)
     for child in (first, second):
