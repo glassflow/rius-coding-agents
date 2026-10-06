@@ -358,3 +358,13 @@ def test_a_long_real_regular_expression_is_read_whole():
     body = "a" * 5000 + "[/]" * 500
     assert codex_script.called_tools("const re = /%s/; %s" % (body, CALL)) == ["exec_command"]
     assert codex_script.called_tools("if (/%s/.test(x)) { %s }" % (body, CALL)) == ["exec_command"]
+
+
+def test_a_slash_that_cannot_be_decided_within_the_lookahead_names_nothing():
+    """After `)` the `/` may begin a regular expression; its end is not found
+    within 256 characters, so the script is not trusted to name a tool. A
+    shorter one, ending in time, is read as a division and names it."""
+    far = "if (a) /" + "x" * 300 + "/.test(b); " + CALL
+    near = "if (a) /" + "x" * 100 + "/.test(b); " + CALL
+    assert codex_script.called_tools(far) == []
+    assert codex_script.called_tools(near) == ["exec_command"]
