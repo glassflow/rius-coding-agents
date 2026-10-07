@@ -37,7 +37,10 @@ CASES = {
 def home(tmp_path):
     h = tmp_path / "home"
     (h / ".claude" / "rius").mkdir(parents=True)
-    signed_in.sign_in(str(h))
+    # No member email, so no `user.id`: these goldens are 0.4.5's bytes and
+    # prove the spans it sent are unchanged. `user.id`, added later, has its
+    # own tests (test_member_user_id.py) rather than a regenerated golden.
+    signed_in.sign_in(str(h), email="")
     with open(config.path_rules_path(str(h)), "w") as fh:
         json.dump({"enabled_paths": ["/tmp"]}, fh)
     return str(h)

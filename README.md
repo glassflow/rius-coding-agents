@@ -47,7 +47,8 @@ for you, and a repository's settings can't turn tracing on.
 
 - **Structure only** (`/rius:enable-here`, the default): the span tree,
   model names, token counts, timing, status, tool names, error types, a
-  subagent's type, and the folder path and git branch. No prompts, replies,
+  subagent's type, the folder path and git branch, and the email you signed
+  in with at `/rius:login`. No prompts, replies,
   tool inputs or outputs, subagent briefs or session name.
 - **With content** (`/rius:enable-content-here`): all of the above, plus
   your prompts, Claude's replies (never its thinking), tool inputs and tool
@@ -76,6 +77,7 @@ capped at 32 KB.
 | `cc.version`, `cc.cwd`, `cc.git_branch` | `2.1.289`, `/Users/ana/src/shop` (can include your user name), `main` | always |
 | span name, ids, start and end time, status | trace and span ids are hashes of the session id | always |
 | `session.id`, `cc.claude_session_id`, `cc.continued_from` | Claude Code session ids | always |
+| `user.id` | the email you signed in with at `/rius:login`, so the console can list your sessions; none for a key stored with `use-key` | always |
 | `openinference.span.kind`, `gen_ai.operation.name`, `gen_ai.provider.name` | `LLM`, `chat`, `anthropic` | always |
 | `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` | `claude-opus-5-5`, `["tool_use"]` | always |
 | `gen_ai.usage.*` | input, output, reasoning, cache read and cache write token counts | always |

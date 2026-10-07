@@ -185,6 +185,19 @@ def _present(attrs: dict) -> dict:
     return {k: v for k, v in attrs.items() if v is not None and v != ""}
 
 
+def _stamp_user(out, cfg) -> None:
+    """Name the developer on every span as `user.id`, pending ones too.
+
+    A span attribute, not a resource one: Rius reads a user from span
+    attributes only (one process can serve many users), and a running span
+    has to carry it already, or the session lists under no user until it
+    ends. Every harness ships through here, so this is the one place."""
+    if not cfg.user_id:
+        return
+    for span in out:
+        span.attributes.setdefault("user.id", cfg.user_id)
+
+
 def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
           on_success=None) -> int:
     """Export `out` (if any), then persist the state and the new offset.
@@ -192,6 +205,7 @@ def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
     `on_success` runs only once the spans are accepted (or there were none).
     """
     if out:
+        _stamp_user(out, cfg)
         body = otlp.encode(_present(resource_attrs), out)
         status = otlp.export(cfg.endpoint, cfg.api_key, body)
         _log(home, cfg, "session %s: exported %d spans, status=%s"

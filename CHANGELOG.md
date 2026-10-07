@@ -6,11 +6,15 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.6.1 (unreleased)
 
-Fixes for the Codex and Cursor betas. Claude Code: no change in what is
-traced or sent.
+Fixes for the Codex and Cursor betas, and every span now names who sent it.
 
 ### All agents
 
+- Every span carries `user.id`: the email you signed in with at
+  `/rius:login`, which the workspace already holds as the key's approver.
+  The console lists coding sessions by developer from it, a running one
+  included. A key stored with `use-key` is often shared, so it sends no
+  `user.id`. Nothing in the environment can set it.
 - Traces are now sent as OTLP/JSON (`application/json`) instead of OTLP
   protobuf, so the wire format is readable text and the hand-written binary
   encoder is gone. The receiver has accepted both since 2026-10-05. Same
