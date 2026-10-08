@@ -20,7 +20,7 @@ import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
-from . import scrub
+from . import command_class, scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Span,
                     exportable, span_id_for, tool_error_line, trace_id_for)
 
@@ -280,11 +280,14 @@ def _tool(fold: _Fold, e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "segment": fold.segment, "start_ns": None, "end_ns": None,
                 "input": None, "output": None, "failure": None, "error": None,
                 "interrupted": False, "exit_code": None, "model": _model_of(e),
+                "command_class": None,
                 "subagent_type": e.get("subagent_type") or "",
                 "closed_at_session_end": False}
         fold.tools[key] = tool
     if e.get("tool_input") is not None:
         tool["input"] = e["tool_input"]
+    if e.get("command_class") in command_class.CLASSES:
+        tool["command_class"] = e["command_class"]
     return tool
 
 
@@ -541,6 +544,10 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
     attrs = _base_attrs(ctx, "TOOL", tool["model"])
     attrs["gen_ai.tool.name"] = tool["name"]
     attrs["gen_ai.tool.call.id"] = tool["id"]
+    if tool["command_class"]:
+        attrs[command_class.ATTRIBUTE] = tool["command_class"]
+        if isinstance(tool["exit_code"], int):
+            attrs[command_class.EXIT_CODE_ATTRIBUTE] = tool["exit_code"]
     if tool["interrupted"]:
         attrs["cursor.tool.interrupted"] = True
     if tool["closed_at_session_end"]:

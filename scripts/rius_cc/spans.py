@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from . import agent, context_sizes, scrub
+from . import agent, command_class, context_sizes, scrub
 
 PROVIDER_NAME = agent.CLAUDE_CODE.provider
 
@@ -27,6 +27,8 @@ TITLE_MAX_CHARS = 200
 # "Task" before that; matching only one of them means every subagent in that
 # version is invisible, which is exactly what happened. Both, always.
 SUBAGENT_TOOL_NAMES = ("Agent", "Task")
+# The tools whose input is a shell command line (command_class.py).
+SHELL_TOOL_NAMES = ("Bash",)
 
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
@@ -42,7 +44,9 @@ TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
 ERROR_MESSAGE_MAX_BYTES = 256
 
 # How Claude Code opens a failed Bash call's result.
-_EXIT_CODE = re.compile(r"Exit code (\d+)\s*$")
+# Ten digits at most: a longer run is not an exit code, and int() of one past
+# 4300 digits raises on Python 3.11+.
+_EXIT_CODE = re.compile(r"Exit code (\d{1,10})\s*$")
 _TOOL_USE_ERROR_TAG = re.compile(r"</?tool_use_error>")
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -97,6 +101,9 @@ _PENDING_ALLOWED_KEYS = {
     # The signed-in member who approved the key (exporter._stamp_user).
     # Identity the workspace already holds, never content.
     "user.id",
+    # A word from command_class.CLASSES ("test", "build"), never the
+    # command: what a running shell call is doing.
+    "rius.command.class",
 }
 
 
@@ -193,11 +200,24 @@ def tool_error_type(tool_name: str, output: str) -> str:
     for anything else. Not content: a tool name and an exit code.
     """
     tool = tool_name or "tool"
-    first = output.lstrip().split("\n", 1)[0]
-    match = _EXIT_CODE.match(first)
-    if match:
-        return "%s.exit_%s" % (tool, match.group(1))
+    code = exit_code_of(output)
+    if code is not None:
+        return "%s.exit_%d" % (tool, code)
     return tool + ".tool_error"
+
+
+def exit_code_of(output: str) -> Optional[int]:
+    """The exit code a failed Bash result opens with, None for any other
+    output: Claude Code reports no exit code for a command that succeeded."""
+    match = _EXIT_CODE.match(output.lstrip().split("\n", 1)[0])
+    return int(match.group(1)) if match else None
+
+
+def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
+    """A shell call's class, when it had a command: kept in the open tool
+    as a word, so it is there for the pending span and the finished one."""
+    if tool.get("command_class"):
+        attrs[command_class.ATTRIBUTE] = tool["command_class"]
 
 
 def tool_error_line(output: str, max_bytes: int = ERROR_MESSAGE_MAX_BYTES) -> str:
@@ -453,6 +473,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs["gen_ai.tool.name"] = open_tool["tool_name"]
+                    _command_attrs(attrs, open_tool)
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
                     _content_attr(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
@@ -474,6 +495,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                             status_message = (scrub.scrub(tool_error_line(content_str))
                                               or error_type)
                         attrs["error.type"] = error_type
+                        code = exit_code_of(content_str)
+                        if open_tool.get("command_class") and code is not None:
+                            attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
                         # The backend groups errors by this event's type and
                         # message, and only falls back to the status message
                         # without one.
@@ -555,6 +579,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # the subagent's entire brief. It is only ever read back
                     # to fill input.value, which the gate drops anyway.
                     "input_json": input_json if ctx.capture_content else "",
+                    # Read from the command here, while it is in hand, and
+                    # kept as one word: the command itself is not.
+                    "command_class": (command_class.of_input(block.get("input"))
+                                      if tool_name in SHELL_TOOL_NAMES else None),
                 }
                 if tool_name in SUBAGENT_TOOL_NAMES:
                     scope["open_task_spans"].append(tool_span_id)
@@ -575,6 +603,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
                 attrs = _base_attrs(ctx, "TOOL")
                 attrs["gen_ai.tool.name"] = tool_name
+                _command_attrs(attrs, scope["open_tools"][tool_id])
                 attrs["glassflow.span.pending"] = True
                 out.append(Span(
                     trace_id=trace_id, span_id=tool_span_id, parent_span_id=llm_span_id,
@@ -744,6 +773,7 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     for tool in scope["open_tools"].values():
         attrs = _base_attrs(ctx, "TOOL")
         attrs["gen_ai.tool.name"] = tool["tool_name"]
+        _command_attrs(attrs, tool)
         _content_attr(ctx, attrs, "input.value", tool.get("input_json", ""))
         out.append(Span(
             trace_id=trace_id, span_id=tool["span_id"],

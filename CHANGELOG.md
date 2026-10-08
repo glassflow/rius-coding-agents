@@ -8,6 +8,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 - `--env local`: send traces to a Rius stack on this machine
   (`use-key --env local`).
+- A shell call's span says what kind of command it ran:
+  `rius.command.class` is `test`, `build`, `lint`, `package`, `git` or
+  `other`, with `process.exit.code` when the agent reports one. Worked out on
+  your machine and sent with capture off; the command itself is not sent.
+  Claude Code (Bash), Codex (`exec_command`, and code-mode scripts that call
+  it) and Cursor (Shell). The console can then say "tests failed" instead
+  of "Bash failed".
 
 ## 0.6.1 (unreleased)
 

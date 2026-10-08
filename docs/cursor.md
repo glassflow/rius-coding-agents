@@ -25,6 +25,11 @@ cursor session                AGENT  sessionStart .. sessionEnd
   that exits non-zero gives `Shell.error` (Cursor reports it as a failure
   without the exit code), a timed-out MCP call `MCP:query.timeout`. An
   interrupted tool is not an error.
+- A Shell call carries `rius.command.class` (`test`, `build`, `lint`,
+  `package`, `git`, `other`), read from the command in the hook, so it is
+  sent with capture off and the command is not. `process.exit.code` comes
+  with it when Cursor reports one, which it does for a command that
+  succeeded and not for one that failed.
 - `cursor-agent -p` fires no prompt, `stop` or subagent hooks. Each run is
   one turn, from its first event to its `sessionEnd`, and a Task subagent
   hangs under its Task call. That call gets no end hook either, so it closes
