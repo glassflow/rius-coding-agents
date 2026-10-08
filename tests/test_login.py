@@ -826,7 +826,7 @@ def test_login_with_an_unknown_environment_says_so(tmp_path, server, capsys):
     rius_ctl.dispatch(["login", "--env", "prod", "--cwd", "/p"], str(tmp_path))
     out = capsys.readouterr().out
     assert "`--env prod` is not accepted" in out
-    assert "production or staging" in out
+    assert "production, staging or local" in out
     assert fake.calls == []
 
 

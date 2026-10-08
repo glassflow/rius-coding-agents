@@ -11,6 +11,10 @@ allowed-tools:
 
 Report the output above to the user verbatim. Do not add interpretation.
 
+`--env local` is refused: a Rius stack on this machine has no sign-in. The
+output points at `rius_ctl.sh use-key --env local`, which only the user can
+run from a terminal; do not run it yourself.
+
 If a line starts with `RIUS_LOGIN_PENDING:`, sign-in is not finished:
 
 1. FIRST, before calling any tool, write a message showing the user the output

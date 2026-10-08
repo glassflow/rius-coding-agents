@@ -47,7 +47,7 @@ def test_whitelisted_arguments_parse(argv, expected):
     (["status", "stray"], "`status` does not accept `stray`"),
     (["enable-here", "--session", "s1", "--cwd", "/x"],
      "`enable-here` does not accept `--session`; it takes only `--cwd`"),
-    (["login", "--env"], "`--env` needs a value: production or staging"),
+    (["login", "--env"], "`--env` needs a value: production, staging or local"),
     (["login", "--env", "prod"], "`--env prod` is not accepted"),
     (["login", "--env=staging"], "`login` does not accept `--env=staging`"),
     (["on", "--session", "../../x"], "`--session ../../x` is not accepted"),
