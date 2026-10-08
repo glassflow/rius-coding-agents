@@ -94,6 +94,9 @@ _PENDING_ALLOWED_KEYS = {
     # runs under now (Claude Code moved the conversation). Ids, not content.
     "cc.continued_from",
     "cc.claude_session_id",
+    # The signed-in member who approved the key (exporter._stamp_user).
+    # Identity the workspace already holds, never content.
+    "user.id",
 }
 
 

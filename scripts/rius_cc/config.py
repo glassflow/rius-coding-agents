@@ -59,7 +59,8 @@ _FALSE_VALUES = {"false", "0"}
 class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
                  capture_content, max_attr_bytes, debug, key_source=None,
-                 workspace_name=None, ignored_env=(), unchosen_rule=None):
+                 workspace_name=None, ignored_env=(), unchosen_rule=None,
+                 user_id=None):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
@@ -75,6 +76,9 @@ class Config:
         self.ignored_env = list(ignored_env)
         # The enable rule deciding capture that predates the content choice.
         self.unchosen_rule = unchosen_rule
+        # The developer every span names as `user.id`: the member who
+        # approved this key at /rius:login, or None (see _credential).
+        self.user_id = user_id
 
 
 def _rius_dir(home: str) -> str:
@@ -376,20 +380,38 @@ def key_fingerprint(api_key: Optional[str], endpoint: str) -> str:
 
 
 def _credential(home: str):
-    """(api_key, endpoint, source, workspace_name, problem).
+    """(api_key, endpoint, source, workspace_name, user_id, problem).
 
     Only the key `/rius:login` stored, and only ever to the endpoint stored
     with it: a key minted on one environment is meaningless against
-    another's ingest, and anywhere else it is a leak."""
+    another's ingest, and anywhere else it is a leak.
+
+    `user_id` is the email of the member who approved the key at
+    `/rius:login`, so a session names its developer as `user.id`. It is
+    nothing new to the workspace, which already knows who minted its key.
+    A key stored with `use-key` was minted in the console by someone the
+    plugin can't name (a shared key, often), so its sessions name nobody:
+    an unverified guess at the developer would be worse than none."""
     creds = login.read_credentials(home)
     if not creds:
-        return None, DEFAULT_ENDPOINT, None, None, _NO_KEY
+        return None, DEFAULT_ENDPOINT, None, None, None, _NO_KEY
     endpoint = creds.get("endpoint")
     if not login.is_rius_url(endpoint, creds.get("env")):
-        return None, DEFAULT_ENDPOINT, None, None, _UNTRUSTED_ENDPOINT % endpoint
-    source = (login.USE_KEY_SOURCE if creds.get("source") == login.USE_KEY_SOURCE
-              else STORED_KEY_SOURCE)
-    return (creds["api_key"], endpoint, source, creds.get("workspace_name"), None)
+        return (None, DEFAULT_ENDPOINT, None, None, None,
+                _UNTRUSTED_ENDPOINT % endpoint)
+    if creds.get("source") == login.USE_KEY_SOURCE:
+        source, user_id = login.USE_KEY_SOURCE, None
+    else:
+        source, user_id = STORED_KEY_SOURCE, _member_email(creds)
+    return (creds["api_key"], endpoint, source, creds.get("workspace_name"),
+            user_id, None)
+
+
+def _member_email(creds: dict):
+    email = creds.get("email")
+    if not isinstance(email, str):
+        return None
+    return email.strip() or None
 
 
 def _ignored_env(env: Mapping[str, str]) -> list:
@@ -422,7 +444,8 @@ def _enabled(session_id: str, cwd: str, env: Mapping[str, str], home: str):
 
 
 def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Config:
-    api_key, endpoint, key_source, workspace_name, no_key = _credential(home)
+    (api_key, endpoint, key_source, workspace_name, user_id,
+     no_key) = _credential(home)
     profile = agent.active()
     ignored_env = _ignored_env(env)
     service_name = _service_name(env)
@@ -457,4 +480,5 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         workspace_name=workspace_name,
         ignored_env=ignored_env,
         unchosen_rule=unchosen_rule,
+        user_id=user_id,
     )
