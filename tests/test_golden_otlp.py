@@ -16,7 +16,7 @@ import pathlib
 import pytest
 
 import exporter
-from rius_cc import config
+from rius_cc import command_class, config
 from tests import otlp_json, signed_in
 
 GOLDEN = pathlib.Path(__file__).parent / "fixtures" / "golden"
@@ -46,9 +46,21 @@ def home(tmp_path):
     return str(h)
 
 
+# Added after 0.4.5 and tested on their own (test_command_class.py): a
+# shell call's class and exit code. Dropped here so the rest of each span is
+# still compared with 0.4.5's bytes, not with a regenerated golden.
+LATER_ATTRIBUTES = {command_class.ATTRIBUTE, command_class.EXIT_CODE_ATTRIBUTE}
+
+
 def _as_protobuf_hex(json_body):
-    return otlp_json.to_request(json_body).SerializeToString(
-        deterministic=True).hex()
+    request = otlp_json.to_request(json_body)
+    for resource_spans in request.resource_spans:
+        for scope_spans in resource_spans.scope_spans:
+            for span in scope_spans.spans:
+                kept = [kv for kv in span.attributes if kv.key not in LATER_ATTRIBUTES]
+                del span.attributes[:]
+                span.attributes.extend(kept)
+    return request.SerializeToString(deterministic=True).hex()
 
 
 def _export_bodies(home, transcript, session_id, monkeypatch):

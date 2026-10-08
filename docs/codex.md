@@ -85,7 +85,7 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | AGENT `codex session` | the session; open until the session is closed (below) |
 | CHAIN `turn` | one per turn: prompt, final reply, `codex.turn.duration_ms`, `codex.turn.ttft_ms` |
 | LLM `<model>` | one per model call: `input_tokens` (includes cached), `cache_read.input_tokens`, `output_tokens`, `reasoning.output_tokens` |
-| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>`, an MCP error is `<tool>.tool_error` |
+| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>`, an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
 | AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
 
 Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,

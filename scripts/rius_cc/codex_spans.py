@@ -26,7 +26,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
-from . import codex_script, scrub
+from . import codex_script, command_class, scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
@@ -47,6 +47,9 @@ SPAWN_TOOL_SUFFIX = "spawn_agent"
 SPAWN_WORD = "spawn"
 # Code mode's one tool: runs a script that calls the others.
 EXEC_TOOL = "exec"
+# The tools whose arguments are a shell command: `cmd` as a string, or the
+# older `shell` tool's `command` as a list of words.
+SHELL_TOOLS = ("exec_command", "shell")
 # How many exec calls an agent remembers, to find the one that spawned a
 # subagent (spawning_tool).
 _EXECS_KEPT = 256
@@ -261,15 +264,34 @@ def _on_tool_call(rec, state, ctx, out):
             "start_ns": rec.timestamp_ns, "tool_name": name,
             "span_name": _span_name(name, wrapped),
             "input_at": _hold(ctx, rec),
-            "mcp_failed": False, "error_at": None}
+            "mcp_failed": False, "error_at": None,
+            "command_class": _command_class(name, rec.get("arguments"), wrapped, script)}
     if ctx.capture_content:
         tool["secret_file"] = reads_secret_file(rec.get("arguments"))
     state["open_tools"][call_id] = tool
     if name == EXEC_TOOL:
         _remember_exec(state, tool, _may_spawn(script, wrapped))
+    extra = {"gen_ai.tool.name": tool["tool_name"]}
+    if tool["command_class"]:
+        extra[command_class.ATTRIBUTE] = tool["command_class"]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
-                        _name(tool), "TOOL", rec.timestamp_ns,
-                        {"gen_ai.tool.name": tool["tool_name"]}))
+                        _name(tool), "TOOL", rec.timestamp_ns, extra))
+
+
+def _command_class(name: str, arguments, wrapped: List[str],
+                   script: str) -> Optional[str]:
+    """The class of the command a call runs, read now and kept as one word.
+
+    A code-mode script that calls exec_command runs commands it quotes, so
+    its quoted strings are read as commands: the highest class among them.
+    A quoted string that is not a command reads as "other" and changes
+    nothing above it."""
+    if name in SHELL_TOOLS:
+        return (command_class.of_input(arguments, "cmd")
+                or command_class.of_input(arguments, "command"))
+    if name == EXEC_TOOL and any(t in SHELL_TOOLS for t in wrapped):
+        return command_class.classify_any(codex_script.string_literals(script))
+    return None
 
 
 def _on_mcp_result(rec, state, ctx, out):
@@ -303,6 +325,15 @@ def _mcp_text(body: str) -> str:
     return "\n".join(p.get("text", "") for p in parts if isinstance(p, dict))
 
 
+def exit_code_of(output) -> Optional[int]:
+    """The code exec_command says its command exited with, None when the
+    output says none (an MCP call, a command still running)."""
+    if not isinstance(output, str):
+        return None
+    match = _EXIT_CODE.search(output.partition(_OUTPUT_MARKER)[0])
+    return int(match.group(1)) if match else None
+
+
 def tool_error(tool: dict, output: str) -> Optional[str]:
     """error.type for a failed call, None for one that succeeded.
 
@@ -311,9 +342,9 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
     `<tool>.tool_error`. Anything else reads as success: Codex has no generic
     error flag on a tool's output.
     """
-    match = _EXIT_CODE.search(output.partition(_OUTPUT_MARKER)[0])
-    if match and match.group(1) != "0":
-        return "%s.exit_%s" % (tool["tool_name"], match.group(1))
+    code = exit_code_of(output)
+    if code:
+        return "%s.exit_%d" % (tool["tool_name"], code)
     if tool.get("mcp_failed"):
         return tool["tool_name"] + ".tool_error"
     return None
@@ -417,6 +448,11 @@ def _on_tool_output(rec, state, ctx, out):
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
     attrs["gen_ai.tool.name"] = tool["tool_name"]
+    if tool.get("command_class"):
+        attrs[command_class.ATTRIBUTE] = tool["command_class"]
+        code = exit_code_of(output)
+        if code is not None:
+            attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
     arguments = _arguments(ctx, tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
     _content_attr(ctx, attrs, "input.value", arguments, json_text=True)

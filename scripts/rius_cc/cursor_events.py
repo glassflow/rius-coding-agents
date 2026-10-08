@@ -22,7 +22,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from . import scrub
+from . import command_class, scrub
 from .spans import exportable
 
 SPOOL_SUFFIX = ".jsonl"
@@ -51,6 +51,9 @@ CONTENT_FIELDS = (
     "command", "output", "result_json", "file_path", "edits",
     "task", "description", "summary", "modified_files",
 )
+
+# The tools whose input is `{"command": ...}`, a shell command line.
+SHELL_TOOLS = ("Shell",)
 
 # Never kept: user_email (who, not what happened), transcript paths (the
 # spool replaces the transcript), model_params.
@@ -178,6 +181,12 @@ def to_record(payload: Dict[str, Any], now_ns: int, capture_content: bool,
         # A type name such as "explore", not content: it names the span of
         # a subagent that fires no subagentStart.
         record["subagent_type"] = subagent_type
+    if payload.get("tool_name") in SHELL_TOOLS:
+        found = command_class.of_input(payload.get("tool_input"))
+        if found:
+            # One word from command_class.CLASSES, never the command: read
+            # here because with capture off the command is not spooled.
+            record["command_class"] = found
     code = shell_exit_code(payload.get("tool_output"))
     if code is not None:
         # A number, not output: kept with capture off so a failed command

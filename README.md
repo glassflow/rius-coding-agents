@@ -46,8 +46,8 @@ each folder to trace. Only you can run these commands: Claude can't run them
 for you, and a repository's settings can't turn tracing on.
 
 - **Structure only** (`/rius:enable-here`, the default): the span tree,
-  model names, token counts, timing, status, tool names, error types, a
-  subagent's type, the folder path and git branch, and the email you signed
+  model names, token counts, timing, status, tool names, error types, the
+  kind of command a shell call ran (`test`, `build`, ...), a subagent's type, the folder path and git branch, and the email you signed
   in with at `/rius:login`. No prompts, replies,
   tool inputs or outputs, subagent briefs or session name.
 - **With content** (`/rius:enable-content-here`): all of the above, plus
@@ -84,6 +84,7 @@ capped at 32 KB.
 | `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
 | `gen_ai.tool.name` | `Bash`, `mcp__github__create_issue` | always |
 | `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
+| `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
 | `glassflow.span.pending` | `true` while a span is still running | always |
 | `input.value`, `output.value` | prompt, reply, tool input and output | content mode |
