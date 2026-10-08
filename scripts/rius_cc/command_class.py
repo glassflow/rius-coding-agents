@@ -29,6 +29,8 @@ EXIT_CODE_ATTRIBUTE = "process.exit.code"
 # which program the command starts with.
 MAX_CHARS = 4096
 _MAX_SEGMENTS = 32
+# `npm exec npm exec ...` is stepped over this many times, then is "other".
+_MAX_DEPTH = 4
 
 _SEGMENTS = re.compile(r"&&|\|\||[;|&\n]")
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -148,8 +150,8 @@ def _script_class(name: str) -> Optional[str]:
     return None
 
 
-def _segment_class(words: List[str]) -> str:
-    if not words:
+def _segment_class(words: List[str], depth: int = 0) -> str:
+    if not words or depth > _MAX_DEPTH:
         return "other"
     program = _program(words[0])
     args = [w.lower() for w in words[1:]]
@@ -167,7 +169,7 @@ def _segment_class(words: List[str]) -> str:
     if program in _PACKAGE_PROGRAMS:
         return "package" if first in _PACKAGE_VERBS or program == "brew" else "other"
     if program in _NODE_RUNNERS:
-        return _node_class(program, args, first)
+        return _node_class(program, args, first, depth)
     if program in _TASK_RUNNERS:
         if not first:
             return "build" if program in ("make", "gmake") else "other"
@@ -177,7 +179,7 @@ def _segment_class(words: List[str]) -> str:
     return _toolchain_class(program, first)
 
 
-def _node_class(program: str, args: List[str], first: str) -> str:
+def _node_class(program: str, args: List[str], first: str, depth: int) -> str:
     if not first:
         return "package" if program == "yarn" else "other"
     if first in ("run", "run-script"):
@@ -190,7 +192,7 @@ def _node_class(program: str, args: List[str], first: str) -> str:
         return "package"
     if first in ("exec", "dlx", "x"):
         rest = args[args.index(first) + 1:]
-        return _segment_class(rest) if rest else "other"
+        return _segment_class(rest, depth + 1) if rest else "other"
     # pnpm, yarn and bun run a script named as the subcommand.
     return _script_class(first) or "other"
 

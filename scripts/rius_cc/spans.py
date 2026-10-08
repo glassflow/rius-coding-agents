@@ -44,7 +44,9 @@ TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
 ERROR_MESSAGE_MAX_BYTES = 256
 
 # How Claude Code opens a failed Bash call's result.
-_EXIT_CODE = re.compile(r"Exit code (\d+)\s*$")
+# Ten digits at most: a longer run is not an exit code, and int() of one past
+# 4300 digits raises on Python 3.11+.
+_EXIT_CODE = re.compile(r"Exit code (\d{1,10})\s*$")
 _TOOL_USE_ERROR_TAG = re.compile(r"</?tool_use_error>")
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 

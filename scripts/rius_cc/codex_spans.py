@@ -35,7 +35,8 @@ PROVIDER_NAME = "openai"
 DEFAULT_ROOT_NAME = "codex session"
 
 # How Codex's exec_command reports a command's end, and where its output starts.
-_EXIT_CODE = re.compile(r"^Process exited with code (-?\d+)\s*$", re.MULTILINE)
+# Ten digits at most, as in spans._EXIT_CODE.
+_EXIT_CODE = re.compile(r"^Process exited with code (-?\d{1,10})\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
 
 # In place of the output of a call that was not checked for a secret file.

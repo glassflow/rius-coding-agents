@@ -276,3 +276,23 @@ def test_cursor_ignores_a_spooled_class_that_is_not_a_class():
         "conv-1339", capture_content=False, max_attr_bytes=32768))
     shell = next(s for s in out if s.name == "Shell")
     assert CLASS not in shell.attributes
+
+
+def test_a_runner_that_runs_a_runner_has_a_floor():
+    """`npm exec` and `bun x` step into the command they run; a chain of
+    them stops after a few steps instead of exhausting the stack."""
+    assert command_class.classify("pnpm dlx bun x vitest") == "test"
+    for chain in ("bun x " * 700, "npm --yes exec " * 300, "yarn dlx " * 500):
+        assert command_class.classify(chain + "vitest") == "other"
+
+
+def test_an_exit_code_too_long_to_be_one_is_not_read():
+    """int() of a 4300-digit run raises on Python 3.11+: the hook must not."""
+    digits = "9" * 5000
+    assert spans.exit_code_of("Exit code %s\nboom" % digits) is None
+    assert spans.exit_code_of("Exit code 137\nkilled") == 137
+    assert codex_spans.exit_code_of(
+        "Process exited with code %s\nOutput:\n" % digits) is None
+    assert codex_spans.exit_code_of("Process exited with code -1\nOutput:\n") == -1
+    assert codex_spans.tool_error({"name": "exec_command"},
+                                  "Process exited with code -%s\n" % digits) is None
