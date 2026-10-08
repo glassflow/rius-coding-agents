@@ -4,6 +4,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.6.2 (unreleased)
+
+- `--env local`: send traces to a Rius stack on this machine
+  (`use-key --env local`).
+
 ## 0.6.1 (unreleased)
 
 Fixes for the Codex and Cursor betas. Claude Code: no change in what is

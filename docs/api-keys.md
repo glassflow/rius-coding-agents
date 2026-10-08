@@ -41,7 +41,11 @@ from a terminal:
 ```bash
 pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key                # production
 pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env staging
+pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env local   # a Rius stack on this machine
 ```
+
+`local` sends to `http://localhost:4318` and has no `/rius:login`; switching
+to it replaces (and revokes) the stored production key.
 
 `<plugin>` is the installed plugin's folder, for example
 `~/.claude/plugins/cache/rius-coding-agents/rius/<version>`.

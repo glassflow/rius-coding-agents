@@ -61,6 +61,15 @@ ENVIRONMENTS = {
                   "mcp.staging.rius.glassflow.xyz",
                   "connect.staging.rius.glassflow.xyz"),
     },
+    # A Rius stack on this machine. It has no sign-in host (link_base None):
+    # keys are made in its console and stored with `use-key`. Plain http is
+    # fine because is_rius_url accepts loopback for every environment.
+    "local": {
+        "link_base": None,
+        "console_url": "http://localhost:3100",
+        "ingest_url": "http://localhost:4318",
+        "hosts": (),
+    },
 }
 # Plain http is only ever accepted for a server on this machine.
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -78,6 +87,10 @@ LINK_EXPIRED = "That sign-in link expired. Run `/rius:login` again."
 NO_SIGN_IN = "There is no sign-in in progress. Run `/rius:login` first."
 ALREADY_WAITING = ("Another login is already waiting for approval in the "
                    "browser; it reports back when it finishes.")
+NO_LOCAL_SIGN_IN = (
+    "The local Rius stack has no sign-in. Make a key in the local console "
+    "(http://localhost:3100, Settings → API keys), then store it with: "
+    "`pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env local`")
 SUPERSEDED = ("This sign-in was replaced by a newer /rius:login, which "
               "reports back instead.")
 
@@ -247,7 +260,13 @@ def load_pending(home: str) -> Optional[dict]:
 # --- Starting a link --------------------------------------------------------
 
 def _link_base(env_name: str) -> str:
-    return ENVIRONMENTS[env_name]["link_base"]
+    """The environment's sign-in host. An environment without one (`local`)
+    has no sign-in at all; every caller that would use the host goes through
+    here, so none of them can build a URL from None."""
+    base = ENVIRONMENTS[env_name]["link_base"]
+    if base is None:
+        raise LoginError(NO_LOCAL_SIGN_IN)
+    return base
 
 
 def choose_environment(flag: Optional[str]) -> str:
@@ -406,8 +425,11 @@ def revoke(creds: dict, post: Callable = post_json) -> bool:
     """Best effort: True only when the server confirmed the key is dead.
     A 401 means the key no longer authenticates, so it is already gone.
     A key of an environment this plugin does not know is left alone: sending
-    it to another environment's sign-in host would only leak it there."""
+    it to another environment's sign-in host would only leak it there.
+    A local key has no sign-in host to revoke it on, so it is left alone too."""
     if creds.get("env") not in ENVIRONMENTS:
+        return False
+    if ENVIRONMENTS[creds["env"]]["link_base"] is None:
         return False
     url = _link_base(creds["env"]) + "/v1/agent-keys/revoke"
     try:

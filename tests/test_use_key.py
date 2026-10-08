@@ -57,7 +57,7 @@ def test_the_environment_cannot_choose_where_the_key_goes(home):
 
 def test_an_unknown_environment_is_refused(home):
     r = _use_key(home, ["--env", "https://collector.attacker.example"])
-    assert "--env takes production or staging" in r.stdout
+    assert "--env takes production, staging or local" in r.stdout
     assert login.read_credentials(home) is None
 
 

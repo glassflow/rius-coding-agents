@@ -384,6 +384,15 @@ key, tracing is forced off no matter what the above resolves to.
 or to decide where a hand-minted key should live, see
 [API keys](docs/api-keys.md).
 
+## Local Rius stack
+
+For a Rius stack running on this machine (GlassFlow engineers run one from
+the internal compose setup), make a key in its console and store it with
+`pbpaste | bash <plugin>/scripts/rius_ctl.sh use-key --env local`. Traces then
+go to `http://localhost:4318`; `/rius:login` has no local sign-in. The bundled
+MCP entry stays production; add the local one with
+`claude mcp add --transport http rius-local http://localhost:8082/mcp`.
+
 ## Asking Claude about your traces
 
 The plugin bundles the Rius MCP server as `rius`, so you can query the

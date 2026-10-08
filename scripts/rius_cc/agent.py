@@ -79,6 +79,8 @@ class AgentProfile:
                 .replace("files Claude reads",
                          "files %s reads" % self.display_name)
                 .replace(USE_KEY_COMMAND + "`", "%s %s %s`"
+                         % (USE_KEY_COMMAND, FLAG, self.name))
+                .replace(USE_KEY_COMMAND + " --env local`", "%s %s %s --env local`"
                          % (USE_KEY_COMMAND, FLAG, self.name)))
 
 

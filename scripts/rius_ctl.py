@@ -6,7 +6,7 @@ Actions: on | off | clear | enable-here | content-on-here | disable-here |
          status | login | login-wait | logout | use-key |
          install-hooks | uninstall-hooks (Cursor only)
 Flags:   --session <id>   --cwd <folder>   --debug (status only)
-         --env <production|staging> (login and use-key)
+         --env <production|staging|local> (login and use-key)
          --path <hooks.json file> (install-hooks and uninstall-hooks)
          --agent <claude-code|codex|cursor> (every action; default claude-code)
          `-- '<typed text>'`: what the user typed after a slash command
@@ -49,9 +49,9 @@ Usage: rius_ctl.py <action> [flags]
   status                            [--session <id>] [--cwd <folder>] [--debug]
   enable-here | content-on-here | disable-here
                                     [--cwd <folder>]
-  login                             [--cwd <folder>] [--env <production|staging>]
+  login                             [--cwd <folder>] [--env <production|staging|local>]
   login-wait | logout               [--cwd <folder>]
-  use-key                           [--cwd <folder>] [--env <production|staging>]
+  use-key                           [--cwd <folder>] [--env <production|staging|local>]
                                     (reads the key from stdin)
   install-hooks | uninstall-hooks   [--path <hooks.json file>]
                                     (needs --agent cursor)"""
@@ -103,7 +103,7 @@ def _is_path(value):
 FLAG_VALUES = {
     "--session": ("a session id (letters, digits, - and _)", _is_session_id),
     "--cwd": ("a folder path", _is_path),
-    "--env": ("production or staging", lambda value: value in login.ENVIRONMENTS),
+    "--env": ("production, staging or local", lambda value: value in login.ENVIRONMENTS),
     "--path": ("the path of a hooks.json file", _is_path),
     "--agent": ("claude-code, codex or cursor",
                 lambda value: value in agent.PROFILES),
@@ -496,6 +496,10 @@ QUERYING_STAGING_TRACES = (
     "Querying traces: the bundled rius server is production; run "
     "`claude mcp add --transport http rius-staging "
     "https://mcp.eu.staging.rius.glassflow.xyz/mcp`, then /mcp")
+QUERYING_LOCAL_TRACES = (
+    "Querying traces: the bundled rius server is production; run "
+    "`claude mcp add --transport http rius-local http://localhost:8082/mcp`, "
+    "then /mcp")
 RIUS_MCP_URL_RETIRED = "RIUS_MCP_URL is no longer used; see docs for staging"
 # Codex has no headersHelper, so its bundled server cannot use the stored
 # key: it signs in on its own, through the server's OAuth.
@@ -523,13 +527,20 @@ def _codex_home(home):
 
 
 def _querying_traces_line(creds):
+    if _is_local(creds):
+        return QUERYING_LOCAL_TRACES
     if _is_staging(creds):
         return QUERYING_STAGING_TRACES
     return QUERYING_TRACES
 
 
+def _is_local(creds):
+    return bool(creds) and creds.get("env") == "local"
+
+
 def _is_staging(creds):
-    return bool(creds) and creds.get("env", login.DEFAULT_ENVIRONMENT) != login.DEFAULT_ENVIRONMENT
+    return (bool(creds) and not _is_local(creds)
+            and creds.get("env", login.DEFAULT_ENVIRONMENT) != login.DEFAULT_ENVIRONMENT)
 
 
 def _tracing_signed_in(creds):
