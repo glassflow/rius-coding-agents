@@ -17,6 +17,8 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   of "Bash failed".
 - Codex code mode: an `exec` call whose script throws is now a failed span
   (`exec.script_failed`).
+- Cursor: spool pruning no longer mistakes a conversation id with a dot for
+  another one.
 
 ## 0.6.1 (unreleased)
 
