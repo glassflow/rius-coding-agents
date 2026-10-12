@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -25,6 +26,9 @@ SPOOL_DIRNAME = "spool"
 PARENT_SUFFIX = cursor_events.PARENT_SUFFIX
 TICKS_SUFFIX = ".ticks"
 CLAIM_SUFFIX = ".claim"
+# What _claim_path appends to a conversation's stem: its call digest and,
+# for a later claim on the same call, a generation.
+_CLAIM_TAIL = re.compile(r"\.[0-9a-f]{16}(?:\.[0-9]+)?\Z")
 
 # Exported at once: the session opening, a turn or subagent finishing, the
 # session closing. Long turns also export every EXPORT_EVERY_N_TOOLS tools.
@@ -271,8 +275,13 @@ def _split_spool_name(name: str) -> Optional[str]:
     for suffix in _SPOOL_FILE_SUFFIXES:
         if name.endswith(suffix):
             stem = name[:-len(suffix)]
-            # <conversation>.<call digest>[.<generation>].claim
-            return stem.partition(".")[0] if suffix == CLAIM_SUFFIX else stem
+            if suffix != CLAIM_SUFFIX:
+                return stem
+            # <conversation>.<call digest>[.<generation>].claim; the
+            # conversation may hold dots itself. A name that does not fit is
+            # no claim of ours, so prune leaves it alone.
+            match = _CLAIM_TAIL.search(stem)
+            return stem[:match.start()] if match else None
     return None
 
 

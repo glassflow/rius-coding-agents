@@ -213,6 +213,41 @@ def test_an_open_trace_keeps_its_spool_and_its_subagents(tmp_path):
     assert _spool_files(sdir) == before
 
 
+def test_split_spool_name_keeps_a_dotted_conversation_id():
+    split = cursor_export._split_spool_name
+    assert split("a.b.0123456789abcdef.claim") == "a.b"
+    assert split("a.b.0123456789abcdef.2.claim") == "a.b"
+    assert split("a.b.jsonl") == "a.b"
+    assert split("plain.0123456789abcdef.claim") == "plain"
+    assert split("junk.claim") is None
+
+
+def test_prune_keeps_the_claim_of_an_open_dotted_conversation(tmp_path):
+    sdir = str(tmp_path / "spool")
+    os.makedirs(sdir)
+    paths = [cursor_events.spool_path(sdir, "a.b"),
+             cursor_export._claim_path(sdir, "a.b", "call-1")]
+    for path in paths:
+        with open(path, "w") as f:
+            f.write("{}\n")
+        _age(path, 8)
+    assert cursor_export.prune(sdir, ["a.b"]) == 0
+    assert all(os.path.exists(path) for path in paths)
+    assert cursor_export.prune(sdir, []) == 2
+    assert not any(os.path.exists(path) for path in paths)
+
+
+def test_prune_leaves_a_claim_it_cannot_place_alone(tmp_path):
+    sdir = str(tmp_path / "spool")
+    os.makedirs(sdir)
+    path = os.path.join(sdir, "junk.claim")
+    with open(path, "w") as f:
+        f.write("{}\n")
+    _age(path, 8)
+    assert cursor_export.prune(sdir, []) == 0
+    assert os.path.exists(path)
+
+
 def test_session_start_prunes_old_spools(tmp_path, sent):
     sdir = cursor_export.spool_dir(str(tmp_path))
     _spool_until(tmp_path, "docs_session")
