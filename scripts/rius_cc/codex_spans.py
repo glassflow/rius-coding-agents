@@ -424,12 +424,15 @@ def _script_reads_secret_file(script: str) -> bool:
     stands anywhere in its text, as a path or as a word of a command: this
     does not rest on the scanner, which is only a best effort, so it also
     counts a property (`obj.key`) or a comment that names one. The literals the
-    scanner found are checked too. A script too long to read is taken to."""
+    scanner found are checked too. Escapes in the literals (`\\x2eenv`) are
+    decoded first. A script too long to read is taken to."""
     if len(script) > codex_script.MAX_CHARS:
         return True
     literals = codex_script.string_literals(script)
+    decoded = [codex_script.decode_escapes(text) for text in literals]
     return any(scrub.reads_secret_file(json.dumps({"command": text}))
-               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals)))
+               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals),
+                            " ".join(decoded)))
 
 
 _EXEC_NAME_TOOLS = 3

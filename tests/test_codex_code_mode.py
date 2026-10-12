@@ -16,7 +16,7 @@ import shutil
 
 import pytest
 
-from rius_cc import codex_rollout, codex_spans, spans
+from rius_cc import codex_rollout, codex_spans, scrub, spans
 
 from tests.test_codex_export import (ENV, _uuid7_at, codex_home,  # noqa: F401
                                      exporter, sent)
@@ -325,6 +325,18 @@ def test_a_script_naming_no_secret_file_keeps_its_output():
         'const k = obj.name; text(process.env.HOME); text("ls -la")',
         ["Script completed\nOutput:\n", "INTERNAL_HOST=db.internal.acme\n"])
     assert "INTERNAL_HOST=db.internal.acme" in value
+
+
+def test_a_secret_file_named_through_an_escape_is_withheld():
+    value = _exec_output('tools.exec_command({cmd: "cat \\x2eenv"})',
+                         ["Script completed\nOutput:\n", "API_KEY=abc"])
+    assert value == scrub.SECRET_FILE_MARKER
+
+
+def test_an_id_rsa_named_through_an_escape_is_withheld():
+    value = _exec_output('tools.exec_command({cmd: "cat id\\u005frsa"})',
+                         ["Script completed\nOutput:\n", "API_KEY=abc"])
+    assert value == scrub.SECRET_FILE_MARKER
 
 
 THROWN = ["Script failed\nWall time 1.0 seconds\nOutput:\n",

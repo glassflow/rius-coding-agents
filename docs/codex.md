@@ -155,7 +155,10 @@ turn things off.
     replaced, whether the name is a path, a word of a command, a property
     such as `obj.key`, or a comment. This does not rest on the scanner, so
     it errs towards withholding the output of a harmless script; a script
-    over 64 KB is withheld as well. A script the scanner cannot read to its
+    over 64 KB is withheld as well. Escapes in a quoted name
+    (`"\x2eenv"`) are decoded before the check. A name built while the
+    script runs (`'.' + 'env'`, `String.fromCharCode`) is still not seen.
+    A script the scanner cannot read to its
     end is not withheld for that: it is only named plain `exec`.
   - **Subagents (placement approximate, none dropped while the rollout
     exists).** A subagent spawned inside `exec` goes under the call that was
