@@ -19,6 +19,8 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   (`exec.script_failed`).
 - Cursor: spool pruning no longer mistakes a conversation id with a dot for
   another one.
+- Codex code mode: a secret file named through a JavaScript escape
+  (`"\x2eenv"`) now withholds the call's output.
 
 ## 0.6.1 (unreleased)
 

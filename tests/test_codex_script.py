@@ -459,3 +459,29 @@ def test_the_text_of_a_regular_expression_never_names_a_tool(script):
 def test_a_regular_expression_that_is_certain_names_nothing_either():
     assert codex_script.called_tools("if (/tools.fake_name()/.test(b)) { " + CALL + " }") \
         == ["exec_command"]
+
+
+@pytest.mark.parametrize("literal, decoded", [
+    (r"\x2eenv", ".env"),
+    (r"\u002eenv", ".env"),
+    (r"\u{2e}env", ".env"),
+    (r"\.env", ".env"),
+    (r"a\\b", "a\\b"),
+    (r"\xZZ", "xZZ"),
+    ("a\\\nb", "ab"),
+    (r"\n", "\n"),
+    ("end\\", "end\\"),
+])
+def test_decode_escapes(literal, decoded):
+    assert codex_script.decode_escapes(literal) == decoded
+
+
+@pytest.mark.parametrize("literal, kept", [
+    (r"\u{0000002e}env", ".env"),
+    (r"\u{0}", "\0"),
+    (r"\u{10FFFF}", chr(0x10FFFF)),
+    (r"\u{110000}", "u{110000}"),
+    (r"\u{FFFFFF}", "u{FFFFFF}"),
+])
+def test_a_braced_unicode_escape_is_read_to_its_value_or_kept(literal, kept):
+    assert codex_script.decode_escapes(literal) == kept
