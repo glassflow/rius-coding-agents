@@ -327,6 +327,41 @@ def test_a_script_naming_no_secret_file_keeps_its_output():
     assert "INTERNAL_HOST=db.internal.acme" in value
 
 
+THROWN = ["Script failed\nWall time 1.0 seconds\nOutput:\n",
+          "Script error:\nError: boom\n    at exec_main.mjs:1:76"]
+
+
+def _finished_exec(script, texts, capture=True):
+    return [s for s in _exec_rows(script, texts, capture) if not s.pending][0]
+
+
+def test_an_exec_whose_script_failed_is_an_error():
+    span = _finished_exec("text(1)", THROWN)
+    assert span.status_code == "ERROR"
+    assert span.attributes["error.type"] == "exec.script_failed"
+    assert span.status_message == "Error: boom"
+
+
+def test_a_script_failed_error_sends_no_content_with_capture_off():
+    span = _finished_exec("text(1)", THROWN, capture=False)
+    assert span.status_code == "ERROR"
+    assert span.attributes["error.type"] == "exec.script_failed"
+    assert span.status_message == spans.TOOL_ERROR_WITHHELD
+    assert "boom" not in repr(vars(span))
+
+
+def test_a_completed_script_is_ok():
+    span = _finished_exec("text(1)", ["Script completed\nWall time 0.8 seconds\nOutput:\n"])
+    assert span.status_code == "OK"
+    assert "error.type" not in span.attributes
+
+
+def test_a_script_failed_that_read_a_secret_file_says_only_the_type():
+    span = _finished_exec('tools.exec_command({cmd:"cat .env"}); throw 1', THROWN)
+    assert span.status_code == "ERROR"
+    assert span.status_message == "exec.script_failed"
+
+
 def _exec_name(script, capture=True):
     pending, finished = _exec_rows(script, ["Script completed\nOutput:\n"],
                                    capture)
