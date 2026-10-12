@@ -137,8 +137,11 @@ turn things off.
 - Code mode (`code_mode_host`, on by default in codex-cli 0.144.1) runs
   every tool through one `exec` call that runs a script. Each such call is
   one TOOL span; the commands, patches and spawns inside it get no spans of
-  their own. Its output carries no exit code, so a failed command inside
-  `exec` reads as success.
+  their own. When the script throws, Codex reports `Script failed` and the
+  span is an error (`exec.script_failed`, message: the thrown error's first
+  line). A command that fails inside a script that does not throw still
+  reads as success: neither the call's output nor Codex's hooks carry its
+  exit code.
   - **Name (best effort).** The span is named after the tools its script
     calls (`exec_command`, `apply_patch`, `mcp__<server>__<tool>`). The
     script is read by a small scanner, not a JavaScript parser: when it

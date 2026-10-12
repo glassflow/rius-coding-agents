@@ -15,6 +15,8 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   Claude Code (Bash), Codex (`exec_command`, and code-mode scripts that call
   it) and Cursor (Shell). The console can then say "tests failed" instead
   of "Bash failed".
+- Codex code mode: an `exec` call whose script throws is now a failed span
+  (`exec.script_failed`).
 
 ## 0.6.1 (unreleased)
 

@@ -38,6 +38,10 @@ DEFAULT_ROOT_NAME = "codex session"
 # Ten digits at most, as in spans._EXIT_CODE.
 _EXIT_CODE = re.compile(r"^Process exited with code (-?\d{1,10})\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
+# How code mode's `exec` starts its output when the script threw, and the
+# line before the error it threw.
+_SCRIPT_FAILED = "Script failed\n"
+_SCRIPT_ERROR = "Script error:"
 
 # In place of the output of a call that was not checked for a secret file.
 OUTPUT_NOT_CHECKED = "[redacted:not-checked]"
@@ -335,12 +339,18 @@ def exit_code_of(output) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def script_failed(output) -> bool:
+    """Whether an `exec` call's output says its script threw."""
+    return isinstance(output, str) and output.startswith(_SCRIPT_FAILED)
+
+
 def tool_error(tool: dict, output: str) -> Optional[str]:
     """error.type for a failed call, None for one that succeeded.
 
     A command that exited non-zero is `<tool>.exit_<code>`, as spans.py types
     a Claude Code Bash failure; an MCP call its server marked as an error is
-    `<tool>.tool_error`. Anything else reads as success: Codex has no generic
+    `<tool>.tool_error`; a code-mode `exec` whose script threw is
+    `exec.script_failed`. Anything else reads as success: Codex has no generic
     error flag on a tool's output.
     """
     code = exit_code_of(output)
@@ -348,6 +358,8 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
         return "%s.exit_%d" % (tool["tool_name"], code)
     if tool.get("mcp_failed"):
         return tool["tool_name"] + ".tool_error"
+    if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
+        return "exec.script_failed"
     return None
 
 
@@ -356,7 +368,21 @@ def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
     if error:
         return error
     body = _command_output(output)
-    return _mcp_text(body) if tool.get("mcp_failed") else body
+    if tool.get("mcp_failed"):
+        return _mcp_text(body)
+    if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
+        return _thrown_error(body)
+    return body
+
+
+def _thrown_error(body: str) -> str:
+    """The first line of the error a script threw, the whole body when the
+    output has no `Script error:` part."""
+    thrown = body.partition(_SCRIPT_ERROR)[2]
+    for line in thrown.splitlines():
+        if line.strip():
+            return line
+    return body
 
 
 def error_line(text: str) -> str:
