@@ -254,7 +254,7 @@ def string_literals(script: str) -> List[str]:
 # One JavaScript string escape: \xHH, \u{H..}, \uHHHH, \0, a control letter,
 # a line continuation, or a backslash before any other character.
 _ESCAPE = re.compile(
-    r"\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})"
+    r"\\(?:x([0-9a-fA-F]{2})|u\{0*([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})"
     r"|(0)(?![0-9])|([nrtbfv])|(\r\n|[\n\r\u2028\u2029])|(.))", re.DOTALL)
 _CONTROL = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v"}
 

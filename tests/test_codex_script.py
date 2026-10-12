@@ -474,3 +474,14 @@ def test_a_regular_expression_that_is_certain_names_nothing_either():
 ])
 def test_decode_escapes(literal, decoded):
     assert codex_script.decode_escapes(literal) == decoded
+
+
+@pytest.mark.parametrize("literal, kept", [
+    (r"\u{0000002e}env", ".env"),
+    (r"\u{0}", "\0"),
+    (r"\u{10FFFF}", chr(0x10FFFF)),
+    (r"\u{110000}", "u{110000}"),
+    (r"\u{FFFFFF}", "u{FFFFFF}"),
+])
+def test_a_braced_unicode_escape_is_read_to_its_value_or_kept(literal, kept):
+    assert codex_script.decode_escapes(literal) == kept
