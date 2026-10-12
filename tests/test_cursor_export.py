@@ -237,6 +237,17 @@ def test_prune_keeps_the_claim_of_an_open_dotted_conversation(tmp_path):
     assert not any(os.path.exists(path) for path in paths)
 
 
+def test_prune_leaves_a_claim_it_cannot_place_alone(tmp_path):
+    sdir = str(tmp_path / "spool")
+    os.makedirs(sdir)
+    path = os.path.join(sdir, "junk.claim")
+    with open(path, "w") as f:
+        f.write("{}\n")
+    _age(path, 8)
+    assert cursor_export.prune(sdir, []) == 0
+    assert os.path.exists(path)
+
+
 def test_session_start_prunes_old_spools(tmp_path, sent):
     sdir = cursor_export.spool_dir(str(tmp_path))
     _spool_until(tmp_path, "docs_session")
