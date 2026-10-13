@@ -306,6 +306,20 @@ def _on_mcp_result(rec, state, ctx, out):
         tool["error_at"] = _hold(ctx, rec)
 
 
+def _on_command_end(rec, state, ctx, out):
+    """A command Codex ran says how it ended but not for which call. A
+    code-mode `exec` script is the only call that runs commands this way, so
+    the code is given to it when it is the one call open; with calls running
+    together there is no telling, and each reads as it always did."""
+    open_tools = list(state["open_tools"].values())
+    if len(open_tools) != 1 or open_tools[0]["tool_name"] != EXEC_TOOL:
+        return
+    code = rec.get("exit_code")
+    tool = open_tools[0]
+    if not tool.get("inner_exit"):
+        tool["inner_exit"] = code
+
+
 def _on_subagent_started(rec, state, ctx, out):
     """multi_agent_v2: the call that started a thread is named by the event,
     not by the call's output."""
@@ -339,6 +353,12 @@ def exit_code_of(output) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def _exit_code(tool: dict, output) -> Optional[int]:
+    """The call's own exit code, else that of the command a script ran."""
+    code = exit_code_of(output)
+    return tool.get("inner_exit") if code is None else code
+
+
 def script_failed(output) -> bool:
     """Whether an `exec` call's output says its script threw."""
     return isinstance(output, str) and output.startswith(_SCRIPT_FAILED)
@@ -350,7 +370,8 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
     A command that exited non-zero is `<tool>.exit_<code>`, as spans.py types
     a Claude Code Bash failure; an MCP call its server marked as an error is
     `<tool>.tool_error`; a code-mode `exec` whose script threw is
-    `exec.script_failed`. Anything else reads as success: Codex has no generic
+    `exec.script_failed`, and one whose script ran a command that failed,
+    without throwing, `exec.exit_<code>`. Anything else reads as success: Codex has no generic
     error flag on a tool's output.
     """
     code = exit_code_of(output)
@@ -360,6 +381,8 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
         return tool["tool_name"] + ".tool_error"
     if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
         return "exec.script_failed"
+    if tool.get("inner_exit"):
+        return "%s.exit_%d" % (tool["tool_name"], tool["inner_exit"])
     return None
 
 
@@ -372,6 +395,8 @@ def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
         return _mcp_text(body)
     if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
         return _thrown_error(body)
+    if tool.get("inner_exit"):
+        return ""       # the script's last line is not the command's error
     return body
 
 
@@ -480,7 +505,7 @@ def _on_tool_output(rec, state, ctx, out):
     attrs["gen_ai.tool.name"] = tool["tool_name"]
     if tool.get("command_class"):
         attrs[command_class.ATTRIBUTE] = tool["command_class"]
-        code = exit_code_of(output)
+        code = _exit_code(tool, output)
         if code is not None:
             attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
     arguments = _arguments(ctx, tool)
@@ -637,6 +662,7 @@ _HANDLERS = {
     cr.TOOL_CALL: _on_tool_call,
     cr.MCP_RESULT: _on_mcp_result,
     cr.SUBAGENT_STARTED: _on_subagent_started,
+    cr.COMMAND_END: _on_command_end,
     cr.TOOL_OUTPUT: _on_tool_output,
     cr.TURN_END: _on_turn_end,
 }

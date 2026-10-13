@@ -85,7 +85,7 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | AGENT `codex session` | the session; open until the session is closed (below) |
 | CHAIN `turn` | one per turn: prompt, final reply, `codex.turn.duration_ms`, `codex.turn.ttft_ms` |
 | LLM `<model>` | one per model call: `input_tokens` (includes cached), `cache_read.input_tokens`, `output_tokens`, `reasoning.output_tokens` |
-| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>`, an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
+| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>` (`exec.exit_<n>` when a code-mode script ran it), an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
 | AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
 
 Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,
@@ -139,9 +139,15 @@ turn things off.
   one TOOL span; the commands, patches and spawns inside it get no spans of
   their own. When the script throws, Codex reports `Script failed` and the
   span is an error (`exec.script_failed`, message: the thrown error's first
-  line). A command that fails inside a script that does not throw still
-  reads as success: neither the call's output nor Codex's hooks carry its
-  exit code.
+  line). A command that fails inside a script that does not throw is read
+  from the rollout, where Codex writes an `item_completed` event for each
+  command (`CommandExecution`, with its `exit_code`; seen in codex-cli
+  0.160.1 and 0.162.1, and not in the 0.144.1 rollouts checked): the span is an error
+  (`exec.exit_<n>`, the first non-zero code) and `process.exit.code` is set.
+  That event names no call, so the code is given to the `exec` call that is
+  the only call open; while calls run together, a failed command inside a
+  script that does not throw still reads as success. The call's output
+  carries no exit code, and Codex's hooks were not checked for one.
   - **Name (best effort).** The span is named after the tools its script
     calls (`exec_command`, `apply_patch`, `mcp__<server>__<tool>`). The
     script is read by a small scanner, not a JavaScript parser: when it

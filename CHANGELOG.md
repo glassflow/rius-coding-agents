@@ -4,6 +4,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.7.0 (unreleased)
+
+- Codex: a command that fails inside a code-mode script that does not throw
+  now marks the `exec` span as an error (`exec.exit_<n>`) and sets
+  `process.exit.code`, read from the rollout's command events (seen in
+  codex-cli 0.160.1 and 0.162.1).
+
 ## 0.6.2 (2026-10-13)
 
 - Every span carries `user.id`: the email you signed in with at
