@@ -53,7 +53,14 @@ SIGTERM):
   changes a `hooks.json` that was already there; it stops instead.
 
 A local receiver listens on `127.0.0.1:4318`, the `local` environment's
-ingest port. If something else holds the port it aborts.
+ingest port. If something else holds that address it aborts; a listener on
+the wildcard address (`0.0.0.0`) may go unnoticed on macOS and Linux.
+`serve` skips the `cursor-agent status` login check, since it runs no model.
+
+It does not touch Cursor's own state: `cursor-agent` writes its transcripts
+and chats under `~/.cursor/projects/<folder slug>/` for each folder it runs
+in, and those stay (the folders are in the system temp dir and are removed).
+`home-before.txt` and `home-after.txt` therefore differ by those entries.
 
 `cursor-agent --plugin-dir <path>` also loads a plugin from a folder; this
 harness uses the symlink, which is how an installed local plugin is found.

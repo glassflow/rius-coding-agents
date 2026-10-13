@@ -91,6 +91,10 @@ def run_process(argv: List[str], cwd: str, env: Optional[Dict[str, str]] = None
         _kill(proc)
         out, _ = proc.communicate()
         return None, out
+    except BaseException:
+        _kill(proc)     # its own session hides Ctrl-C from it
+        proc.wait()
+        raise
     return proc.returncode, out
 
 
@@ -354,7 +358,11 @@ def _on_sigterm(_signum, _frame):
 
 
 def live(names: Optional[List[str]], serve: bool) -> int:
-    layout = real_layout()
+    try:
+        layout = real_layout()
+    except harness.Abort as exc:
+        print("abort:", exc, file=sys.stderr)
+        return 2
     status = "Logged in (serve)" if serve else strip_ansi(_agent_text("status"))
     problems = harness.preflight(layout, status)
     if problems:
@@ -372,7 +380,9 @@ def live(names: Optional[List[str]], serve: bool) -> int:
         return 2
     rcv.start()
     session = harness.Session(layout, ctl_runner(layout))
-    signal.signal(signal.SIGTERM, _on_sigterm)
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _on_sigterm)
     code = 1
     try:
         session.setup()
@@ -383,12 +393,14 @@ def live(names: Optional[List[str]], serve: bool) -> int:
     except KeyboardInterrupt:
         code = 130
     finally:
-        left = session.teardown(run_dir)
-        rcv.stop()
-        with open(os.path.join(run_dir, "home-after.txt"), "w") as fh:
-            fh.write(listing(cursor_dir))
+        try:
+            left = session.teardown(run_dir)
+        finally:
+            rcv.stop()
+            with open(os.path.join(run_dir, "home-after.txt"), "w") as fh:
+                fh.write(listing(cursor_dir))
     if left:
-        print("LEFT BEHIND: %s" % left, file=sys.stderr)
+        print("LEFT BEHIND: %s\nrun `cursor_live.py cleanup`" % left, file=sys.stderr)
         return 1
     print("run dir: %s" % run_dir)
     return code
@@ -418,7 +430,11 @@ def _serve(session, rcv) -> int:
 
 
 def cleanup() -> int:
-    layout = real_layout()
+    try:
+        layout = real_layout()
+    except harness.Abort as exc:
+        print("abort:", exc, file=sys.stderr)
+        return 2
     left = harness.teardown(layout)
     print("left behind: %s" % left if left else "clean")
     return 1 if left else 0

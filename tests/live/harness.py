@@ -18,6 +18,10 @@ SENTINEL = ".rius-live-harness"
 DUMMY_KEY = "ri_" + "x" * 24
 TRUST_MARKER = os.path.join("scripts", "rius_cc", "_tests_trust_env_home.py")
 LOGGED_IN = "Logged in"
+CREDENTIALS = "credentials.json"
+TRACING_ON = "Rius tracing: on"
+CONTENT_ON = "Content: prompts, replies, file contents and command output"
+CONTENT_OFF = "Content: none (structure only)"
 
 Ctl = Callable[[List[str], Optional[str]], Tuple[int, str]]
 
@@ -77,8 +81,10 @@ class Session:
         self.content = ""
 
     def _save(self) -> None:
-        with open(self.layout.sentinel, "w", encoding="utf-8") as fh:
+        pending = self.layout.sentinel + ".new"
+        with open(pending, "w", encoding="utf-8") as fh:
             json.dump(self.state, fh)
+        os.replace(pending, self.layout.sentinel)
 
     def _make_dir(self, path: str) -> None:
         if not os.path.isdir(path):
@@ -92,25 +98,34 @@ class Session:
         self._save()
         for path in (layout.plugins, layout.plugins_local):
             self._make_dir(path)
-        os.symlink(layout.root, layout.link)
         self.state["link"] = layout.link
         self._save()
+        os.symlink(layout.root, layout.link)
         self._ctl_ok(["use-key", "--agent", "cursor", "--env", "local"], DUMMY_KEY)
-        self.structure = self._folder("structure", "enable-here")
-        self.content = self._folder("content", "content-on-here")
+        if not os.path.isfile(os.path.join(layout.rius, CREDENTIALS)):
+            raise Abort("rius_ctl.py use-key stored no key in %s" % layout.rius)
+        self.structure = self._folder("structure", "enable-here", CONTENT_OFF)
+        self.content = self._folder("content", "content-on-here", CONTENT_ON)
 
-    def _folder(self, name: str, action: str) -> str:
+    def _folder(self, name: str, action: str, content_line: str) -> str:
         path = os.path.realpath(tempfile.mkdtemp(prefix="rius-live-%s-" % name,
                                                  dir=self.scratch))
         self.state["folders"].append(path)
         self._save()
         self._ctl_ok([action, "--agent", "cursor", "--cwd", path], None)
+        status = self._ctl_ok(["status", "--agent", "cursor", "--cwd", path], None)
+        if TRACING_ON not in status or content_line not in status:
+            raise Abort("rius_ctl.py %s did not turn tracing on in %s: %s"
+                        % (action, path, status.strip()[:300]))
         return path
 
-    def _ctl_ok(self, args: List[str], stdin: Optional[str]) -> None:
+    def _ctl_ok(self, args: List[str], stdin: Optional[str]) -> str:
+        """rius_ctl.py exits 0 whatever happened, so a caller checks the
+        outcome; a non-zero code (the script failed to start) is still one."""
         code, out = self.ctl(args, stdin)
         if code != 0:
             raise Abort("rius_ctl.py %s failed (%d): %s" % (args[0], code, out.strip()[:300]))
+        return out
 
     def claim_hooks_json(self) -> None:
         """~/.cursor/hooks.json is the user's. The harness only ever makes it
@@ -125,6 +140,8 @@ class Session:
     def install_hooks(self) -> None:
         self.claim_hooks_json()
         self._ctl_ok(["install-hooks", "--agent", "cursor"], None)
+        if not os.path.isfile(self.layout.hooks_json):
+            raise Abort("rius_ctl.py install-hooks wrote no %s" % self.layout.hooks_json)
 
     def add_hook(self, event: str, command: str) -> None:
         self.claim_hooks_json()
@@ -144,10 +161,15 @@ class Session:
         collect(self.layout.rius, run_dir)
 
     def teardown(self, run_dir: Optional[str] = None, settle: float = 1.0) -> List[str]:
-        if run_dir and os.path.exists(self.layout.sentinel):
-            self.wait_quiet()
-            self.collect(run_dir)
-        return teardown(self.layout, settle)
+        """Copy the run out, then undo it. The undo runs also when the copy
+        is interrupted or fails; the error then goes on up."""
+        try:
+            if run_dir and os.path.exists(self.layout.sentinel):
+                self.wait_quiet()
+                self.collect(run_dir)
+        finally:
+            left = teardown(self.layout, settle)
+        return left
 
 
 def wait_quiet(rius_dir: str, quiet: float, maximum: float) -> None:

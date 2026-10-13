@@ -166,11 +166,25 @@ def test_the_real_home_is_not_resolved_while_the_suite_marker_exists():
 
 
 class FakeCtl:
-    def __init__(self):
+    """rius_ctl.py as it behaves: exit 0 always, its effect in the home."""
+
+    def __init__(self, home):
+        self.layout = harness.Layout(str(home / "home"), str(home / "root"))
         self.calls = []
+        self.contents = set()
 
     def __call__(self, args, stdin):
         self.calls.append((args, stdin))
+        action = args[0]
+        if action == "use-key":
+            pathlib.Path(self.layout.rius, harness.CREDENTIALS).write_text("{}")
+        elif action == "install-hooks":
+            pathlib.Path(self.layout.hooks_json).write_text('{"hooks":{}}')
+        elif action == "content-on-here":
+            self.contents.add(args[-1])
+        elif action == "status":
+            content = harness.CONTENT_ON if args[-1] in self.contents else harness.CONTENT_OFF
+            return 0, "%s\n%s\n" % (harness.TRACING_ON, content)
         return 0, ""
 
 
@@ -230,14 +244,15 @@ def test_a_cursor_that_is_not_logged_in_stops_the_harness(home):
 
 @posix_only
 def test_setup_links_the_checkout_stores_the_dummy_key_and_enables_both_folders(home):
-    ctl = FakeCtl()
+    ctl = FakeCtl(home)
     session = harness.Session(layout_of(home), ctl, str(home / "scratch"))
     session.setup()
     layout = session.layout
     assert os.path.realpath(layout.link) == os.path.realpath(layout.root)
     assert ctl.calls[0] == (["use-key", "--agent", "cursor", "--env", "local"], harness.DUMMY_KEY)
     assert ctl.calls[1][0] == ["enable-here", "--agent", "cursor", "--cwd", session.structure]
-    assert ctl.calls[2][0] == ["content-on-here", "--agent", "cursor", "--cwd", session.content]
+    assert ctl.calls[2][0][:2] == ["status", "--agent"]
+    assert ctl.calls[3][0] == ["content-on-here", "--agent", "cursor", "--cwd", session.content]
     assert session.structure != session.content
     assert session.structure == os.path.realpath(session.structure)
     session.teardown(settle=0)
@@ -246,7 +261,7 @@ def test_setup_links_the_checkout_stores_the_dummy_key_and_enables_both_folders(
 @posix_only
 def test_teardown_leaves_the_home_as_it_found_it(home):
     before = listing(home)
-    session = harness.Session(layout_of(home), FakeCtl(), str(home / "scratch"))
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
     session.setup()
     session.claim_hooks_json()
     assert session.teardown(settle=0) == []
@@ -258,7 +273,7 @@ def test_teardown_leaves_the_home_as_it_found_it(home):
 def test_teardown_keeps_the_plugin_dirs_that_were_already_there(home):
     os.makedirs(home / "home" / ".cursor" / "plugins" / "other")
     before = listing(home)
-    session = harness.Session(layout_of(home), FakeCtl(), str(home / "scratch"))
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
     session.setup()
     assert session.teardown(settle=0) == []
     assert listing(home) == before
@@ -266,7 +281,7 @@ def test_teardown_keeps_the_plugin_dirs_that_were_already_there(home):
 
 @posix_only
 def test_teardown_removes_a_dir_the_exporter_wrote_after_the_first_removal(home, monkeypatch):
-    session = harness.Session(layout_of(home), FakeCtl(), str(home / "scratch"))
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
     session.setup()
 
     def exporter_writes_late(_seconds):
@@ -290,7 +305,7 @@ def test_teardown_without_the_sentinel_removes_nothing(home):
 def test_a_hooks_file_that_is_already_there_is_never_changed(home):
     layout = layout_of(home)
     pathlib.Path(layout.hooks_json).write_text('{"version":1,"hooks":{}}')
-    session = harness.Session(layout, FakeCtl(), str(home / "scratch"))
+    session = harness.Session(layout, FakeCtl(home), str(home / "scratch"))
     session.setup()
     with pytest.raises(harness.Abort):
         session.add_hook("stop", "x")
@@ -302,7 +317,7 @@ def test_a_hooks_file_that_is_already_there_is_never_changed(home):
 
 @posix_only
 def test_a_hooks_file_the_harness_made_is_removed_with_everything_in_it(home):
-    session = harness.Session(layout_of(home), FakeCtl(), str(home / "scratch"))
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
     session.setup()
     session.add_hook("stop", "dump")
     session.add_hook("stop", "again")
@@ -320,6 +335,110 @@ def test_a_failing_rius_ctl_aborts_the_setup_and_teardown_still_cleans_up(home):
         session.setup()
     assert session.teardown(settle=0) == []
     assert listing(home) == before
+
+
+@posix_only
+def test_a_rius_ctl_that_exits_zero_and_stores_no_key_aborts_the_setup(home):
+    before = listing(home)
+    session = harness.Session(layout_of(home), lambda a, s: (0, "Rius: not done."),
+                              str(home / "scratch"))
+    with pytest.raises(harness.Abort, match="stored no key"):
+        session.setup()
+    assert session.teardown(settle=0) == []
+    assert listing(home) == before
+
+
+@posix_only
+def test_a_folder_that_is_not_traced_after_enable_aborts_the_setup(home):
+    class Refusing(FakeCtl):
+        def __call__(self, args, stdin):
+            if args[0] == "status":
+                return 0, "Rius tracing: off\n"
+            return super().__call__(args, stdin)
+
+    session = harness.Session(layout_of(home), Refusing(home), str(home / "scratch"))
+    with pytest.raises(harness.Abort, match="did not turn tracing on"):
+        session.setup()
+    assert session.teardown(settle=0) == []
+
+
+@posix_only
+def test_a_content_folder_that_traces_structure_only_aborts_the_setup(home):
+    class Ignoring(FakeCtl):
+        def __call__(self, args, stdin):
+            if args[0] == "content-on-here":
+                return 0, ""
+            return super().__call__(args, stdin)
+
+    session = harness.Session(layout_of(home), Ignoring(home), str(home / "scratch"))
+    with pytest.raises(harness.Abort, match="did not turn tracing on"):
+        session.setup()
+    assert session.teardown(settle=0) == []
+
+
+@posix_only
+def test_install_hooks_that_wrote_no_hooks_file_aborts(home):
+    class Silent(FakeCtl):
+        def __call__(self, args, stdin):
+            return (0, "") if args[0] == "install-hooks" else super().__call__(args, stdin)
+
+    session = harness.Session(layout_of(home), Silent(home), str(home / "scratch"))
+    session.setup()
+    with pytest.raises(harness.Abort, match="wrote no"):
+        session.install_hooks()
+    assert session.teardown(settle=0) == []
+
+
+@posix_only
+@pytest.mark.parametrize("failing", ["wait_quiet", "collect"])
+@pytest.mark.parametrize("error", [KeyboardInterrupt, OSError])
+def test_teardown_undoes_everything_when_the_copy_out_fails(home, monkeypatch, failing, error):
+    before = listing(home)
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
+    session.setup()
+
+    def fail(*_args):
+        raise error()
+
+    monkeypatch.setattr(harness, failing, fail)
+    with pytest.raises(error):
+        session.teardown(str(home / "scratch"), settle=0)
+    assert listing(home) == before
+    assert not os.path.lexists(session.layout.link)
+
+
+@posix_only
+def test_the_link_is_recorded_before_it_is_made(home, monkeypatch):
+    session = harness.Session(layout_of(home), FakeCtl(home), str(home / "scratch"))
+
+    def die(*_args):
+        assert harness._read_state(session.layout)["link"] == session.layout.link
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness.os, "symlink", die)
+    with pytest.raises(KeyboardInterrupt):
+        session.setup()
+    assert session.teardown(settle=0) == []
+
+
+@posix_only
+def test_an_interrupted_run_process_kills_the_command_it_started(tmp_path, monkeypatch):
+    started = []
+    real_popen = cursor_live.subprocess.Popen
+
+    class Recording(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            started.append(self)
+
+        def communicate(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cursor_live.subprocess, "Popen", Recording)
+    with pytest.raises(KeyboardInterrupt):
+        cursor_live.run_process([sys.executable, "-c", "import time; time.sleep(60)"],
+                                str(tmp_path))
+    assert started[0].poll() is not None
 
 
 def test_the_spool_and_the_logs_are_copied_out_before_they_go(home, tmp_path):
