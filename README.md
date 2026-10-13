@@ -47,9 +47,10 @@ for you, and a repository's settings can't turn tracing on.
 
 - **Structure only** (`/rius:enable-here`, the default): the span tree,
   model names, token counts, timing, status, tool names, error types, the
-  kind of command a shell call ran (`test`, `build`, ...), a subagent's type, the folder path and git branch, and the email you signed
-  in with at `/rius:login`. No prompts, replies,
-  tool inputs or outputs, subagent briefs or session name.
+  kind of command a shell call ran (`test`, `build`, ...), a subagent's
+  type, the folder path and git branch, and the email you signed in with at
+  `/rius:login`. No prompts, replies, tool inputs or outputs, subagent
+  briefs or session name.
 - **With content** (`/rius:enable-content-here`): all of the above, plus
   your prompts, Claude's replies (never its thinking), tool inputs and tool
   outputs, which include file contents and command output.
