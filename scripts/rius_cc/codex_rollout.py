@@ -24,6 +24,7 @@ TOOL_CALL = "tool_call"
 TOOL_OUTPUT = "tool_output"
 MCP_RESULT = "mcp_result"
 SUBAGENT_STARTED = "subagent_started"
+COMMAND_END = "command_end"
 
 
 class Record:
@@ -123,6 +124,19 @@ def _subagent_started(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "agent_id": _text(p.get("agent_thread_id"))}
 
 
+def _command_end(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A command Codex ran for a tool call (seen in 0.160.1 and 0.162.1). It names no call:
+    the code mode `exec` tool runs its commands through it, and the call's own
+    output does not say how they ended."""
+    item = p.get("item")
+    if not isinstance(item, dict) or item.get("type") != "CommandExecution":
+        return None
+    code = item.get("exit_code")
+    if not isinstance(code, int) or isinstance(code, bool):
+        return None
+    return {"exit_code": code}
+
+
 _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]] = {
     "task_started": (TURN_START, lambda p: {"turn_id": _text(p.get("turn_id"))}),
     "task_complete": (TURN_END, _turn_end),
@@ -132,6 +146,7 @@ _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]
     "token_count": (USAGE, _usage),
     "mcp_tool_call_end": (MCP_RESULT, _mcp_result),
     "sub_agent_activity": (SUBAGENT_STARTED, _subagent_started),
+    "item_completed": (COMMAND_END, _command_end),
 }
 
 
