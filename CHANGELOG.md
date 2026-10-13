@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.6.2 (unreleased)
+## 0.6.2 (2026-10-13)
 
 - Every span carries `user.id`: the email you signed in with at
   `/rius:login`, which the workspace already holds as the key's approver.
