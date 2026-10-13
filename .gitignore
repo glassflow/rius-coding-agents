@@ -23,3 +23,6 @@ htmlcov/
 
 # Created by the test suite only; see tests/conftest.py.
 scripts/rius_cc/_tests_trust_env_home.py
+
+# live Cursor harness output (spans, spools, logs); see tests/live/README.md
+tests/live/runs/
