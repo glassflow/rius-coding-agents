@@ -188,7 +188,7 @@ def layout_of(home):
 
 
 def listing(path):
-    return sorted(str(p.relative_to(path)) for p in path.rglob("*"))
+    return sorted(p.relative_to(path).as_posix() for p in path.rglob("*"))
 
 
 def test_a_clean_home_with_a_logged_in_cursor_may_start(home):
