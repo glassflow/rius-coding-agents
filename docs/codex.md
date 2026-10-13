@@ -140,14 +140,21 @@ turn things off.
   their own. When the script throws, Codex reports `Script failed` and the
   span is an error (`exec.script_failed`, message: the thrown error's first
   line). A command that fails inside a script that does not throw is read
-  from the rollout, where Codex writes an `item_completed` event for each
-  command (`CommandExecution`, with its `exit_code`; seen in codex-cli
-  0.160.1 and 0.162.1, and not in the 0.144.1 rollouts checked): the span is an error
-  (`exec.exit_<n>`, the first non-zero code) and `process.exit.code` is set.
-  That event names no call, so the code is given to the `exec` call that is
-  the only call open; while calls run together, a failed command inside a
-  script that does not throw still reads as success. The call's output
-  carries no exit code, and Codex's hooks were not checked for one.
+  from the rollout, where codex-cli 0.162.1 writes an `item_completed`
+  event for each command (`CommandExecution`, with its `exit_code`, and no
+  such event in the 0.144.1 rollouts checked): the span is an error
+  (`exec.exit_<n>`, the first non-zero code) and `process.exit.code` is
+  set. A command that returns non-zero on purpose (`rg` with no match,
+  `test -f`) reads as an error too, as it does for `exec_command`. That
+  event names no call, so the code is given to the `exec` call that is the
+  only call open, when the event's turn is the open turn and its
+  `started_at_ms` is not before the call began; while calls run together, a
+  failed command inside a script that does not throw still reads as
+  success. In the one 0.162.1 rollout checked `started_at_ms` equals the
+  end, so a command that began before the call and ended during it is not
+  told apart. A call interrupted after such a command keeps its error. The
+  call's output carries no exit code, and Codex's hooks were not checked
+  for one.
   - **Name (best effort).** The span is named after the tools its script
     calls (`exec_command`, `apply_patch`, `mcp__<server>__<tool>`). The
     script is read by a small scanner, not a JavaScript parser: when it

@@ -314,10 +314,23 @@ def _on_command_end(rec, state, ctx, out):
     open_tools = list(state["open_tools"].values())
     if len(open_tools) != 1 or open_tools[0]["tool_name"] != EXEC_TOOL:
         return
-    code = rec.get("exit_code")
     tool = open_tools[0]
+    if not _ran_in_call(rec, state, tool):
+        return
     if not tool.get("inner_exit"):
-        tool["inner_exit"] = code
+        tool["inner_exit"] = rec.get("exit_code")
+
+
+def _ran_in_call(rec, state: dict, tool: dict) -> bool:
+    """Whether a command end can belong to the call: it names another turn,
+    or a start before the call began, when it cannot. Codex 0.162.1 gives
+    `started_at_ms` equal to the end, so a command that began before the
+    call and ended during it is still not told apart."""
+    turn = state["turn"]
+    if rec.get("turn_id") and turn is not None and rec.get("turn_id") != turn["turn_id"]:
+        return False
+    started_ms = rec.get("started_at_ms")
+    return not started_ms or started_ms >= tool["start_ns"] // 1_000_000
 
 
 def _on_subagent_started(rec, state, ctx, out):
@@ -620,9 +633,20 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
         attrs["gen_ai.tool.name"] = tool["tool_name"]
         _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
                       json_text=True)
+        error_type = tool_error(tool, "")
+        if tool.get("command_class") and _exit_code(tool, "") is not None:
+            attrs[command_class.EXIT_CODE_ATTRIBUTE] = _exit_code(tool, "")
+        status_message, events = "", []
+        if error_type:
+            attrs["error.type"] = error_type
+            status_message = error_type if ctx.capture_content else TOOL_ERROR_WITHHELD
+            events.append((now_ns, "exception", {
+                "exception.type": error_type,
+                "exception.message": status_message}))
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                             _name(tool), "TOOL", tool["start_ns"],
-                             now_ns, attrs, status_code="UNSET"))
+                             _name(tool), "TOOL", tool["start_ns"], now_ns,
+                             attrs, "ERROR" if error_type else "UNSET",
+                             status_message, events))
     state["open_tools"] = {}
     return out
 

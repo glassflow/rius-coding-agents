@@ -125,16 +125,18 @@ def _subagent_started(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _command_end(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """A command Codex ran for a tool call (seen in 0.160.1 and 0.162.1). It names no call:
-    the code mode `exec` tool runs its commands through it, and the call's own
-    output does not say how they ended."""
+    """A command Codex ran for a tool call, as the codex-cli 0.162.1 rollouts
+    here show it. It names no call: the code mode `exec` tool runs its
+    commands through it, and the call's own output does not say how they
+    ended. `turn_id` and `started_at_ms` are kept when it has them."""
     item = p.get("item")
     if not isinstance(item, dict) or item.get("type") != "CommandExecution":
         return None
     code = item.get("exit_code")
     if not isinstance(code, int) or isinstance(code, bool):
         return None
-    return {"exit_code": code}
+    return {"exit_code": code, "turn_id": _text(p.get("turn_id")),
+            "started_at_ms": _int(p.get("started_at_ms"))}
 
 
 _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]] = {

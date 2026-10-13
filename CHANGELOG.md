@@ -8,8 +8,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 - Codex: a command that fails inside a code-mode script that does not throw
   now marks the `exec` span as an error (`exec.exit_<n>`) and sets
-  `process.exit.code`, read from the rollout's command events (seen in
-  codex-cli 0.160.1 and 0.162.1).
+  `process.exit.code`, read from the rollout's command events (as
+  codex-cli 0.162.1 writes them). A probe such as `rg` or `test -f` that
+  returns 1 on purpose reads as an error too, as it does for `exec_command`.
+  A call interrupted after such a command keeps that error instead of
+  reading as unset.
 
 ## 0.6.2 (2026-10-13)
 

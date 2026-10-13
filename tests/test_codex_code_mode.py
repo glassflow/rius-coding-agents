@@ -671,10 +671,11 @@ LS_SCRIPT = 'const r = await tools.exec_command({cmd: "ls /nope"});\ntext("DONE"
 COMPLETED = ["Script completed\nWall time 0.1 seconds\nOutput:\n", "DONE"]
 
 
-def _ran(exit_code, ms=3200, item_type="CommandExecution"):
+def _ran(exit_code, ms=3200, item_type="CommandExecution", **top):
     return {"timestamp": "2026-10-05T16:14:03.%03dZ" % ms, "type": "event_msg",
-            "payload": {"type": "item_completed",
-                        "item": {"type": item_type, "exit_code": exit_code}}}
+            "payload": dict({"type": "item_completed",
+                             "item": {"type": item_type, "exit_code": exit_code}},
+                            **top)}
 
 
 def _exec_after(*codes, **extra):
@@ -777,3 +778,130 @@ def test_a_codex_0_162_rollout_with_a_failed_command_reads_as_failed():
     assert tool.status_code == "ERROR"
     assert tool.attributes["error.type"] == "exec.exit_1"
     assert tool.attributes[command_class.EXIT_CODE_ATTRIBUTE] == 1
+
+
+CALL_MS = int(datetime.datetime(2026, 10, 5, 16, 14, 3,
+                                tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+
+def _open_call(name, state, ms=0):
+    lines = [
+        {"timestamp": "2026-10-05T16:14:00.000Z", "type": "session_meta",
+         "payload": {"id": PARENT, "cwd": "/tmp/proj", "cli_version": "0.162.1"}},
+        {"timestamp": "2026-10-05T16:14:00.100Z", "type": "event_msg",
+         "payload": {"type": "task_started", "turn_id": "t1"}},
+        {"timestamp": "2026-10-05T16:14:03.%03dZ" % ms, "type": "response_item",
+         "payload": {"type": "custom_tool_call", "call_id": "c1", "name": name,
+                     "input": LS_SCRIPT}}]
+    return _build(lines, state)
+
+
+def _build(lines, state):
+    records = [codex_rollout.parse_line(json.dumps(line)) for line in lines]
+    assert None not in records
+    return codex_spans.build(records, state, _ctx(capture=True))
+
+
+def _finish(lines, state):
+    return [s for s in _build(lines, state)
+            if s.kind_oi == "TOOL" and not s.pending]
+
+
+def _output_row(ms=3381):
+    return {"timestamp": "2026-10-05T16:14:03.%03dZ" % ms, "type": "response_item",
+            "payload": {"type": "custom_tool_call_output", "call_id": "c1",
+                        "output": [{"type": "input_text", "text": t}
+                                   for t in COMPLETED]}}
+
+
+def _aborted():
+    return {"timestamp": "2026-10-05T16:14:04.000Z", "type": "event_msg",
+            "payload": {"type": "turn_aborted", "turn_id": "t1",
+                        "reason": "interrupted"}}
+
+
+@pytest.mark.parametrize("name", ["apply_patch", "mcp__fs__read", "spawn_agent"])
+def test_a_command_end_is_not_given_to_a_lone_call_that_is_not_exec(name):
+    state = codex_spans.new_state()
+    _open_call(name, state)
+    _build([_ran(1)], state)
+    assert "inner_exit" not in state["open_tools"]["c1"]
+    tool = _finish([_output_row()], state)[0]
+    assert tool.status_code == "OK"
+    assert "error.type" not in tool.attributes
+
+
+def test_a_command_end_from_another_turn_is_not_given_to_the_call():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    _build([_ran(1, turn_id="t0")], state)
+    tool = _finish([_output_row()], state)[0]
+    assert tool.status_code == "OK"
+    assert "error.type" not in tool.attributes
+
+
+def test_a_command_that_started_before_the_call_is_not_given_to_it():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    _build([_ran(1, turn_id="t1", started_at_ms=CALL_MS - 1)], state)
+    assert "error.type" not in _finish([_output_row()], state)[0].attributes
+
+
+@pytest.mark.parametrize("started", [CALL_MS, CALL_MS + 200, 0, None])
+def test_a_command_of_this_turn_that_started_in_the_call_is_given_to_it(started):
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    _build([_ran(1, turn_id="t1", started_at_ms=started)], state)
+    tool = _finish([_output_row()], state)[0]
+    assert tool.attributes["error.type"] == "exec.exit_1"
+
+
+def test_a_command_end_keeps_the_turn_and_start_it_names():
+    record = codex_rollout.parse_line(json.dumps(
+        _ran(1, turn_id="t1", started_at_ms=CALL_MS)))
+    assert record.get("turn_id") == "t1"
+    assert record.get("started_at_ms") == CALL_MS
+
+
+def test_an_interrupted_call_keeps_the_exit_code_of_a_command_that_failed():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    tool = _finish([_ran(1), _aborted()], state)[0]
+    assert tool.status_code == "ERROR"
+    assert tool.attributes["error.type"] == "exec.exit_1"
+    assert tool.attributes[command_class.EXIT_CODE_ATTRIBUTE] == 1
+    assert tool.status_message == "exec.exit_1"
+
+
+def test_an_interrupted_call_after_a_command_that_passed_is_not_an_error():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    tool = _finish([_ran(0), _aborted()], state)[0]
+    assert tool.status_code == "UNSET"
+    assert "error.type" not in tool.attributes
+    assert tool.attributes[command_class.EXIT_CODE_ATTRIBUTE] == 0
+
+
+def test_a_command_end_in_one_batch_reaches_the_call_that_ends_in_the_next():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    _build([_ran(1)], state)
+    state = json.loads(json.dumps(state))
+    tool = _finish([_output_row()], state)[0]
+    assert tool.attributes["error.type"] == "exec.exit_1"
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    _build([_ran(1)], state)
+    state = json.loads(json.dumps(state))
+    tool = _finish([_aborted()], state)[0]
+    assert tool.attributes["error.type"] == "exec.exit_1"
+
+
+def test_an_interrupted_call_with_capture_off_sends_no_content():
+    state = codex_spans.new_state()
+    _open_call("exec", state)
+    records = [codex_rollout.parse_line(json.dumps(line))
+               for line in (_ran(1), _aborted())]
+    out = codex_spans.build(records, state, _ctx(capture=False))
+    tool = [s for s in out if s.kind_oi == "TOOL" and not s.pending][0]
+    assert tool.status_message == spans.TOOL_ERROR_WITHHELD
