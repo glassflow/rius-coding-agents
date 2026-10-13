@@ -10,6 +10,11 @@ a run uses your Cursor plan and takes minutes.
     python tests/live/cursor_live.py serve       # a receiver and two folders, for a hand test
     python tests/live/cursor_live.py cleanup     # undo a run that crashed
 
+A run changes the real `~/.cursor` (see "What it touches"; the plugin takes
+the home from the operating system, so `$HOME` cannot redirect it). It
+therefore refuses to start unless `CURSOR_LIVE_USE_REAL_HOME=1` is set.
+`list` and `cleanup` need no such setting.
+
 It needs a **paid Cursor plan** and `cursor-agent` logged in (`cursor-agent
 status`). A quota or plan error from Cursor fails the scenario with Cursor's
 own message; it is not worked around. `CURSOR_LIVE_MODEL` picks the model

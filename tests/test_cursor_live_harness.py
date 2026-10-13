@@ -441,6 +441,18 @@ def test_an_interrupted_run_process_kills_the_command_it_started(tmp_path, monke
     assert started[0].poll() is not None
 
 
+@pytest.mark.parametrize("serve", [False, True])
+def test_a_run_does_not_start_without_the_real_home_being_allowed(monkeypatch, capsys, serve):
+    monkeypatch.delenv(cursor_live.REAL_HOME_VARIABLE, raising=False)
+
+    def touched(*_args):
+        raise AssertionError("the real home was reached")
+
+    monkeypatch.setattr(cursor_live, "real_layout", touched)
+    assert cursor_live.live(["headless_shell"], serve) == 2
+    assert cursor_live.REAL_HOME_VARIABLE in capsys.readouterr().err
+
+
 def test_the_spool_and_the_logs_are_copied_out_before_they_go(home, tmp_path):
     rius = tmp_path / "rius"
     (rius / "spool").mkdir(parents=True)

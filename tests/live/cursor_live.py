@@ -357,7 +357,16 @@ def _on_sigterm(_signum, _frame):
     sys.exit(143)
 
 
+REAL_HOME_VARIABLE = "CURSOR_LIVE_USE_REAL_HOME"
+
+
 def live(names: Optional[List[str]], serve: bool) -> int:
+    if os.environ.get(REAL_HOME_VARIABLE) != "1":
+        print("abort: a run puts a plugin link, a dummy key, two traced folders and "
+              "maybe a hooks.json in the real ~/.cursor (rius_ctl.py takes the home "
+              "from the OS, not $HOME). Set %s=1 to allow it." % REAL_HOME_VARIABLE,
+              file=sys.stderr)
+        return 2
     try:
         layout = real_layout()
     except harness.Abort as exc:
