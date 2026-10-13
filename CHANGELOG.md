@@ -6,6 +6,16 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.6.2 (unreleased)
 
+- Every span carries `user.id`: the email you signed in with at
+  `/rius:login`, which the workspace already holds as the key's approver.
+  The console lists coding sessions by developer from it, a running one
+  included. A key stored with `use-key` is often shared, so it sends no
+  `user.id`. Nothing in the environment can set it.
+- Traces are now sent as OTLP/JSON (`application/json`) instead of OTLP
+  protobuf, so the wire format is readable text and the hand-written binary
+  encoder is gone. The receiver has accepted both since 2026-10-05. Same
+  spans, same attributes; nothing changes in what is traced.
+- A square icon for the plugin's directory listing.
 - `--env local`: send traces to a Rius stack on this machine
   (`use-key --env local`).
 - A shell call's span says what kind of command it ran:
@@ -22,21 +32,10 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 - Codex code mode: a secret file named through a JavaScript escape
   (`"\x2eenv"`) now withholds the call's output.
 
-## 0.6.1 (unreleased)
+## 0.6.1 (2026-10-06)
 
-Fixes for the Codex and Cursor betas, and every span now names who sent it.
-
-### All agents
-
-- Every span carries `user.id`: the email you signed in with at
-  `/rius:login`, which the workspace already holds as the key's approver.
-  The console lists coding sessions by developer from it, a running one
-  included. A key stored with `use-key` is often shared, so it sends no
-  `user.id`. Nothing in the environment can set it.
-- Traces are now sent as OTLP/JSON (`application/json`) instead of OTLP
-  protobuf, so the wire format is readable text and the hand-written binary
-  encoder is gone. The receiver has accepted both since 2026-10-05. Same
-  spans, same attributes; nothing changes in what is traced.
+Fixes for the Codex and Cursor betas. Claude Code: no change in what is
+traced or sent.
 
 ### Codex (beta)
 

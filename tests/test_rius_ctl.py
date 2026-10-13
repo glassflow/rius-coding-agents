@@ -429,8 +429,8 @@ def _manifests():
 def test_manifests_name_the_plugin_rius_at_0_6_1():
     plugin, market = _manifests()
     listed = {p["name"]: p["version"] for p in market["plugins"]}
-    assert (plugin["name"], plugin["version"]) == ("rius", "0.6.1")
-    assert listed == {"rius": "0.6.1"}
+    assert (plugin["name"], plugin["version"]) == ("rius", "0.6.2")
+    assert listed == {"rius": "0.6.2"}
 
 
 def test_marketplace_lists_the_plugin_at_its_own_version():

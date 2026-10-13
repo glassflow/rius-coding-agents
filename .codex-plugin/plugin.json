@@ -1,6 +1,6 @@
 {
   "name": "rius",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Stream Codex sessions to Rius as OTLP GenAI traces (beta)",
   "author": {
     "name": "GlassFlow",
