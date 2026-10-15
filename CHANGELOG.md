@@ -13,6 +13,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   returns 1 on purpose reads as an error too, as it does for `exec_command`.
   A call interrupted after such a command keeps that error instead of
   reading as unset.
+- A `coding-agent-observability` skill for `npx skills add
+  glassflow/rius-coding-agents`, so a coding agent asked how to track
+  Claude Code, Codex or Cursor usage and cost can set Rius up. The plugin,
+  marketplace and Codex and Cursor manifests now describe that use, with
+  matching keywords.
 
 ## 0.6.2 (2026-10-13)
 

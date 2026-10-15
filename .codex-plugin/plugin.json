@@ -1,7 +1,7 @@
 {
   "name": "rius",
   "version": "0.6.2",
-  "description": "Stream Codex sessions to Rius as OTLP GenAI traces (beta)",
+  "description": "Stream Codex sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, cost, tool calls and subagents, per developer and per session (beta).",
   "author": {
     "name": "GlassFlow",
     "url": "https://www.glassflow.ai"
@@ -10,14 +10,18 @@
   "repository": "https://github.com/glassflow/rius-coding-agents",
   "license": "MIT",
   "keywords": [
-    "observability",
+    "codex",
+    "coding-agents",
+    "agent-observability",
+    "llm-observability",
+    "cost-tracking",
+    "token-usage",
     "opentelemetry",
+    "observability",
     "tracing",
-    "llm",
     "ai-agents",
     "mcp",
-    "rius",
-    "codex"
+    "rius"
   ],
   "skills": "./codex/skills/",
   "hooks": "./codex/hooks.json",
@@ -29,8 +33,8 @@
   },
   "interface": {
     "displayName": "Rius",
-    "shortDescription": "Trace Codex sessions in Rius",
-    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, and tool calls. Tracing is off until you enable a folder.",
+    "shortDescription": "Track Codex usage and cost in Rius",
+    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, tool calls and subagents. Rius prices the tokens, so you see cost per session and per developer. Tracing is off until you enable a folder.",
     "developerName": "GlassFlow",
     "category": "Developer Tools",
     "websiteURL": "https://www.glassflow.ai/rius"
