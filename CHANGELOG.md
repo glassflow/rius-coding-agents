@@ -6,6 +6,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.7.0 (unreleased)
 
+- An `agent-observability` skill, installed with
+  `npx skills add glassflow/rius-coding-agents`: it adds Rius tracing to an
+  AI agent or LLM app with the Python or TypeScript SDK and checks the first
+  trace. It ships in `.agents/skills/` and is not part of the plugin.
+
 - Codex: a command that fails inside a code-mode script that does not throw
   now marks the `exec` span as an error (`exec.exit_<n>`) and sets
   `process.exit.code`, read from the rollout's command events (as
