@@ -1,6 +1,6 @@
 ---
 name: coding-agent-observability
-description: "Sets up coding-agent observability with Rius: every Claude Code, Codex or Cursor session becomes an OpenTelemetry trace with model calls, tokens, cost, tool calls and subagents, per developer and per session. Use when the user asks how to track their own or their team's Claude Code, Codex or Cursor usage and cost, see what Claude Code is doing, find Claude Code token spend per developer, monitor or trace coding agents, or observe OpenHands."
+description: "Sets up coding-agent observability with Rius: every Claude Code, Codex or Cursor session becomes an OpenTelemetry trace with model calls, tokens, cost, tool calls and subagents, per developer and per session. Use when the user asks how to track their own or their team's Claude Code, Codex or Cursor usage and cost, see what Claude Code is doing, find Claude Code token spend per developer, monitor or trace coding agents, or observe OpenHands. Not for instrumenting an agent you are building; use agent-observability for that."
 ---
 
 # Coding-agent observability with Rius
@@ -32,8 +32,8 @@ workspace; each session then carries the email they signed in with.
 
 ## 2. Claude Code
 
-If `/rius:status` already works in Claude Code, the plugin is installed: skip to step 3 of this
-list.
+If `/rius:status` already works in Claude Code, the plugin is installed. If its `Reason` line says
+there is no API key, go to step 2 of this list; otherwise go to step 3.
 
 1. Install, from a terminal:
 
@@ -72,7 +72,9 @@ codex plugin add rius@rius-coding-agents
 
 Then, in Codex, the user opens `/hooks` and trusts the `rius` hooks (nothing is traced before
 that), types `$rius:rius-login`, then `$rius:rius-enable-here` in a folder to trace, approving the
-sandbox escalation each asks for. `$rius:rius-status` checks it. Codex traces carry token counts
+sandbox escalation each asks for. As in Claude Code, that sends structure only;
+`$rius:rius-enable-content-here` adds prompts, replies and tool output, with secrets removed.
+`$rius:rius-status` checks it. Codex traces carry token counts
 (cached and reasoning tokens split out) and subagents.
 Docs: https://docs.glassflow.ai/rius/guides/codex
 
@@ -81,6 +83,10 @@ Docs: https://docs.glassflow.ai/rius/guides/codex
 In Cursor's plugin settings, "Import from Repo" `glassflow/rius-coding-agents`, then the user runs
 `/rius-login` and `/rius-enable-here` in the agent chat. Cursor traces show turns, model answers,
 tool calls and subagents, but **no token counts or cost**: Cursor's hooks do not report usage.
+Importing the plugin from the IDE is not verified yet. If no traces arrive, `cursor-agent` CLI
+builds before 2026-08-27 ignore plugin hooks; the "Older `cursor-agent` builds" fallback in
+https://github.com/glassflow/rius-coding-agents/blob/main/docs/cursor.md#install writes them into
+`~/.cursor/hooks.json` instead.
 Docs: https://docs.glassflow.ai/rius/guides/cursor
 
 ## 5. OpenHands
@@ -115,8 +121,13 @@ then open the trace list in the console.
 
 ## Stop
 
-- `/rius:disable-here` stops tracing a folder; `/rius:off` stops only this session.
-- `/rius:logout` revokes the key; run it before `/plugin uninstall rius`.
+- Claude Code: `/rius:disable-here` stops tracing a folder; `/rius:off` stops only this session.
+  `/rius:logout` revokes the key; run it before `/plugin uninstall rius`.
+- Codex: `$rius:rius-disable-here` and `$rius:rius-logout`.
+- Cursor: `/rius-disable-here` and `/rius-logout`.
+
+Each agent keeps its own key (`~/.claude/rius`, `~/.codex/rius`, `~/.cursor/rius`), so logging
+out of one leaves the others' keys live. Log out of each one in use.
 
 More: https://docs.glassflow.ai/rius/guides/claude-code-plugin,
 https://docs.glassflow.ai/rius/guides/codex, https://docs.glassflow.ai/rius/guides/cursor,

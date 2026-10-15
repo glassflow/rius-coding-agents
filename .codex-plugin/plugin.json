@@ -1,7 +1,7 @@
 {
   "name": "rius",
   "version": "0.6.2",
-  "description": "Stream Codex sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, cost, tool calls and subagents, per developer and per session (beta).",
+  "description": "Stream Codex sessions to Rius as OpenTelemetry traces: model calls, tokens, cost, tool calls and subagents, per developer and per session (beta).",
   "author": {
     "name": "GlassFlow",
     "url": "https://www.glassflow.ai"
@@ -34,7 +34,7 @@
   "interface": {
     "displayName": "Rius",
     "shortDescription": "Track Codex usage and cost in Rius",
-    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, tool calls and subagents. Rius prices the tokens, so you see cost per session and per developer. Tracing is off until you enable a folder.",
+    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, tool calls and subagents. Rius prices the tokens, so you see cost per session and per developer. Tracing is off until you enable a folder, and sends structure only by default; prompt and tool output capture is optional.",
     "developerName": "GlassFlow",
     "category": "Developer Tools",
     "websiteURL": "https://www.glassflow.ai/rius"

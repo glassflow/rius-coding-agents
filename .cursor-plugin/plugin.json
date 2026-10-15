@@ -1,6 +1,6 @@
 {
   "name": "rius",
-  "description": "Stream Cursor agent sessions to Rius as OpenTelemetry traces: prompts, model answers, tool calls and subagents, per developer and per session (beta; Cursor reports no tokens or cost).",
+  "description": "Stream Cursor agent sessions to Rius as OpenTelemetry traces: model answers, tool calls and subagents, per developer and per session (beta; Cursor reports no tokens or cost).",
   "version": "0.6.2",
   "author": {
     "name": "GlassFlow"
