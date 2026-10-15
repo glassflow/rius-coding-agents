@@ -1,6 +1,6 @@
 {
   "name": "rius",
-  "description": "Stream Claude Code sessions to Rius as OTLP GenAI traces",
+  "description": "Trace Claude Code sessions in Rius with OpenTelemetry: model calls, tokens, cost, tool calls and subagents, per developer and per session.",
   "version": "0.6.2",
   "author": { "name": "GlassFlow", "url": "https://www.glassflow.ai" },
   "homepage": "https://github.com/glassflow/rius-coding-agents",
@@ -10,5 +10,20 @@
   "icon": "./docs/assets/icon.png",
   "repository": "https://github.com/glassflow/rius-coding-agents",
   "license": "MIT",
-  "keywords": ["observability", "opentelemetry", "tracing", "llm", "ai-agents", "mcp", "rius"]
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "coding-agents",
+    "agent-observability",
+    "llm-observability",
+    "cost-tracking",
+    "token-usage",
+    "opentelemetry",
+    "observability",
+    "tracing",
+    "ai-agents",
+    "mcp",
+    "rius"
+  ]
 }

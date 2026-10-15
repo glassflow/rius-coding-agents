@@ -1,7 +1,7 @@
 [project]
 name = "rius"
 version = "0.6.2"
-description = "Stream Claude Code sessions to Rius as OTLP GenAI traces"
+description = "Stream Claude Code, Codex and Cursor sessions to Rius as OpenTelemetry traces: model calls, tokens, cost, tool calls and subagents, per developer and per session, structure only by default"
 requires-python = ">=3.9"
 dependencies = []
 

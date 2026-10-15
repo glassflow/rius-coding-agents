@@ -4,13 +4,13 @@
     "name": "GlassFlow"
   },
   "metadata": {
-    "description": "Rius observability for coding agents"
+    "description": "Rius observability for coding agents: see what Cursor, Claude Code and Codex are doing, per developer and per session."
   },
   "plugins": [
     {
       "name": "rius",
       "source": "./",
-      "description": "Stream Cursor agent sessions to Rius as OTLP GenAI traces (beta)",
+      "description": "Stream Cursor agent sessions to Rius as OpenTelemetry traces: model answers, tool calls and subagents, per developer and per session (beta; Cursor reports no tokens or cost).",
       "version": "0.6.2"
     }
   ]
