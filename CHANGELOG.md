@@ -6,6 +6,9 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.7.0 (unreleased)
 
+- The plugin and marketplace listings for Claude Code, Codex and Cursor
+  describe what a session trace holds, and carry more search keywords.
+  The Cursor listing leaves out tokens and cost, which Cursor does not report.
 - Codex: a command that fails inside a code-mode script that does not throw
   now marks the `exec` span as an error (`exec.exit_<n>`) and sets
   `process.exit.code`, read from the rollout's command events (as
