@@ -3,7 +3,7 @@ import json
 import pytest
 
 import exporter
-from rius_cc import config, state
+from rius_cc import config, distro, state
 from tests.signed_in import TEST_ENDPOINT, sign_in
 
 
@@ -465,3 +465,5 @@ def test_known_resource_values_are_still_sent(home, fixtures_dir, monkeypatch):
                                 str(fixtures_dir / "simple.jsonl"), ("PostToolUse",))
     assert seen[0]["vcs.ref.head.name"] == "main"
     assert seen[0]["process.working_directory"] == "/tmp/proj"
+    assert seen[0]["telemetry.distro.name"] == "rius-coding-agents"
+    assert seen[0]["telemetry.distro.version"] == distro.version()

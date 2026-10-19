@@ -1,5 +1,7 @@
 """The attribute keys come from rius-semconv's generated module, vendored at
-scripts/rius_cc/_semconv_generated.py, never from hand-typed strings.
+scripts/rius_cc/_semconv_generated.py, not from hand-typed strings. The guard
+below catches a literal equal to a whole registered key; a key built by
+concatenation or an f-string gets past it, so don't build keys.
 
 A key typed by hand drifts silently when the registry renames it, which is how
 the plugin came to send glassflow.span.pending after the registry retired it.

@@ -75,7 +75,7 @@ capped at 32 KB.
 |---|---|---|
 | `service.name`, `service.instance.id` | `claude-code`, a random id per session | always |
 | `service.version`, `process.working_directory`, `vcs.ref.head.name` | Claude Code's version `2.1.289`, the folder `/Users/ana/src/shop` (can include your user name), the branch `main` | always |
-| `telemetry.distro.name`, `telemetry.distro.version` | `rius-coding-agents`, the plugin's version: tells Rius these spans come from this plugin | always |
+| `telemetry.distro.name`, `telemetry.distro.version` | `rius-coding-agents`, the plugin's version: tells Rius these spans come from this plugin | always (the version, when the plugin's manifest can be read) |
 | span name, ids, start and end time, status | trace and span ids are hashes of the session id | always |
 | `session.id`, `cc.claude_session_id`, `cc.continued_from` | Claude Code session ids | always |
 | `user.id` | the email you signed in with at `/rius:login`, so the console can list your sessions; none for a key stored with `use-key` | always |

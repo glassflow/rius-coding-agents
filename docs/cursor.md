@@ -38,7 +38,8 @@ cursor session                AGENT  sessionStart .. sessionEnd
   a resumed run hangs under its Task call as in the first run.
 - Spans carry `service.name=cursor`, plus `service.version` (Cursor's
   version), `process.working_directory`, `vcs.ref.head.name`,
-  `telemetry.distro.name=rius-coding-agents` and the composer mode.
+  `telemetry.distro.name=rius-coding-agents`, `telemetry.distro.version`
+  (the plugin's version) and the composer mode.
 
 **No token counts and no cost.** Cursor's hooks do not report token usage,
 so Cursor LLM spans have no `gen_ai.usage.*` attributes and Rius shows no
