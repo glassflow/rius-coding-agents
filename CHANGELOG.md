@@ -16,6 +16,27 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   returns 1 on purpose reads as an error too, as it does for `exec_command`.
   A call interrupted after such a command keeps that error instead of
   reading as unset.
+- Attribute names now come from the Rius attribute registry (rius-semconv),
+  vendored at `scripts/rius_cc/_semconv_generated.py`, and CI fails when the
+  copy drifts from its pinned release. What changes on the wire, for all
+  three agents:
+  - The folder, git branch and agent version are sent as the OpenTelemetry
+    keys `process.working_directory`, `vcs.ref.head.name` and
+    `service.version`, instead of `cc.cwd`, `cc.git_branch` and `cc.version`
+    (and their `codex.*` and `cursor.*` twins).
+  - The resource carries `telemetry.distro.name=rius-coding-agents` and the
+    plugin's version, which tells Rius the folder and branch belong to a
+    coding session.
+  - A running span is marked `rius.span.pending` instead of
+    `glassflow.span.pending`, and the instrumentation scope is `rius`
+    instead of `glassflow`.
+  - Cursor's context fill is sent as a number with a fraction
+    (`cursor.context.context_usage_percent`).
+
+  Rius shows the folder and branch from either spelling, so older and newer
+  sessions sit side by side in the console. Update the Rius backend before
+  this plugin release: one that predates the new keys shows no folder or
+  branch for new sessions.
 
 ## 0.6.2 (2026-10-13)
 

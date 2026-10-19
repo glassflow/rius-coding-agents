@@ -1,0 +1,32 @@
+# Checks that scripts/rius_cc/_semconv_generated.py is byte-identical to the module
+# rius-semconv generates (out/python/_semconv_generated.py) at the release tag
+# its header pins. The module is vendored, not edited: a change to a key, a
+# value or a table belongs in the rius-semconv registry, then a re-pin here
+# with `TAG=<tag> scripts/sync-semconv.sh`.
+#
+# rius-semconv is public, so the workflow's own token reads it and the check
+# also runs on pull requests from forks (which get no secrets).
+name: semconv-vendored
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vendored:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The vendored module matches its pinned rius-semconv release
+        env:
+          # rius-semconv is public; the job token only lifts the API rate limit.
+          GH_TOKEN: ${{ github.token }}
+          # No sibling checkout in CI: the script reads the file with gh api.
+          RIUS_SEMCONV: /nonexistent
+        run: scripts/sync-semconv.sh --check

@@ -85,7 +85,7 @@ def test_a_stop_ships_the_rollout_as_codex_spans(codex_home, tmp_path, sent,
     _run("Stop", tmp_path, rollouts[PARENT])
     resource = sent[0][0]
     assert resource["service.name"] == "codex"
-    assert resource["codex.version"] == "0.144.1"
+    assert resource["service.version"] == "0.144.1"
     assert not any(k.startswith("cc.") for k in resource)
     names = [s.name for s in _spans(sent)]
     assert names[0] == "codex session" and "mock-model" in names

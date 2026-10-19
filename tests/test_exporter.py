@@ -456,12 +456,12 @@ def test_unknown_resource_values_are_left_out_not_sent_empty(
     assert len(seen) >= 2
     for attrs in seen:
         assert "" not in attrs.values() and None not in attrs.values()
-        assert "cc.git_branch" not in attrs
+        assert "vcs.ref.head.name" not in attrs
         assert attrs["service.instance.id"] == "inst-1"
 
 
 def test_known_resource_values_are_still_sent(home, fixtures_dir, monkeypatch):
     seen = _resource_attrs_sent(monkeypatch, home,
                                 str(fixtures_dir / "simple.jsonl"), ("PostToolUse",))
-    assert seen[0]["cc.git_branch"] == "main"
-    assert seen[0]["cc.cwd"] == "/tmp/proj"
+    assert seen[0]["vcs.ref.head.name"] == "main"
+    assert seen[0]["process.working_directory"] == "/tmp/proj"

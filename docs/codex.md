@@ -88,8 +88,10 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>` (`exec.exit_<n>` when a code-mode script ran it), an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
 | AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
 
-Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,
-`codex.originator`. Content rules are the same as for Claude Code:
+Resource attributes: `service.name=codex`, `service.version` (Codex's
+version), `process.working_directory`, `vcs.ref.head.name`,
+`codex.originator`, and `telemetry.distro.name=rius-coding-agents` with
+the plugin's version. Content rules are the same as for Claude Code:
 `$rius:rius-enable-here` sends structure only, `$rius:rius-enable-content-here`
 adds content with secrets removed, and `RIUS_CAPTURE_CONTENT=false` turns
 content off everywhere.

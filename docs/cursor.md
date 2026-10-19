@@ -36,8 +36,9 @@ cursor session                AGENT  sessionStart .. sessionEnd
   with the run and carries `cursor.tool.closed_at_session_end`. A resumed
   chat (`--resume`) adds turns to the same trace, and a subagent started in
   a resumed run hangs under its Task call as in the first run.
-- Spans carry `service.name=cursor`, plus `cursor.version`, `cursor.cwd` and
-  the composer mode.
+- Spans carry `service.name=cursor`, plus `service.version` (Cursor's
+  version), `process.working_directory`, `vcs.ref.head.name`,
+  `telemetry.distro.name=rius-coding-agents` and the composer mode.
 
 **No token counts and no cost.** Cursor's hooks do not report token usage,
 so Cursor LLM spans have no `gen_ai.usage.*` attributes and Rius shows no

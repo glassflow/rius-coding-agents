@@ -50,16 +50,36 @@ def home(tmp_path):
 # shell call's class and exit code. Dropped here so the rest of each span is
 # still compared with 0.4.5's bytes, not with a regenerated golden.
 LATER_ATTRIBUTES = {command_class.ATTRIBUTE, command_class.EXIT_CODE_ATTRIBUTE}
+# Added after 0.4.5 on the resource: the distribution marker.
+LATER_RESOURCE_ATTRIBUTES = {"telemetry.distro.name", "telemetry.distro.version"}
+# Keys renamed to their registry spelling after 0.4.5, mapped back to the
+# spelling 0.4.5 sent, so the comparison still proves the same data travels.
+RENAMED = {
+    "rius.span.pending": "glassflow.span.pending",
+    "service.version": "cc.version",
+    "process.working_directory": "cc.cwd",
+    "vcs.ref.head.name": "cc.git_branch",
+}
+RENAMED_SCOPE = {"rius": "glassflow"}
+
+
+def _as_0_4_5(attributes, later):
+    kept = [kv for kv in attributes if kv.key not in later]
+    for kv in kept:
+        kv.key = RENAMED.get(kv.key, kv.key)
+    del attributes[:]
+    attributes.extend(kept)
 
 
 def _as_protobuf_hex(json_body):
     request = otlp_json.to_request(json_body)
     for resource_spans in request.resource_spans:
+        _as_0_4_5(resource_spans.resource.attributes, LATER_RESOURCE_ATTRIBUTES)
         for scope_spans in resource_spans.scope_spans:
+            scope_spans.scope.name = RENAMED_SCOPE.get(scope_spans.scope.name,
+                                                       scope_spans.scope.name)
             for span in scope_spans.spans:
-                kept = [kv for kv in span.attributes if kv.key not in LATER_ATTRIBUTES]
-                del span.attributes[:]
-                span.attributes.extend(kept)
+                _as_0_4_5(span.attributes, LATER_ATTRIBUTES)
     return request.SerializeToString(deterministic=True).hex()
 
 

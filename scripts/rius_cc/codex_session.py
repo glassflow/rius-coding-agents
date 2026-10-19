@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import codex_rollout, codex_spans, state
 from .spans import Ctx, Span
+from . import _semconv_generated as semconv
 
 SUBAGENT_STOP = "SubagentStop"
 POST_TOOL_USE = "PostToolUse"
@@ -170,10 +171,10 @@ def _late_agent_type(sub: dict, ctx: Ctx) -> List[Span]:
     type. Its root, if already sent, is sent again under that name."""
     sub_state = sub["state"]
     attrs = sub_state.setdefault("root_attrs", {})
-    if not sub.get("agent_type") or attrs.get("gen_ai.agent.name"):
+    if not sub.get("agent_type") or attrs.get(semconv.GEN_AI_AGENT_NAME):
         return []
     sub_state["root_name"] = sub["agent_type"]
-    attrs["gen_ai.agent.name"] = sub["agent_type"]
+    attrs[semconv.GEN_AI_AGENT_NAME] = sub["agent_type"]
     return [codex_spans.open_root(sub_state, ctx)] if sub_state["root_started"] else []
 
 
@@ -274,6 +275,6 @@ def finalize(st: dict, ctx: Ctx, end_ns: int) -> List[Span]:
 
 def resource_attributes(service_name: str, instance_id: str,
                         st: dict) -> Dict[str, str]:
-    attrs = {"service.name": service_name, "service.instance.id": instance_id}
+    attrs = {"service.name": service_name, semconv.SERVICE_INSTANCE_ID: instance_id}
     attrs.update(codex_spans.resource_attributes(st))
     return attrs

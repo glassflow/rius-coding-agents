@@ -1,6 +1,6 @@
 import pytest
 
-from rius_cc import cursor_events, cursor_spans, otlp, spans
+from rius_cc import cursor_events, cursor_spans, distro, otlp, spans
 
 from .cursor_fixtures import BASE_NS, STEP_NS, spool
 
@@ -139,7 +139,7 @@ def test_unfinished_work_is_pending_without_content(tmp_path):
     assert {s.name for s in out} == {cursor_spans.DEFAULT_ROOT_NAME, "turn", "Shell"}
     for s in out:
         assert s.pending and s.status_code == "UNSET"
-        assert s.attributes["glassflow.span.pending"] is True
+        assert s.attributes["rius.span.pending"] is True
         assert "input.value" not in s.attributes
 
 
@@ -214,8 +214,10 @@ def test_resource_attributes(tmp_path):
     events = cursor_events.read_conversation(str(tmp_path), cid)
     assert cursor_spans.resource_attributes(events, "inst-1") == {
         "service.name": "cursor", "service.instance.id": "inst-1",
-        "cursor.version": "2026.08.27", "cursor.cwd": "/Users/dev/acme-api",
-        "cursor.git_branch": "fix/invoice-rounding"}
+        "service.version": "2026.08.27", "process.working_directory": "/Users/dev/acme-api",
+        "vcs.ref.head.name": "fix/invoice-rounding",
+        "telemetry.distro.name": "rius-coding-agents",
+        "telemetry.distro.version": distro.version()}
 
 
 def test_spans_encode_and_decode_as_otlp(tmp_path):

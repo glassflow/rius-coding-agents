@@ -337,8 +337,8 @@ def test_an_empty_session_has_no_root_to_close():
 def test_resource_attributes_come_from_the_session(fixtures_dir):
     _, state = _build(fixtures_dir)
     attrs = cs.resource_attributes(state)
-    assert attrs["codex.version"] == "0.144.1"
-    assert attrs["codex.cwd"] == "/private/tmp/claude-501/codexr-t3/work"
+    assert attrs["service.version"] == "0.144.1"
+    assert attrs["process.working_directory"] == "/private/tmp/claude-501/codexr-t3/work"
     assert attrs["codex.originator"] == "codex_exec"
 
 

@@ -32,7 +32,7 @@ def test_roundtrip_full_span():
             "gen_ai.request.model": "claude-opus-5",
             "gen_ai.usage.input_tokens": 10,
             "gen_ai.usage.output_tokens": 5,
-            "glassflow.span.pending": False,
+            "rius.span.pending": False,
             "gen_ai.response.finish_reasons": ["end_turn"],
         },
         status_code="ERROR", status_message="boom", pending=False)
@@ -43,7 +43,7 @@ def test_roundtrip_full_span():
     assert {kv.key: kv.value.string_value for kv in rs.resource.attributes} == {
         "service.name": "claude-code"}
     ss = rs.scope_spans[0]
-    assert ss.scope.name == "glassflow"
+    assert ss.scope.name == "rius"
 
     got = ss.spans[0]
     assert got.trace_id == bytes.fromhex("0123456789abcdef0123456789abcdef")
@@ -58,7 +58,7 @@ def test_roundtrip_full_span():
     attrs = {kv.key: kv.value for kv in got.attributes}
     assert attrs["gen_ai.request.model"].string_value == "claude-opus-5"
     assert attrs["gen_ai.usage.input_tokens"].int_value == 10
-    assert attrs["glassflow.span.pending"].bool_value is False
+    assert attrs["rius.span.pending"].bool_value is False
     assert [v.string_value
             for v in attrs["gen_ai.response.finish_reasons"].array_value.values] == ["end_turn"]
 

@@ -12,6 +12,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import agent, command_class, context_sizes, scrub
+from . import _semconv_generated as semconv
 
 PROVIDER_NAME = agent.CLAUDE_CODE.provider
 
@@ -80,37 +81,37 @@ _OPERATION_BY_KIND = {
 # blocklist -- a pending span is emitted before work finishes and must never
 # leak content such as input.value / output.value.
 _PENDING_ALLOWED_KEYS = {
-    "openinference.span.kind",
-    "gen_ai.operation.name",
-    "gen_ai.provider.name",
-    "gen_ai.tool.name",
-    "session.id",
-    "glassflow.span.pending",
+    semconv.OPENINFERENCE_SPAN_KIND,
+    semconv.GEN_AI_OPERATION_NAME,
+    semconv.GEN_AI_PROVIDER_NAME,
+    semconv.GEN_AI_TOOL_NAME,
+    semconv.SESSION_ID,
+    semconv.RIUS_SPAN_PENDING,
     # Identity, not content: which named agent this is and where a turn's
     # text came from. The UI filters on these while the span is still
     # running, and neither can carry a prompt or a tool's output.
-    "gen_ai.agent.name",
-    "cc.turn.source",
-    "cc.subagent.id",
-    "cc.subagent.depth",
-    "codex.subagent.id",
+    semconv.GEN_AI_AGENT_NAME,
+    semconv.CC_TURN_SOURCE,
+    semconv.CC_SUBAGENT_ID,
+    semconv.CC_SUBAGENT_DEPTH,
+    semconv.CODEX_SUBAGENT_ID,
     # The session id a turn's conversation continued from, and the id it
     # runs under now (Claude Code moved the conversation). Ids, not content.
-    "cc.continued_from",
-    "cc.claude_session_id",
+    semconv.CC_CONTINUED_FROM,
+    semconv.CC_CLAUDE_SESSION_ID,
     # The signed-in member who approved the key (exporter._stamp_user).
     # Identity the workspace already holds, never content.
-    "user.id",
+    semconv.USER_ID,
     # A word from command_class.CLASSES ("test", "build"), never the
     # command: what a running shell call is doing.
-    "rius.command.class",
+    semconv.RIUS_COMMAND_CLASS,
 }
 
 
 def _filter_pending_attrs(attributes: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for k, v in attributes.items():
-        if k in _PENDING_ALLOWED_KEYS or k.startswith("gen_ai.request."):
+        if k in _PENDING_ALLOWED_KEYS or k.startswith(semconv.GEN_AI_REQUEST_PREFIX):
             out[k] = v
     return out
 
@@ -182,14 +183,14 @@ class Span:
 
 def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {
-        "openinference.span.kind": kind_oi,
-        "session.id": ctx.conversation_id,
+        semconv.OPENINFERENCE_SPAN_KIND: kind_oi,
+        semconv.SESSION_ID: ctx.conversation_id,
     }
     op = _OPERATION_BY_KIND.get(kind_oi)
     if op is not None:
-        attrs["gen_ai.operation.name"] = op
+        attrs[semconv.GEN_AI_OPERATION_NAME] = op
     if kind_oi in ("LLM", "TOOL", "AGENT"):
-        attrs["gen_ai.provider.name"] = PROVIDER_NAME
+        attrs[semconv.GEN_AI_PROVIDER_NAME] = PROVIDER_NAME
     return attrs
 
 
@@ -280,8 +281,8 @@ def turn_source_for(text: str) -> str:
     stripped = (text or "").lstrip()
     for prefix in SYSTEM_TURN_PREFIXES:
         if stripped.startswith(prefix):
-            return "system"
-    return "user"
+            return semconv.CC_TURN_SOURCE_SYSTEM
+    return semconv.CC_TURN_SOURCE_USER
 
 
 def new_scope() -> dict:
@@ -387,17 +388,17 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
 
     attrs = _base_attrs(ctx, "LLM")
     if model:
-        attrs["gen_ai.request.model"] = model
-        attrs["gen_ai.response.model"] = model
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
+        attrs[semconv.GEN_AI_RESPONSE_MODEL] = model
     if "input_tokens" in usage:
-        attrs["gen_ai.usage.input_tokens"] = _input_tokens_inclusive(usage)
+        attrs[semconv.GEN_AI_USAGE_INPUT_TOKENS] = _input_tokens_inclusive(usage)
     if "output_tokens" in usage:
-        attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
+        attrs[semconv.GEN_AI_USAGE_OUTPUT_TOKENS] = usage["output_tokens"]
     thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
     if isinstance(thinking, int):
-        attrs["gen_ai.usage.reasoning.output_tokens"] = thinking
+        attrs[semconv.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] = thinking
     if "cache_read_input_tokens" in usage:
-        attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = usage["cache_read_input_tokens"]
     if "cache_creation_input_tokens" in usage:
         # Upstream OTel GenAI semconv renamed this attribute to
         # gen_ai.usage.cache_write.input_tokens (semantic-
@@ -411,14 +412,14 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         # compatibility fallback that will eventually be removed.
         # Revisit and drop the legacy key once every deployment is
         # known to be at 000013+.
-        attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = usage["cache_creation_input_tokens"]
         attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
     if stop_reason:
-        attrs["gen_ai.response.finish_reasons"] = [stop_reason]
+        attrs[semconv.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
     if gen.get("context_sizes"):
         # Sizes, not content: sent whatever the capture setting.
-        attrs["rius.context.sizes"] = gen["context_sizes"]
-    _content_attr(ctx, attrs, "output.value",
+        attrs[semconv.RIUS_CONTEXT_SIZES] = gen["context_sizes"]
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE,
                   earlier_text + "".join(line.text() for line in lines))
 
     return Span(
@@ -472,11 +473,11 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         scope["open_task_spans"].remove(open_tool["span_id"])
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
-                    attrs["gen_ai.tool.name"] = open_tool["tool_name"]
+                    attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
                     _command_attrs(attrs, open_tool)
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
-                    _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
-                    _content_attr(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
+                    _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])
+                    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, scrub.SECRET_FILE_MARKER
                                   if secret_file else content_str)
                     status_code = "ERROR" if is_error else "OK"
                     # Status.message is content too: it is a line of the
@@ -494,7 +495,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         else:
                             status_message = (scrub.scrub(tool_error_line(content_str))
                                               or error_type)
-                        attrs["error.type"] = error_type
+                        attrs[semconv.ERROR_TYPE] = error_type
                         code = exit_code_of(content_str)
                         if open_tool.get("command_class") and code is not None:
                             attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
@@ -502,7 +503,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # message, and only falls back to the status message
                         # without one.
                         events.append((entry.timestamp_ns, "exception", {
-                            "exception.type": error_type,
+                            semconv.EXCEPTION_TYPE: error_type,
                             "exception.message": status_message,
                         }))
                     out.append(Span(
@@ -539,13 +540,13 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # new session id, in the same trace. Kept with the
                         # turn so its finished row says so too.
                         scope["open_turns"][entry.prompt_id]["continued"] = {
-                            "cc.continued_from": ctx.continued_from,
-                            "cc.claude_session_id": ctx.session_id,
+                            semconv.CC_CONTINUED_FROM: ctx.continued_from,
+                            semconv.CC_CLAUDE_SESSION_ID: ctx.session_id,
                         }
                     attrs = _base_attrs(ctx, "CHAIN")
-                    attrs["cc.turn.source"] = source
+                    attrs[semconv.CC_TURN_SOURCE] = source
                     attrs.update(scope["open_turns"][entry.prompt_id].get("continued") or {})
-                    attrs["glassflow.span.pending"] = True
+                    attrs[semconv.RIUS_SPAN_PENDING] = True
                     out.append(Span(
                         trace_id=trace_id, span_id=turn_span_id, parent_span_id=root_span_id,
                         name="turn", kind_oi="CHAIN", start_ns=entry.timestamp_ns,
@@ -602,9 +603,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         }
 
                 attrs = _base_attrs(ctx, "TOOL")
-                attrs["gen_ai.tool.name"] = tool_name
+                attrs[semconv.GEN_AI_TOOL_NAME] = tool_name
                 _command_attrs(attrs, scope["open_tools"][tool_id])
-                attrs["glassflow.span.pending"] = True
+                attrs[semconv.RIUS_SPAN_PENDING] = True
                 out.append(Span(
                     trace_id=trace_id, span_id=tool_span_id, parent_span_id=llm_span_id,
                     name=tool_name, kind_oi="TOOL", start_ns=entry.timestamp_ns,
@@ -656,7 +657,7 @@ def root_name(state: dict) -> str:
 def _pending_root(ctx: Ctx, trace_id: str, root_span_id: str, start_ns: int,
                   name: str) -> Span:
     attrs = _base_attrs(ctx, "AGENT")
-    attrs["glassflow.span.pending"] = True
+    attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
         name=name, kind_oi="AGENT", start_ns=start_ns, end_ns=start_ns,
@@ -724,20 +725,20 @@ def subagent_span(ctx: Ctx, trace_id: str, span_id: str, parent_span_id: str,
     attrs = _base_attrs(ctx, "AGENT")
     agent_type = meta.get("agentType") or ""
     if agent_type:
-        attrs["gen_ai.agent.name"] = agent_type
+        attrs[semconv.GEN_AI_AGENT_NAME] = agent_type
     model = meta.get("model") or ""
     if model:
-        attrs["gen_ai.request.model"] = model
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
     if agent_id:
-        attrs["cc.subagent.id"] = agent_id
-    attrs["cc.subagent.depth"] = depth
+        attrs[semconv.CC_SUBAGENT_ID] = agent_id
+    attrs[semconv.CC_SUBAGENT_DEPTH] = depth
     description = meta.get("description") or ""
     if description:
         _content_attr(ctx, attrs, "gen_ai.agent.description", description)
     if prompt:
-        _content_attr(ctx, attrs, "input.value", prompt)
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, prompt)
     if pending:
-        attrs["glassflow.span.pending"] = True
+        attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(
         trace_id=trace_id, span_id=span_id, parent_span_id=parent_span_id,
         name=agent_type or "subagent", kind_oi="AGENT", start_ns=start_ns,
@@ -752,9 +753,9 @@ def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     trace_id = trace_id_for(ctx.conversation_id)
     for prompt_id, turn in list(state["open_turns"].items()):
         attrs = _base_attrs(ctx, "CHAIN")
-        attrs["cc.turn.source"] = turn.get("source") or "user"
+        attrs[semconv.CC_TURN_SOURCE] = turn.get("source") or semconv.CC_TURN_SOURCE_USER
         attrs.update(turn.get("continued") or {})
-        _content_attr(ctx, attrs, "input.value", turn.get("text", ""))
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, turn.get("text", ""))
         out.append(Span(
             trace_id=trace_id, span_id=turn["span_id"], parent_span_id=turn["parent_span_id"],
             name="turn", kind_oi="CHAIN", start_ns=turn["start_ns"], end_ns=now_ns,
@@ -772,9 +773,9 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     out: List[Span] = []
     for tool in scope["open_tools"].values():
         attrs = _base_attrs(ctx, "TOOL")
-        attrs["gen_ai.tool.name"] = tool["tool_name"]
+        attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
         _command_attrs(attrs, tool)
-        _content_attr(ctx, attrs, "input.value", tool.get("input_json", ""))
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, tool.get("input_json", ""))
         out.append(Span(
             trace_id=trace_id, span_id=tool["span_id"],
             parent_span_id=tool["parent_span_id"], name=tool["tool_name"],

@@ -94,7 +94,7 @@ def test_a_root_that_never_ended_is_refused_unless_the_session_is_still_open():
 
 
 def span_line(span_id, pending):
-    attrs = [{"key": "glassflow.span.pending", "value": {"boolValue": pending}},
+    attrs = [{"key": "rius.span.pending", "value": {"boolValue": pending}},
              {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "12"}}]
     return json.dumps({"resourceSpans": [{"resource": {"attributes": []}, "scopeSpans": [
         {"spans": [{"name": "n", "spanId": span_id, "attributes": attrs}]}]}]})
