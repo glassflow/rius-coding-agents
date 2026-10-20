@@ -21,7 +21,8 @@
     "monitoring",
     "claude-code",
     "codex",
-    "cursor"
+    "cursor",
+    "coding-agents"
   ],
   "hooks": "./cursor/hooks.json",
   "commands": "./cursor/commands",

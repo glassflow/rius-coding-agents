@@ -24,7 +24,9 @@
     "cost-tracking",
     "monitoring",
     "claude-code",
-    "cursor"
+    "cursor",
+    "coding-agents",
+    "token-usage"
   ],
   "skills": "./codex/skills/",
   "hooks": "./codex/hooks.json",
@@ -36,8 +38,8 @@
   },
   "interface": {
     "displayName": "Rius",
-    "shortDescription": "Trace Codex sessions in Rius",
-    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, and tool calls. Tracing is off until you enable a folder.",
+    "shortDescription": "Track Codex usage and cost in Rius",
+    "longDescription": "Streams each Codex session to Rius as one OpenTelemetry GenAI trace: turns, model calls with token counts, tool calls and subagents. Rius prices the tokens, so you see cost per session and per developer. Tracing is off until you enable a folder, and sends structure only by default; prompt and tool output capture is optional.",
     "developerName": "GlassFlow",
     "category": "Developer Tools",
     "websiteURL": "https://www.glassflow.ai/rius"

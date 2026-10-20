@@ -498,6 +498,7 @@ npx skills add glassflow/rius-coding-agents
 | Skill | What it does |
 |---|---|
 | [`agent-observability`](.agents/skills/agent-observability/SKILL.md) | Adds Rius to an AI agent or LLM app: installs the Python or TypeScript SDK, wires in the API key, and checks the first trace in the console or over MCP |
+| [`coding-agent-observability`](.agents/skills/coding-agent-observability/SKILL.md) | Sets up Rius for Claude Code, Codex or Cursor: installs this plugin, signs in, and shows where each session's trace, tokens and cost appear, per developer and per session |
 
 The skills live in `.agents/skills/`, not `skills/`, so the plugins above
 don't load them: install them with the command above.
