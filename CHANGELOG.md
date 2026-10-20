@@ -6,6 +6,18 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.7.0 (unreleased)
 
+- An `agent-observability` skill, installed with
+  `npx skills add glassflow/rius-coding-agents`: it adds Rius tracing to an
+  AI agent or LLM app with the Python or TypeScript SDK and checks the first
+  trace. It ships in `.agents/skills/` and is not part of the plugin.
+- A `coding-agent-observability` skill, installed the same way: a coding
+  agent asked how to track Claude Code, Codex or Cursor usage and cost can
+  set Rius up. The listings gain the `coding-agents` and `token-usage`
+  keywords (`token-usage` not on Cursor), and the Codex listing's short and
+  long descriptions name usage, cost and subagents.
+- The plugin and marketplace listings for Claude Code, Codex and Cursor
+  describe what a session trace holds, and carry more search keywords.
+  The Cursor listing leaves out tokens and cost, which Cursor does not report.
 - Codex: a command that fails inside a code-mode script that does not throw
   now marks the `exec` span as an error (`exec.exit_<n>`) and sets
   `process.exit.code`, read from the rollout's command events (as
@@ -13,11 +25,6 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   returns 1 on purpose reads as an error too, as it does for `exec_command`.
   A call interrupted after such a command keeps that error instead of
   reading as unset.
-- A `coding-agent-observability` skill for `npx skills add
-  glassflow/rius-coding-agents`, so a coding agent asked how to track
-  Claude Code, Codex or Cursor usage and cost can set Rius up. The plugin,
-  marketplace and Codex and Cursor manifests now describe that use, with
-  matching keywords.
 
 ## 0.6.2 (2026-10-13)
 

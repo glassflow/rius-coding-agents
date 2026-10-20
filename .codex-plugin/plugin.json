@@ -1,7 +1,7 @@
 {
   "name": "rius",
   "version": "0.6.2",
-  "description": "Stream Codex sessions to Rius as OpenTelemetry traces: model calls, tokens, cost, tool calls and subagents, per developer and per session (beta).",
+  "description": "Codex plugin (beta) that streams your sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, tool calls and subagents.",
   "author": {
     "name": "GlassFlow",
     "url": "https://www.glassflow.ai"
@@ -10,18 +10,23 @@
   "repository": "https://github.com/glassflow/rius-coding-agents",
   "license": "MIT",
   "keywords": [
-    "codex",
-    "coding-agents",
-    "agent-observability",
-    "llm-observability",
-    "cost-tracking",
-    "token-usage",
-    "opentelemetry",
     "observability",
+    "opentelemetry",
     "tracing",
+    "llm",
     "ai-agents",
     "mcp",
-    "rius"
+    "rius",
+    "codex",
+    "llm-observability",
+    "agent-observability",
+    "llm-cost",
+    "cost-tracking",
+    "monitoring",
+    "claude-code",
+    "cursor",
+    "coding-agents",
+    "token-usage"
   ],
   "skills": "./codex/skills/",
   "hooks": "./codex/hooks.json",

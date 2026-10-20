@@ -1,15 +1,15 @@
 {
   "name": "rius-coding-agents",
-  "description": "Rius observability for coding agents: track Claude Code, Codex and Cursor usage and cost per developer and per session.",
+  "description": "Claude Code, Codex and Cursor plugin that streams your sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, tool calls and subagents.",
   "owner": { "name": "GlassFlow", "url": "https://www.glassflow.ai" },
   "plugins": [
     {
       "name": "rius",
-      "description": "Trace Claude Code sessions in Rius with OpenTelemetry: model calls, tokens, cost, tool calls and subagents, per developer and per session.",
+      "description": "Claude Code, Codex and Cursor plugin that streams your sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, tool calls and subagents.",
       "source": "./",
       "version": "0.6.2",
       "category": "monitoring",
-      "tags": ["claude-code", "codex", "cursor", "coding-agents", "agent-observability", "llm-observability", "cost-tracking", "token-usage", "opentelemetry", "observability", "tracing", "mcp", "rius"]
+      "tags": ["observability", "opentelemetry", "tracing", "llm", "mcp", "rius", "llm-observability", "agent-observability", "llm-cost", "cost-tracking", "monitoring", "claude-code", "codex", "cursor", "coding-agents", "token-usage"]
     }
   ]
 }
