@@ -6,6 +6,10 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 ## 0.7.0 (unreleased)
 
+- An `agent-observability` skill, installed with
+  `npx skills add glassflow/rius-coding-agents`: it adds Rius tracing to an
+  AI agent or LLM app with the Python or TypeScript SDK and checks the first
+  trace. It ships in `.agents/skills/` and is not part of the plugin.
 - The plugin and marketplace listings for Claude Code, Codex and Cursor
   describe what a session trace holds, and carry more search keywords.
   The Cursor listing leaves out tokens and cost, which Cursor does not report.
