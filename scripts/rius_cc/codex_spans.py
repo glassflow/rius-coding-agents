@@ -26,10 +26,11 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
-from . import codex_script, command_class, scrub
+from . import codex_script, command_class, distro, scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
+from . import _semconv_generated as semconv
 
 PROVIDER_NAME = "openai"
 DEFAULT_ROOT_NAME = "codex session"
@@ -96,15 +97,15 @@ def new_subagent_state(agent_id: str, agent_type: str,
     state.update({"root_id": span_id_for("subagent:" + agent_id),
                   "root_parent": parent_span_id,
                   "root_name": agent_type or "subagent",
-                  "root_attrs": {"gen_ai.agent.name": agent_type,
-                                 "codex.subagent.id": agent_id}})
+                  "root_attrs": {semconv.GEN_AI_AGENT_NAME: agent_type,
+                                 semconv.CODEX_SUBAGENT_ID: agent_id}})
     return state
 
 
 def _attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     attrs = _base_attrs(ctx, kind_oi)
-    if "gen_ai.provider.name" in attrs:
-        attrs["gen_ai.provider.name"] = PROVIDER_NAME
+    if semconv.GEN_AI_PROVIDER_NAME in attrs:
+        attrs[semconv.GEN_AI_PROVIDER_NAME] = PROVIDER_NAME
     return attrs
 
 
@@ -121,7 +122,7 @@ def _pending(ctx: Ctx, span_id: str, parent: Optional[str], name: str,
              kind_oi: str, start_ns: int, extra: Dict[str, Any]) -> Span:
     attrs = _attrs(ctx, kind_oi)
     attrs.update(extra)
-    attrs["glassflow.span.pending"] = True
+    attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(trace_id=trace_id_for(ctx.conversation_id), span_id=span_id,
                 parent_span_id=parent, name=name, kind_oi=kind_oi,
                 start_ns=start_ns, end_ns=start_ns, attributes=attrs,
@@ -219,12 +220,12 @@ def _on_agent_message(rec, state, ctx, out):
 def _usage_attrs(ctx: Ctx, model: str, rec) -> Dict[str, Any]:
     attrs = _attrs(ctx, "LLM")
     if model:
-        attrs["gen_ai.request.model"] = model
-        attrs["gen_ai.response.model"] = model
-    attrs["gen_ai.usage.input_tokens"] = rec.get("input_tokens")
-    attrs["gen_ai.usage.output_tokens"] = rec.get("output_tokens")
-    attrs["gen_ai.usage.cache_read.input_tokens"] = rec.get("cached_input_tokens")
-    attrs["gen_ai.usage.reasoning.output_tokens"] = rec.get("reasoning_output_tokens")
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
+        attrs[semconv.GEN_AI_RESPONSE_MODEL] = model
+    attrs[semconv.GEN_AI_USAGE_INPUT_TOKENS] = rec.get("input_tokens")
+    attrs[semconv.GEN_AI_USAGE_OUTPUT_TOKENS] = rec.get("output_tokens")
+    attrs[semconv.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = rec.get("cached_input_tokens")
+    attrs[semconv.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] = rec.get("reasoning_output_tokens")
     return attrs
 
 
@@ -251,7 +252,7 @@ def _on_usage(rec, state, ctx, out):
         return
     turn = state["turn"]
     attrs = _usage_attrs(ctx, state["model"], rec)
-    _content_attr(ctx, attrs, "output.value", _reply(ctx, turn))
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, _reply(ctx, turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
                          turn["llm_start_ns"], rec.timestamp_ns, attrs))
@@ -276,7 +277,7 @@ def _on_tool_call(rec, state, ctx, out):
     state["open_tools"][call_id] = tool
     if name == EXEC_TOOL:
         _remember_exec(state, tool, _may_spawn(script, wrapped))
-    extra = {"gen_ai.tool.name": tool["tool_name"]}
+    extra = {semconv.GEN_AI_TOOL_NAME: tool["tool_name"]}
     if tool["command_class"]:
         extra[command_class.ATTRIBUTE] = tool["command_class"]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
@@ -515,7 +516,7 @@ def _on_tool_output(rec, state, ctx, out):
     if tool["tool_name"] == SPAWN_TOOL:
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
-    attrs["gen_ai.tool.name"] = tool["tool_name"]
+    attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
     if tool.get("command_class"):
         attrs[command_class.ATTRIBUTE] = tool["command_class"]
         code = _exit_code(tool, output)
@@ -523,13 +524,13 @@ def _on_tool_output(rec, state, ctx, out):
             attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
     arguments = _arguments(ctx, tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
-    _content_attr(ctx, attrs, "input.value", arguments, json_text=True)
+    _content_attr(ctx, attrs, semconv.INPUT_VALUE, arguments, json_text=True)
     withheld = tool.get("secret_file") is not False
-    _content_attr(ctx, attrs, "output.value", _shown(tool, output), json_text=True)
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, _shown(tool, output), json_text=True)
     error_type = tool_error(tool, output)
     status_message, events = "", []
     if error_type:
-        attrs["error.type"] = error_type
+        attrs[semconv.ERROR_TYPE] = error_type
         if not ctx.capture_content:
             status_message = TOOL_ERROR_WITHHELD
         elif withheld:
@@ -537,7 +538,7 @@ def _on_tool_output(rec, state, ctx, out):
         else:
             status_message = error_line(_error_detail(ctx, tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
-            "exception.type": error_type, "exception.message": status_message}))
+            semconv.EXCEPTION_TYPE: error_type, "exception.message": status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                          _name(tool), "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
@@ -630,18 +631,18 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     for tool in state["open_tools"].values():
         _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
-        attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
+        attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, _arguments(ctx, tool),
                       json_text=True)
         error_type = tool_error(tool, "")
         if tool.get("command_class") and _exit_code(tool, "") is not None:
             attrs[command_class.EXIT_CODE_ATTRIBUTE] = _exit_code(tool, "")
         status_message, events = "", []
         if error_type:
-            attrs["error.type"] = error_type
+            attrs[semconv.ERROR_TYPE] = error_type
             status_message = error_type if ctx.capture_content else TOOL_ERROR_WITHHELD
             events.append((now_ns, "exception", {
-                "exception.type": error_type,
+                semconv.EXCEPTION_TYPE: error_type,
                 "exception.message": status_message}))
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                              _name(tool), "TOOL", tool["start_ns"], now_ns,
@@ -655,16 +656,16 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
     turn = state["turn"]
     out = _close_open_tools(state, ctx, end_ns)
     attrs = _attrs(ctx, "CHAIN")
-    attrs["codex.turn.id"] = turn["turn_id"]
+    attrs[semconv.CODEX_TURN_ID] = turn["turn_id"]
     if rec is not None:
         if rec.get("duration_ms"):
-            attrs["codex.turn.duration_ms"] = rec.get("duration_ms")
+            attrs[semconv.CODEX_TURN_DURATION_MS] = rec.get("duration_ms")
         if rec.get("ttft_ms"):
-            attrs["codex.turn.ttft_ms"] = rec.get("ttft_ms")
+            attrs[semconv.CODEX_TURN_TTFT_MS] = rec.get("ttft_ms")
         if rec.get("aborted"):
-            attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
-        _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
-    _content_attr(ctx, attrs, "input.value",
+            attrs[semconv.CODEX_TURN_ABORTED] = rec.get("reason") or "aborted"
+        _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, rec.get("last_agent_message"))
+    _content_attr(ctx, attrs, semconv.INPUT_VALUE,
                   _recall(ctx, turn.get("text_at"), "text"))
     out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
                          "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
@@ -730,7 +731,7 @@ def _adopt_role(state: dict, records: List[Any]) -> None:
     session = next((rec for rec in records if rec.kind == cr.SESSION), None)
     if session is not None and session.get("agent_role"):
         state["root_name"] = session.get("agent_role")
-        state["root_attrs"]["gen_ai.agent.name"] = session.get("agent_role")
+        state["root_attrs"][semconv.GEN_AI_AGENT_NAME] = session.get("agent_role")
 
 
 def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
@@ -771,11 +772,12 @@ def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
 
 
 def resource_attributes(state: dict) -> Dict[str, str]:
-    """The session's codex.* resource attributes, beside service.name."""
+    """The session's resource attributes, beside service.name."""
     session = state.get("session") or {}
     return {
-        "codex.version": session.get("cli_version", ""),
-        "codex.cwd": session.get("cwd", ""),
-        "codex.git_branch": session.get("git_branch", ""),
-        "codex.originator": session.get("originator", ""),
+        semconv.SERVICE_VERSION: session.get("cli_version", ""),
+        semconv.PROCESS_WORKING_DIRECTORY: session.get("cwd", ""),
+        semconv.VCS_REF_HEAD_NAME: session.get("git_branch", ""),
+        semconv.CODEX_ORIGINATOR: session.get("originator", ""),
+        **distro.resource_attributes(),
     }

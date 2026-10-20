@@ -19,6 +19,7 @@ from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
                      cursor_export, cursor_spans, log as rius_log, notice,
                      otlp, platform_compat, spans, state, subagents,
                      transcript)
+from rius_cc import _semconv_generated as semconv, distro  # noqa: E402
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -195,7 +196,7 @@ def _stamp_user(out, cfg) -> None:
     if not cfg.user_id:
         return
     for span in out:
-        span.attributes.setdefault("user.id", cfg.user_id)
+        span.attributes.setdefault(semconv.USER_ID, cfg.user_id)
 
 
 def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
@@ -303,13 +304,13 @@ def _on_shipped(session_id, home, st, saves):
 
 
 def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
-    prefix = agent.active().attr_prefix
     return {
         "service.name": cfg.service_name,
-        "service.instance.id": instance_id,
-        prefix + "version": version,
-        prefix + "cwd": cwd,
-        prefix + "git_branch": git_branch,
+        semconv.SERVICE_INSTANCE_ID: instance_id,
+        semconv.SERVICE_VERSION: version,
+        semconv.PROCESS_WORKING_DIRECTORY: cwd,
+        semconv.VCS_REF_HEAD_NAME: git_branch,
+        **distro.resource_attributes(),
     }
 
 

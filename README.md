@@ -74,7 +74,8 @@ capped at 32 KB.
 | Field | Example | Sent |
 |---|---|---|
 | `service.name`, `service.instance.id` | `claude-code`, a random id per session | always |
-| `cc.version`, `cc.cwd`, `cc.git_branch` | `2.1.289`, `/Users/ana/src/shop` (can include your user name), `main` | always |
+| `service.version`, `process.working_directory`, `vcs.ref.head.name` | Claude Code's version `2.1.289`, the folder `/Users/ana/src/shop` (can include your user name), the branch `main` | always |
+| `telemetry.distro.name`, `telemetry.distro.version` | `rius-coding-agents`, the plugin's version: tells Rius these spans come from this plugin | always (the version, when the plugin's manifest can be read) |
 | span name, ids, start and end time, status | trace and span ids are hashes of the session id | always |
 | `session.id`, `cc.claude_session_id`, `cc.continued_from` | Claude Code session ids | always |
 | `user.id` | the email you signed in with at `/rius:login`, so the console can list your sessions; none for a key stored with `use-key` | always |
@@ -86,7 +87,7 @@ capped at 32 KB.
 | `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
 | `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
-| `glassflow.span.pending` | `true` while a span is still running | always |
+| `rius.span.pending` | `true` while a span is still running | always |
 | `input.value`, `output.value` | prompt, reply, tool input and output | content mode |
 | `gen_ai.agent.description` | a subagent's description | content mode |
 | session span name | the session title instead of `claude-code session` | content mode |

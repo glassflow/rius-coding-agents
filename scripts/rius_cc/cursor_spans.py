@@ -20,9 +20,10 @@ import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
-from . import command_class, scrub
+from . import command_class, distro, scrub
 from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Span,
                     exportable, span_id_for, tool_error_line, trace_id_for)
+from . import _semconv_generated as semconv
 
 SERVICE_NAME = "cursor"
 DEFAULT_ROOT_NAME = "cursor session"
@@ -79,13 +80,13 @@ def _model_of(event: Dict[str, Any]) -> str:
 
 
 def _base_attrs(ctx: Ctx, kind_oi: str, model: str = "") -> Dict[str, Any]:
-    attrs: Dict[str, Any] = {"openinference.span.kind": kind_oi,
-                             "session.id": ctx.conversation_id}
+    attrs: Dict[str, Any] = {semconv.OPENINFERENCE_SPAN_KIND: kind_oi,
+                             semconv.SESSION_ID: ctx.conversation_id}
     op = _OPERATION_BY_KIND[kind_oi]
     if op:
-        attrs["gen_ai.operation.name"] = op
+        attrs[semconv.GEN_AI_OPERATION_NAME] = op
     if kind_oi != "CHAIN":
-        attrs["gen_ai.provider.name"] = provider_for(model)
+        attrs[semconv.GEN_AI_PROVIDER_NAME] = provider_for(model)
     return attrs
 
 
@@ -245,14 +246,27 @@ def _on_stop(fold: _Fold, e: Dict[str, Any]) -> None:
         turn["loop_count"] = e.get("loop_count")
 
 
+# preCompact's context fields, and the attribute each is sent as. The percent
+# is a JSON number Cursor sends whole today; the registry types it double.
+_CONTEXT_KEYS = {
+    "context_tokens": semconv.CURSOR_CONTEXT_TOKENS,
+    "context_window_size": semconv.CURSOR_CONTEXT_WINDOW_SIZE,
+    "context_usage_percent": semconv.CURSOR_CONTEXT_USAGE_PERCENT,
+}
+
+
 def _on_compact(fold: _Fold, e: Dict[str, Any]) -> None:
     turn = fold.turn_for(e)
     if turn is None:
         return
-    for key in ("context_tokens", "context_window_size",
-                "context_usage_percent"):
-        if e.get(key) is not None:
-            turn["context"][key] = e[key]
+    for key in _CONTEXT_KEYS:
+        value = e.get(key)
+        if value is None:
+            continue
+        if (key == "context_usage_percent" and isinstance(value, int)
+                and not isinstance(value, bool)):
+            value = float(value)
+        turn["context"][key] = value
 
 
 def _tool_key(fold: _Fold, e: Dict[str, Any]) -> str:
@@ -423,7 +437,7 @@ def _span(ids: _Ids, span_id: str, parent: Optional[str], name: str,
     """A finished span, or a pending one when `end_ns` is None."""
     pending = end_ns is None
     if pending:
-        attrs["glassflow.span.pending"] = True
+        attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(trace_id=ids.trace, span_id=span_id, parent_span_id=parent,
                 name=name, kind_oi=kind, start_ns=start_ns,
                 end_ns=start_ns if pending else end_ns, attributes=attrs,
@@ -440,10 +454,10 @@ def _root_span(fold: _Fold, ctx: Ctx, ids: _Ids, end_ns: Optional[int]) -> Span:
     root = fold.root
     attrs = _base_attrs(ctx, "AGENT",
                         root.get("model_id") or root.get("model") or "")
-    _set(attrs, "cursor.composer_mode", root.get("composer_mode"))
-    _set(attrs, "cursor.background", root.get("background"))
-    _set(attrs, "cursor.session.reason", root.get("reason"))
-    _set(attrs, "cursor.session.final_status", root.get("final_status"))
+    _set(attrs, semconv.CURSOR_COMPOSER_MODE, root.get("composer_mode"))
+    _set(attrs, semconv.CURSOR_BACKGROUND, root.get("background"))
+    _set(attrs, semconv.CURSOR_SESSION_REASON, root.get("reason"))
+    _set(attrs, semconv.CURSOR_SESSION_FINAL_STATUS, root.get("final_status"))
     status, message = "OK", ""
     if root.get("reason") == "error":
         status = "ERROR"
@@ -458,9 +472,9 @@ def _turn_spans(fold: _Fold, ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
                 final_ns: Optional[int]) -> List[Span]:
     end_ns = turn["end_ns"] or final_ns
     attrs = _base_attrs(ctx, "CHAIN")
-    _set(attrs, "cursor.turn.status", turn["status"])
-    _set(attrs, "cursor.turn.loop_count", turn["loop_count"])
-    _content(ctx, attrs, "input.value", turn["prompt"])
+    _set(attrs, semconv.CURSOR_TURN_STATUS, turn["status"])
+    _set(attrs, semconv.CURSOR_TURN_LOOP_COUNT, turn["loop_count"])
+    _content(ctx, attrs, semconv.INPUT_VALUE, turn["prompt"])
     status = _TURN_STATUS.get(turn["status"], "OK" if turn["end_ns"] else "UNSET")
     out = [_span(ids, ids.turn(turn["key"]), ids.root, "turn", "CHAIN",
                  turn["start_ns"], end_ns, attrs, status)]
@@ -478,13 +492,13 @@ def _llm_span(ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
         return None
     model = turn["model"]
     attrs = _base_attrs(ctx, "LLM", turn["model_id"] or model)
-    _set(attrs, "gen_ai.request.model", model)
-    _set(attrs, "gen_ai.response.model", model)
+    _set(attrs, semconv.GEN_AI_REQUEST_MODEL, model)
+    _set(attrs, semconv.GEN_AI_RESPONSE_MODEL, model)
     if turn["thought_ms"]:
-        attrs["cursor.thinking.duration_ms"] = turn["thought_ms"]
+        attrs[semconv.CURSOR_THINKING_DURATION_MS] = turn["thought_ms"]
     for key, value in turn["context"].items():
-        attrs["cursor.context." + key] = value
-    _content(ctx, attrs, "output.value", "".join(turn["texts"]))
+        attrs[_CONTEXT_KEYS[key]] = value
+    _content(ctx, attrs, semconv.OUTPUT_VALUE, "".join(turn["texts"]))
     status = "ERROR" if turn["status"] == "error" else "OK"
     return _span(ids, ids.llm(turn["key"]), ids.turn(turn["key"]),
                  model or "assistant", "LLM", turn["start_ns"], end_ns, attrs,
@@ -542,20 +556,20 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
                final_ns: Optional[int]) -> Span:
     end_ns = tool["end_ns"] or final_ns
     attrs = _base_attrs(ctx, "TOOL", tool["model"])
-    attrs["gen_ai.tool.name"] = tool["name"]
-    attrs["gen_ai.tool.call.id"] = tool["id"]
+    attrs[semconv.GEN_AI_TOOL_NAME] = tool["name"]
+    attrs[semconv.GEN_AI_TOOL_CALL_ID] = tool["id"]
     if tool["command_class"]:
         attrs[command_class.ATTRIBUTE] = tool["command_class"]
         if isinstance(tool["exit_code"], int):
             attrs[command_class.EXIT_CODE_ATTRIBUTE] = tool["exit_code"]
     if tool["interrupted"]:
-        attrs["cursor.tool.interrupted"] = True
+        attrs[semconv.CURSOR_TOOL_INTERRUPTED] = True
     if tool["closed_at_session_end"]:
         # No postToolUse came: the outcome is unknown, not OK.
-        attrs["cursor.tool.closed_at_session_end"] = True
+        attrs[semconv.CURSOR_TOOL_CLOSED_AT_SESSION_END] = True
     # A tool's input and output are JSON as Cursor sends them.
-    _content(ctx, attrs, "input.value", tool["input"], json_text=True)
-    _content(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
+    _content(ctx, attrs, semconv.INPUT_VALUE, tool["input"], json_text=True)
+    _content(ctx, attrs, semconv.OUTPUT_VALUE, scrub.SECRET_FILE_MARKER
              if tool["output"] and _reads_secret_file(tool) else tool["output"],
              json_text=True)
     finished = (tool["end_ns"] and not tool["interrupted"]
@@ -565,9 +579,9 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
         error_type = tool_error_type(tool)
         status = "ERROR"
         message = _tool_error_message(ctx, tool, error_type)
-        attrs["error.type"] = error_type
+        attrs[semconv.ERROR_TYPE] = error_type
         events.append((tool["end_ns"], "exception", {
-            "exception.type": error_type, "exception.message": message}))
+            semconv.EXCEPTION_TYPE: error_type, "exception.message": message}))
     start_ns = tool["start_ns"] if tool["start_ns"] is not None else fold.last_ns
     return _span(ids, span_id_for(tool["key"]), _tool_parent(fold, ids, tool),
                  tool["name"], "TOOL", start_ns, end_ns, attrs, status,
@@ -588,14 +602,16 @@ def _subagent_span(fold: _Fold, ctx: Ctx, ids: _Ids, sub: Dict[str, Any],
     stop = sub["stop"]
     end_ns = sub["end_ns"] or final_ns
     attrs = _base_attrs(ctx, "AGENT", sub["model"])
-    _set(attrs, "gen_ai.agent.name", sub["type"])
-    _set(attrs, "gen_ai.request.model", sub["model"])
-    attrs["cursor.subagent.id"] = sub["id"]
-    for key in ("status", "tool_call_count", "message_count"):
-        _set(attrs, "cursor.subagent." + key, stop.get(key))
-    _content(ctx, attrs, "input.value", sub["task"])
+    _set(attrs, semconv.GEN_AI_AGENT_NAME, sub["type"])
+    _set(attrs, semconv.GEN_AI_REQUEST_MODEL, sub["model"])
+    attrs[semconv.CURSOR_SUBAGENT_ID] = sub["id"]
+    for key, attr in ((semconv.CURSOR_SUBAGENT_STATUS, "status"),
+                      (semconv.CURSOR_SUBAGENT_TOOL_CALL_COUNT, "tool_call_count"),
+                      (semconv.CURSOR_SUBAGENT_MESSAGE_COUNT, "message_count")):
+        _set(attrs, key, stop.get(attr))
+    _content(ctx, attrs, semconv.INPUT_VALUE, sub["task"])
     _content(ctx, attrs, "gen_ai.agent.description", stop.get("description"))
-    _content(ctx, attrs, "output.value", stop.get("summary"))
+    _content(ctx, attrs, semconv.OUTPUT_VALUE, stop.get("summary"))
     status = "ERROR" if stop.get("status") == "error" else "OK"
     return _span(ids, ids.subagent(sub["id"]), _subagent_parent(fold, ids, sub),
                  sub["type"] or "subagent", "AGENT", sub["start_ns"], end_ns,
@@ -625,9 +641,11 @@ def resource_attributes(events: List[Dict[str, Any]], instance_id: str = "",
                         service_name: str = SERVICE_NAME) -> Dict[str, Any]:
     """The OTLP resource for a Cursor conversation's spans."""
     attrs: Dict[str, Any] = {"service.name": service_name}
-    _set(attrs, "service.instance.id", instance_id)
-    for key, source in (("cursor.version", "cursor_version"),
-                        ("cursor.cwd", "cwd"), ("cursor.git_branch", "git_branch")):
+    _set(attrs, semconv.SERVICE_INSTANCE_ID, instance_id)
+    for key, source in ((semconv.SERVICE_VERSION, "cursor_version"),
+                        (semconv.PROCESS_WORKING_DIRECTORY, "cwd"),
+                        (semconv.VCS_REF_HEAD_NAME, "git_branch")):
         value = next((e[source] for e in events if e.get(source)), None)
         _set(attrs, key, value)
+    attrs.update(distro.resource_attributes())
     return attrs

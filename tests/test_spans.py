@@ -178,14 +178,14 @@ def test_pending_spans_never_carry_content(fixtures_dir):
         if s.pending:
             assert "input.value" not in s.attributes
             assert "output.value" not in s.attributes
-            assert s.attributes["glassflow.span.pending"] is True
+            assert s.attributes["rius.span.pending"] is True
 
 
 def test_pending_allowlist_strips_cache_usage_keys():
     # Pending spans carry identity attributes only -- neither the current
     # nor the legacy cache-usage key belongs on one.
     attrs = {
-        "glassflow.span.pending": True,
+        "rius.span.pending": True,
         "session.id": "s1",
         "gen_ai.usage.cache_write.input_tokens": 200,
         "gen_ai.usage.cache_creation.input_tokens": 200,
