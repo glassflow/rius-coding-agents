@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.7.0 (unreleased)
+## 0.7.0 (2026-10-20)
 
 - An `agent-observability` skill, installed with
   `npx skills add glassflow/rius-coding-agents`: it adds Rius tracing to an
