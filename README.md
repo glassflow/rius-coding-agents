@@ -23,6 +23,7 @@ waterfall that fills in while the session is still running.
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425cc7?style=flat-square&logo=opentelemetry&logoColor=white)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Zero runtime deps](https://img.shields.io/badge/dependencies-zero-6b7280?style=flat-square)
+[![Rius MCP connector](https://glama.ai/mcp/connectors/ai.glassflow/rius/badges/score.svg)](https://glama.ai/mcp/connectors/ai.glassflow/rius)
 
 <!-- SCREENSHOT SLOT: a Claude Code session's waterfall in the Rius console,
      captured on production with the workspace name masked. Save it as
@@ -400,7 +401,8 @@ MCP entry stays production; add the local one with
 ## Asking Claude about your traces
 
 The plugin bundles the Rius MCP server as `rius`, so you can query the
-traces it produces from inside Claude Code. It connects to
+traces it produces from inside Claude Code. The same server is listed in the
+official MCP registry as `ai.glassflow/rius`. It connects to
 `https://mcp.eu.console.rius-glassflow.com/mcp` and signs in with Claude
 Code's own MCP OAuth, separately from `/rius:login`:
 
