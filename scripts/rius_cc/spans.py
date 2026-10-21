@@ -69,6 +69,10 @@ SYSTEM_TURN_PREFIXES = (
     "<user-prompt-submit-hook",
 )
 
+# The generated semconv module has no constant for this operation name (it
+# only lists "compaction" as a key of its operation-to-kind map).
+COMPACTION_OPERATION = "compaction"
+
 _OPERATION_BY_KIND = {
     "AGENT": "invoke_agent",
     "LLM": "chat",
@@ -294,7 +298,8 @@ def new_scope() -> dict:
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
             "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None,
-            "context": None}
+            "context": None, "open_compaction": None, "compact_next": False,
+            "last_compaction": None}
 
 
 def _generation_for(entry: Any, scope: dict, root_span_id: str,
@@ -330,6 +335,13 @@ def _generation_for(entry: Any, scope: dict, root_span_id: str,
         # What the prompt held when this call was made: sizes, not content.
         "context_sizes": context_sizes.snapshot(scope),
     }
+    if scope.get("compact_next"):
+        # The first call after a compaction, and no other: the later ones
+        # also run on the compacted context, but only this one is the call
+        # that first saw it. Kept in the persisted gen so a later hook
+        # re-emitting the span still says it.
+        gen["compacted"] = True
+        scope["compact_next"] = False
     scope["open_gen"] = gen
     return gen, True
 
@@ -416,6 +428,8 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
     if stop_reason:
         attrs[semconv.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
+    if gen.get("compacted"):
+        attrs[semconv.GEN_AI_CONVERSATION_COMPACTED] = True
     if gen.get("context_sizes"):
         # Sizes, not content: sent whatever the capture setting.
         attrs[semconv.RIUS_CONTEXT_SIZES] = gen["context_sizes"]
@@ -426,6 +440,75 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         trace_id=trace_id, span_id=gen["span_id"],
         parent_span_id=gen["parent_span_id"], name=model or "assistant",
         kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
+        attributes=attrs, status_code="OK", status_message="", pending=False,
+    )
+
+
+def _count(value: Any) -> Optional[int]:
+    """`value` when it is a non-negative integer, else None: Claude Code's
+    metadata is not ours, and a size is never written as garbage."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _open_compaction(entry: Any, scope: dict, root_span_id: str,
+                     key_prefix: str) -> Dict[str, Any]:
+    """What a compact_boundary entry says, as plain JSON for the state file.
+
+    Sizes, ids and words only: the summary text is never kept, it is used the
+    moment its entry is read (see emit_entries).
+    """
+    meta = entry.compact_metadata()
+    attrs: Dict[str, Any] = {
+        semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
+        semconv.RIUS_COMPACTION_EXECUTOR: semconv.RIUS_COMPACTION_EXECUTOR_CLIENT,
+    }
+    if meta.get("trigger") in (semconv.RIUS_COMPACTION_TRIGGER_AUTO,
+                               semconv.RIUS_COMPACTION_TRIGGER_MANUAL):
+        attrs[semconv.RIUS_COMPACTION_TRIGGER] = meta["trigger"]
+    before, after = _count(meta.get("preTokens")), _count(meta.get("postTokens"))
+    if before is not None:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_BEFORE] = before
+    if after is not None:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_AFTER] = after
+    if before is not None and after is not None and before >= after:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_DROPPED] = before - after
+    preserved = meta.get("preservedMessages")
+    kept = preserved.get("uuids") if isinstance(preserved, dict) else None
+    if isinstance(kept, list):
+        attrs[semconv.RIUS_COMPACTION_MESSAGES_KEPT] = len(kept)
+    uuid = entry.uuid if isinstance(entry.uuid, str) else ""
+    if uuid:
+        attrs[semconv.RIUS_COMPACTION_ID] = uuid
+    # The boundary is written when the compaction is done, so it is the end.
+    duration_ms = _count(meta.get("durationMs")) or 0
+    return {
+        # The timestamp stands in for a missing uuid, so two boundaries
+        # never share an id.
+        "span_id": span_id_for(key_prefix + "compaction:"
+                               + (uuid or str(entry.timestamp_ns))),
+        "parent_span_id": _current_turn_parent(scope, root_span_id),
+        "start_ns": max(entry.timestamp_ns - duration_ms * 1_000_000, 0),
+        "end_ns": entry.timestamp_ns,
+        "attrs": attrs,
+    }
+
+
+def _compaction_span(ctx: Ctx, trace_id: str, rec: Dict[str, Any],
+                     summary: str) -> Span:
+    attrs = _base_attrs(ctx, "CHAIN")
+    attrs[semconv.GEN_AI_OPERATION_NAME] = COMPACTION_OPERATION
+    attrs.update(rec["attrs"])
+    if summary:
+        # A size, not content: sent whatever the capture setting. The text
+        # is content and goes through the same gate as every other.
+        attrs[semconv.RIUS_COMPACTION_SUMMARY_BYTES] = len(summary.encode("utf-8"))
+        _content_attr(ctx, attrs, semconv.RIUS_COMPACTION_SUMMARY_TEXT, summary)
+    return Span(
+        trace_id=trace_id, span_id=rec["span_id"],
+        parent_span_id=rec["parent_span_id"], name=COMPACTION_OPERATION,
+        kind_oi="CHAIN", start_ns=rec["start_ns"], end_ns=rec["end_ns"],
         attributes=attrs, status_code="OK", status_message="", pending=False,
     )
 
@@ -450,8 +533,42 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     # One generation span per API response in this batch, emitted after the
     # loop so it carries every line of the response that has arrived.
     batch_gens: Dict[str, Any] = {}
+    # (record, summary text) per compaction touched in this batch, for the
+    # same reason: a boundary and its summary entry are separate lines.
+    batch_compactions: Dict[str, Any] = {}
     for entry in entries:
-        if entry.kind == "user":
+        if entry.is_compact_boundary():
+            # Claude Code writes the boundary, then (a few lines later, with
+            # an EARLIER timestamp) the user entry holding the summary. A
+            # hook can read between the two, so the span is sent as soon as
+            # the boundary is seen, and again with the summary once that
+            # arrives: same id, start and end, which the backend collapses
+            # like a response that grows. The record waits in the state
+            # (sizes only) for its summary; a summary that never comes just
+            # leaves the span without summary attributes.
+            rec = _open_compaction(entry, scope, root_span_id, key_prefix)
+            if entry.timestamp_ns <= (scope.get("last_compaction") or 0):
+                # Read again (a copied history, a rewound offset), this one
+                # or an earlier one: the span went out the first time, and
+                # the call it flagged is past. A transcript runs forward in
+                # time, so the latest boundary's time covers them all.
+                continue
+            scope["last_compaction"] = entry.timestamp_ns
+            scope["open_compaction"] = rec
+            scope["compact_next"] = True
+            batch_compactions[rec["span_id"]] = (rec, "")
+        elif entry.is_compact_summary():
+            # Not a prompt: no turn, whatever promptId it carries. The
+            # context account still restarts from it.
+            context_sizes.user_text(scope, entry)
+            rec = scope.get("open_compaction")
+            if isinstance(rec, dict):
+                batch_compactions[rec["span_id"]] = (rec, entry.text())
+                scope["open_compaction"] = None
+            # Its timestamp predates the boundary's: leave the clock alone,
+            # or the first call after the compaction would start before it.
+            continue
+        elif entry.kind == "user":
             tool_results = entry.tool_results()
             if tool_results:
                 result_sizes = []
@@ -615,6 +732,8 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
         scope["last_ns"] = entry.timestamp_ns
 
+    for rec, summary in batch_compactions.values():
+        out.append(_compaction_span(ctx, trace_id, rec, summary))
     for gen, lines in batch_gens.values():
         earlier = _earlier_text(ctx, source_path, gen, lines)
         out.append(_generation_span(ctx, trace_id, gen, lines, earlier))

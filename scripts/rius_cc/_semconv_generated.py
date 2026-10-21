@@ -1,4 +1,4 @@
-# Vendored from rius-semconv v1.6.0 out/python/_semconv_generated.py by
+# Vendored from rius-semconv v1.8.0 out/python/_semconv_generated.py by
 # scripts/sync-semconv.sh. Do not edit: change the registry in rius-semconv.
 """Rius semantic conventions: the constants and tables, generated.
 
@@ -53,8 +53,9 @@ PROCESS_WORKING_DIRECTORY = "process.working_directory"
 # the old per-agent spellings for traces stored before.
 VCS_REF_HEAD_NAME = "vcs.ref.head.name"
 
-# Names the distribution that exported the span. Both SDKs set it as an
-# inline literal, "glassflow-rius". The coding-agent plugin sets
+# Names the distribution that exported the span. Both SDKs set it to
+# "glassflow-rius", a literal with no value row since the backend never
+# matches on it. The coding-agent plugin sets
 # TELEMETRY_DISTRO_NAME_CODING_AGENTS, and the backend reads
 # process.working_directory and vcs.ref.head.name as a coding session's
 # repo and branch only on spans carrying that value: both keys are general
@@ -63,8 +64,7 @@ TELEMETRY_DISTRO_NAME = "telemetry.distro.name"
 TELEMETRY_DISTRO_NAME_CODING_AGENTS = "rius-coding-agents"
 
 # The version of the distribution that exported the span: the SDK's, or the
-# coding-agent plugin's. Inline literal in both SDKs, like
-# telemetry.distro.name.
+# coding-agent plugin's.
 TELEMETRY_DISTRO_VERSION = "telemetry.distro.version"
 
 # The agent this process IS, stamped once on the resource so every span it
@@ -252,6 +252,19 @@ GEN_AI_REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count"
 GEN_AI_REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats"
 GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID = "gen_ai.request.previous_response.id"
 GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor"
+
+# The convention's positive marker that the context a model call ran on is
+# a compacted view of a prior conversation. A producer sets it only when
+# true, on every LLM span whose context was compacted, and leaves it unset
+# otherwise: the convention says never to write false, so a reader treats a
+# missing key as "not known to be compacted". The compaction itself, and
+# how much it removed, is the rius.compaction span or event; this key only
+# marks the calls that ran on the result. Metadata, not identity: the
+# producer learns the context was compacted when it links the call to the
+# compaction, which can be after the call span has started, so it never
+# rides a pending snapshot. Not content, so it survives
+# capture_content=False.
+GEN_AI_CONVERSATION_COMPACTED = "gen_ai.conversation.compacted"
 GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
@@ -260,6 +273,42 @@ GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 # cache fields first shipped; no released SDK version carries the old name.
 GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
 GEN_AI_USAGE_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
+
+# A per-modality subset of gen_ai.usage.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_TEXT_INPUT_TOKENS = "gen_ai.usage.text.input_tokens"
+
+# A per-modality subset of gen_ai.usage.output_tokens: never summed
+# into it.
+GEN_AI_USAGE_TEXT_OUTPUT_TOKENS = "gen_ai.usage.text.output_tokens"
+
+# A per-modality subset of gen_ai.usage.cache_read.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.text.cache_read.input_tokens"
+
+# A per-modality subset of gen_ai.usage.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_IMAGE_INPUT_TOKENS = "gen_ai.usage.image.input_tokens"
+
+# A per-modality subset of gen_ai.usage.output_tokens: never summed
+# into it.
+GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS = "gen_ai.usage.image.output_tokens"
+
+# A per-modality subset of gen_ai.usage.cache_read.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.image.cache_read.input_tokens"
+
+# A per-modality subset of gen_ai.usage.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_AUDIO_INPUT_TOKENS = "gen_ai.usage.audio.input_tokens"
+
+# A per-modality subset of gen_ai.usage.output_tokens: never summed
+# into it.
+GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = "gen_ai.usage.audio.output_tokens"
+
+# A per-modality subset of gen_ai.usage.cache_read.input_tokens: never summed
+# into it.
+GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.audio.cache_read.input_tokens"
 GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
 GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
@@ -387,6 +436,9 @@ RIUS_AGGREGATED_USAGE_PREFIX = "rius.aggregated_usage."
 # output_messages (literal role, parts typed text / tool_call /
 # tool_call_response with bytes and tool name), cache_marker, and a folded
 # summary of older input.
+# A media part (blob / uri / file) carries its modality (image, video,
+# audio or document) and, when known, byte_size, never bytes: the size of
+# the media itself, not of any content, which a blob does not carry.
 # A Rius vendor attribute, NOT a convention:
 # the backend reads it to attribute gen_ai.usage.input_tokens across the
 # context, and no convention describes context composition. Deliberately
@@ -395,6 +447,115 @@ RIUS_AGGREGATED_USAGE_PREFIX = "rius.aggregated_usage."
 # messages are truncated or stripped) and from PENDING_IDENTITY_ATTRIBUTES
 # (content is unknown at span start, so a pending snapshot never has it).
 RIUS_CONTEXT_SIZES = "rius.context.sizes"
+
+# --- Context compaction ---
+# An agent's context can shrink in two ways: the history is dropped without
+# a word, or the producer compacts it on purpose. A backend can tell the two
+# apart only if the producer says so, and no convention carries more than a
+# boolean on the calls that ran on a compacted context
+# (gen_ai.conversation.compacted).
+# The rius.compaction.* keys say what was compacted, by whom and how much.
+#
+# They ride in two placements, because compaction happens in two ways. A
+# compaction that is a step of its own (Claude Code, Codex, an on-demand
+# provider call) is a CHAIN span whose gen_ai.operation.name is
+# "compaction", carrying the keys itself. A compaction that happens inside
+# one request (provider-side context editing, Cursor's preCompact) is a
+# rius.compaction span event on that LLM span, carrying the same keys.
+# Every LLM call that runs on the compacted context sets
+# gen_ai.conversation.compacted.
+# How the context was shrunk: summarize (a summary replaces older turns),
+# clear_tool_results (old tool results are emptied), clear_thinking (old
+# thinking blocks are dropped) or truncate (old turns are cut with nothing
+# in their place). A reader needs it because the four lose different
+# things, and a drop in context between two calls means something else
+# after each.
+# Required on a compaction span and a rius.compaction event, which is why
+# it is conditionally required rather than required: only those carry it,
+# and a CHAIN or LLM span that is no compaction has nothing to say here.
+# The span form is keyed by gen_ai.operation.name, not by the span name:
+# the registry's conventions already key spans by the operation, and
+# taxonomy.yaml maps "compaction" to the CHAIN kind from it, so a reader
+# that finds compaction spans by operation needs no name parsing.
+# A Rius key under rius.*, never gen_ai.*: no convention defines a
+# compaction span or event, and the GenAI registry is free to define one
+# later and mean something else.
+RIUS_COMPACTION_KIND = "rius.compaction.kind"
+RIUS_COMPACTION_KIND_SUMMARIZE = "summarize"
+RIUS_COMPACTION_KIND_CLEAR_TOOL_RESULTS = "clear_tool_results"
+RIUS_COMPACTION_KIND_CLEAR_THINKING = "clear_thinking"
+RIUS_COMPACTION_KIND_TRUNCATE = "truncate"
+
+# client when the application or agent did the work (it summarized the
+# history itself, or cut it before sending), provider when the model
+# provider did it on its side (context editing, a server-side compaction
+# call). It tells a reader whose behaviour to look at when context
+# shrinks: the agent's own policy, or a provider setting. Required where
+# rius.compaction.kind is, for the same reason.
+RIUS_COMPACTION_EXECUTOR = "rius.compaction.executor"
+RIUS_COMPACTION_EXECUTOR_CLIENT = "client"
+RIUS_COMPACTION_EXECUTOR_PROVIDER = "provider"
+
+# auto when the producer or provider compacted because the context neared
+# its limit, manual when a person or the calling code asked for it (a
+# /compact command, an explicit call). Absent when the producer cannot
+# tell. It separates a compaction that was a cost of the run from one
+# somebody chose.
+RIUS_COMPACTION_TRIGGER = "rius.compaction.trigger"
+RIUS_COMPACTION_TRIGGER_AUTO = "auto"
+RIUS_COMPACTION_TRIGGER_MANUAL = "manual"
+
+# The size of the context the compaction started from, in the model's
+# tokens. Not gen_ai.usage.input_tokens: that bills one request, while this
+# measures the context window's contents at a point in time.
+RIUS_COMPACTION_TOKENS_BEFORE = "rius.compaction.tokens.before"
+
+# The size of the context the compaction left behind, measured the same
+# way as rius.compaction.tokens.before.
+RIUS_COMPACTION_TOKENS_AFTER = "rius.compaction.tokens.after"
+
+# What the compaction removed: tokens.before minus tokens.after when both
+# are known. Its own key because a provider that clears tool results often
+# reports only how much it cleared and never the two sizes, and a reader
+# should not have to subtract to answer "how much was lost".
+RIUS_COMPACTION_TOKENS_DROPPED = "rius.compaction.tokens.dropped"
+
+# The limit the context was measured against, so tokens.before reads as how
+# full the window was. Shared form of what Cursor's preCompact hook reports
+# as cursor.context.context_window_size.
+RIUS_COMPACTION_CONTEXT_WINDOW = "rius.compaction.context_window"
+
+# The number of messages that were summarized, cut or emptied, whichever
+# the kind says.
+RIUS_COMPACTION_MESSAGES_COMPACTED = "rius.compaction.messages.compacted"
+
+# The messages the next call still sees unchanged, usually the most recent
+# turns. The summary, when there is one, is not counted here.
+RIUS_COMPACTION_MESSAGES_KEPT = "rius.compaction.messages.kept"
+
+# Set for a clear_tool_results compaction, where the messages stay but
+# their tool results are replaced by a placeholder, so
+# rius.compaction.messages.compacted does not describe the loss.
+RIUS_COMPACTION_TOOL_RESULTS_CLEARED = "rius.compaction.tool_results.cleared"
+
+# Lets a reader join a compaction to the record the provider or the agent
+# keeps for it. Set only when one exists: an id is never made up, as with
+# gen_ai.conversation.id.
+RIUS_COMPACTION_ID = "rius.compaction.id"
+
+# A size, not content, like rius.context.sizes: deliberately absent from
+# CONTENT_ATTRIBUTES, so it survives masking and capture_content=False and
+# a reader can see how big the summary was when its text is withheld.
+RIUS_COMPACTION_SUMMARY_BYTES = "rius.compaction.summary.bytes"
+
+# What the summary said, for a summarize compaction. Content in the same
+# sense messages are: a summary restates the conversation, so it is on
+# CONTENT_ATTRIBUTES and is masked or stripped at export. Never on a
+# pending snapshot, since it exists only once the compaction ran.
+# A leaf under rius.compaction.summary rather than the key itself, so the
+# name is not also the namespace of rius.compaction.summary.bytes, which
+# the OpenTelemetry naming rules do not allow for an attribute.
+RIUS_COMPACTION_SUMMARY_TEXT = "rius.compaction.summary.text"
 
 # --- Span event names ---
 # Deprecated: replaced by the gen_ai.response.time_to_first_chunk span attribute.
@@ -409,6 +570,15 @@ RIUS_CONTEXT_SIZES = "rius.context.sizes"
 # creates. Producers need not send it. The constant stays, deprecated,
 # until a major release.
 GEN_AI_FIRST_TOKEN_EVENT = "gen_ai.first_token"
+
+# A compaction that happens inside one request, with no step of its own:
+# the provider edits the context as part of the call, or the agent's hook
+# reports it while the call is open. It is an event on that LLM span and
+# carries the rius.compaction.* attributes. A compaction that is a step of
+# its own is a CHAIN span with gen_ai.operation.name "compaction" instead,
+# never both for the same compaction. Every LLM call that runs on the
+# compacted context sets gen_ai.conversation.compacted.
+RIUS_COMPACTION_EVENT = "rius.compaction"
 
 # --- Pending (partial) spans ---
 # Marks the content-free snapshot exported at span START; the backend maps it
@@ -903,6 +1073,11 @@ CONTENT_ATTRIBUTES = frozenset(
         # recognises onto gen_ai.request.*, so what reaches here is exactly
         # the set nothing has classified.
         LLM_INVOCATION_PARAMETERS,
+        # A compaction's summary restates the conversation it replaced, so it
+        # is content in the same sense messages are. Its size,
+        # rius.compaction.summary.bytes, is not: it stays off this list and
+        # survives masking.
+        RIUS_COMPACTION_SUMMARY_TEXT,
     }
     # The NAMED EXCEPTION to the rule that request parameters export in clear.
     # That rule is right for scalar knobs, but a caller passing tools through
@@ -1006,8 +1181,8 @@ _OPERATION_BY_KIND: dict[SpanKind, str] = {
 }
 
 # The inverse, for spans that speak the conventions (and the GenAI-native
-# vendor operations listed below, such as agent_step and rerank). A
-# GenAI-native instrumentation sets gen_ai.operation.name and never heard of
+# vendor operations listed below, such as agent_step, compaction and rerank).
+# A GenAI-native instrumentation sets gen_ai.operation.name and never heard of
 # openinference.span.kind, and both keys must be present on every span, so
 # the derivation has to run in both directions.
 #
@@ -1017,7 +1192,7 @@ _OPERATION_BY_KIND: dict[SpanKind, str] = {
 #     are LLM calls the same way chat is, and create_agent is an AGENT span
 #     just as invoke_agent is, so the mapping is many-to-one and only the
 #     chat/invoke_agent entries round-trip.
-#   - CHAIN has no operation of its own, but three operations land on it.
+#   - CHAIN has no operation of its own, but four operations land on it.
 #     invoke_workflow and plan are real GenAI operations with no taxonomy
 #     value of their own; CHAIN is the honest home for both, and the reverse
 #     direction is the only one that can say so. agent_step is not a
@@ -1025,6 +1200,13 @@ _OPERATION_BY_KIND: dict[SpanKind, str] = {
 #     each step of an agent run (one model call and the tools it asked
 #     for), a step within the run rather than an agent invocation, so
 #     CHAIN as well.
+#   - compaction is not a conventions operation either. A producer writes it
+#     on the span of a step that shrinks the agent's context (a summary
+#     replaces older turns, tool results are cleared, old turns are cut). The
+#     step is not a model call and not an agent invocation, so neither LLM
+#     nor AGENT fits, even when a model writes the summary: the cost of that
+#     call, if any, is its own LLM span. CHAIN is the honest home, as for
+#     agent_step. The span's attributes are the rius.compaction.* keys.
 #   - LLM also takes four operations @ai-sdk/otel writes that no convention
 #     defines, kept as written rather than rewritten to chat or given an
 #     invented name: decide (the experimental decision call: an operation
@@ -1046,6 +1228,7 @@ _KIND_BY_OPERATION: dict[str, SpanKind] = {
     "invoke_workflow": SpanKind.CHAIN,
     "plan": SpanKind.CHAIN,
     "agent_step": SpanKind.CHAIN,
+    "compaction": SpanKind.CHAIN,
     "decide": SpanKind.LLM,
     "ai.generateSpeech": SpanKind.LLM,
     "ai.transcribe": SpanKind.LLM,
@@ -1141,6 +1324,7 @@ __all__ = [
     "GEN_AI_AGENT_ID",
     "GEN_AI_AGENT_NAME",
     "GEN_AI_AGENT_VERSION",
+    "GEN_AI_CONVERSATION_COMPACTED",
     "GEN_AI_DATA_SOURCE_ID",
     "GEN_AI_FIRST_TOKEN_EVENT",
     "GEN_AI_INPUT_MESSAGES",
@@ -1178,12 +1362,21 @@ __all__ = [
     "GEN_AI_TOOL_DEFINITIONS",
     "GEN_AI_TOOL_NAME",
     "GEN_AI_TOOL_TYPE",
+    "GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS",
+    "GEN_AI_USAGE_AUDIO_INPUT_TOKENS",
+    "GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS",
     "GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS",
     "GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS",
+    "GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS",
+    "GEN_AI_USAGE_IMAGE_INPUT_TOKENS",
+    "GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS",
     "GEN_AI_USAGE_INPUT_TOKENS",
     "GEN_AI_USAGE_OUTPUT_TOKENS",
     "GEN_AI_USAGE_PREFIX",
     "GEN_AI_USAGE_REASONING_OUTPUT_TOKENS",
+    "GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS",
+    "GEN_AI_USAGE_TEXT_INPUT_TOKENS",
+    "GEN_AI_USAGE_TEXT_OUTPUT_TOKENS",
     "INPUT_VALUE",
     "INVOCATION_PARAMETERS_CONTENT_MEMBERS",
     "LLM_INVOCATION_PARAMETERS",
@@ -1205,6 +1398,28 @@ __all__ = [
     "RIUS_COMMAND_CLASS_OTHER",
     "RIUS_COMMAND_CLASS_PACKAGE",
     "RIUS_COMMAND_CLASS_TEST",
+    "RIUS_COMPACTION_CONTEXT_WINDOW",
+    "RIUS_COMPACTION_EVENT",
+    "RIUS_COMPACTION_EXECUTOR",
+    "RIUS_COMPACTION_EXECUTOR_CLIENT",
+    "RIUS_COMPACTION_EXECUTOR_PROVIDER",
+    "RIUS_COMPACTION_ID",
+    "RIUS_COMPACTION_KIND",
+    "RIUS_COMPACTION_KIND_CLEAR_THINKING",
+    "RIUS_COMPACTION_KIND_CLEAR_TOOL_RESULTS",
+    "RIUS_COMPACTION_KIND_SUMMARIZE",
+    "RIUS_COMPACTION_KIND_TRUNCATE",
+    "RIUS_COMPACTION_MESSAGES_COMPACTED",
+    "RIUS_COMPACTION_MESSAGES_KEPT",
+    "RIUS_COMPACTION_SUMMARY_BYTES",
+    "RIUS_COMPACTION_SUMMARY_TEXT",
+    "RIUS_COMPACTION_TOKENS_AFTER",
+    "RIUS_COMPACTION_TOKENS_BEFORE",
+    "RIUS_COMPACTION_TOKENS_DROPPED",
+    "RIUS_COMPACTION_TOOL_RESULTS_CLEARED",
+    "RIUS_COMPACTION_TRIGGER",
+    "RIUS_COMPACTION_TRIGGER_AUTO",
+    "RIUS_COMPACTION_TRIGGER_MANUAL",
     "RIUS_CONTEXT_SIZES",
     "RIUS_MAIN_AGENT_DESCRIPTION",
     "RIUS_MAIN_AGENT_ID",
