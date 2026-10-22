@@ -188,8 +188,12 @@ def codex_content_strings(path: pathlib.Path) -> set:
     replies, tool inputs and outputs, MCP errors."""
     out = set()
     for line in path.read_text(encoding="utf-8").splitlines():
-        payload = json.loads(line).get("payload")
-        for text in _codex_texts(payload if isinstance(payload, dict) else {}):
+        raw = json.loads(line)
+        payload = raw.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        if raw.get("type") == "compacted":      # the summary that replaced the history
+            payload = {"type": "user_message", "message": payload.get("message")}
+        for text in _codex_texts(payload):
             if isinstance(text, str) and len(text.strip()) >= CODEX_MIN_CONTENT_LEN:
                 out.add(text.strip())
     return out

@@ -6,6 +6,7 @@ encodes them unchanged. The tree:
     AGENT  "codex session"            session:<thread id>
       CHAIN  turn                     one per Codex turn id
         LLM  <model>                  one per token_count (one model call)
+          CHAIN  compaction           one per `compacted` line (see _on_compacted)
           TOOL  <tool>                function_call / custom_tool_call, by call_id
             AGENT  <agent type>       a subagent, built from its own rollout
               CHAIN  turn  ...        with a state of its own (new_subagent_state)
@@ -27,7 +28,8 @@ from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
 from . import codex_script, command_class, distro, scrub
-from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
+from .spans import (COMPACTION_OPERATION, ERROR_MESSAGE_MAX_BYTES,
+                    TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
 from . import _semconv_generated as semconv
@@ -64,7 +66,14 @@ _EXECS_KEPT = 256
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
             "session": {}, "model": "", "turn": None, "open_tools": {},
-            "spawned": {}, "execs": []}
+            "spawned": {}, "execs": [],
+            # A compaction still waiting for the size of the context it left
+            # (ids and sizes only), whether the next model call is the first
+            # after one, the time (ns) of the latest `compacted` line read,
+            # and the size of the context and its window as the last
+            # token_count said.
+            "open_compaction": None, "compact_next": False,
+            "last_compaction": None, "context_tokens": 0, "context_window": 0}
 
 
 def upgrade_state(state: dict) -> None:
@@ -73,6 +82,10 @@ def upgrade_state(state: dict) -> None:
     in `tool_starts`; none of that is left behind, so the plaintext does not
     outlive the upgrade and a subagent spawned by a call that began before it
     still finds that call."""
+    for key, value in (("open_compaction", None), ("compact_next", False),
+                       ("last_compaction", None), ("context_tokens", 0),
+                       ("context_window", 0)):
+        state.setdefault(key, value)
     open_ids = {tool["span_id"] for tool in state["open_tools"].values()}
     execs = state.setdefault("execs", [])
     for start_ns, span_id, name in state.pop("tool_starts", None) or []:
@@ -248,10 +261,26 @@ def _reply(ctx: Ctx, turn: dict) -> str:
 
 
 def _on_usage(rec, state, ctx, out):
+    if rec.get("context_window"):
+        state["context_window"] = rec.get("context_window")
+    if rec.get("local_estimate"):
+        # Codex re-counted its context itself: no model call, so no LLM span
+        # and no flag, but it is the size the context was left at.
+        state["context_tokens"] = rec.get("context_tokens")
+        _settle_compaction(state, ctx, out, rec.get("context_tokens"),
+                           rec.timestamp_ns)
+        return
     if _repeats_last_call(rec, state):
         return
     turn = state["turn"]
+    state["context_tokens"] = rec.get("input_tokens")
+    _settle_compaction(state, ctx, out, rec.get("input_tokens"), rec.timestamp_ns)
     attrs = _usage_attrs(ctx, state["model"], rec)
+    if state.get("compact_next") and rec.timestamp_ns >= (state.get("last_compaction") or 0):
+        # The first call after a compaction, and no other: the later ones
+        # also run on the compacted context, but only this one first saw it.
+        attrs[semconv.GEN_AI_CONVERSATION_COMPACTED] = True
+        state["compact_next"] = False
     _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, _reply(ctx, turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
@@ -259,6 +288,101 @@ def _on_usage(rec, state, ctx, out):
     turn["llm_index"] += 1
     turn["llm_start_ns"] = rec.timestamp_ns
     turn["reply_at"] = []
+
+
+def _positive(value: Any) -> Optional[int]:
+    """`value` when it is a positive integer: a size of 0 is Codex not
+    knowing, and is never sent."""
+    ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return value if ok else None
+
+
+def _on_compacted(rec, state, ctx, out):
+    """Codex replaced the history with a summary (a `compacted` line).
+
+    The span is sent as soon as the line is read, and again, under the same
+    id, when the size of the context it left arrives (the next token_count,
+    which a later hook may be the one to read). The summary text is not
+    kept in the state: only where to read it again, as for any content."""
+    if rec.timestamp_ns <= (state.get("last_compaction") or 0):
+        # Read again (a rewound offset, a copied history): the span went
+        # out the first time, and the call it flagged is past.
+        return
+    state["last_compaction"] = rec.timestamp_ns
+    attrs: Dict[str, Any] = {
+        semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
+        # A compaction answered by a model response was done on the
+        # provider's side; the trigger is not known (Codex registers no
+        # hook for it), so it is not set.
+        semconv.RIUS_COMPACTION_EXECUTOR: (
+            semconv.RIUS_COMPACTION_EXECUTOR_PROVIDER
+            if rec.get("compaction_response_id")
+            else semconv.RIUS_COMPACTION_EXECUTOR_CLIENT),
+    }
+    before = (_positive(state.get("context_tokens"))
+              or _positive(rec.get("recorded_tokens")))
+    if before:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_BEFORE] = before
+    if _positive(state.get("context_window")):
+        attrs[semconv.RIUS_COMPACTION_CONTEXT_WINDOW] = state["context_window"]
+    ident = rec.get("window_id")
+    if ident:
+        attrs[semconv.RIUS_COMPACTION_ID] = ident
+    summary = rec.get("message")
+    if summary:
+        # A size, not content: sent whatever the capture setting.
+        attrs[semconv.RIUS_COMPACTION_SUMMARY_BYTES] = len(
+            summary.encode("utf-8", "surrogatepass"))
+    # A subagent's compaction is its own: its root id keeps the ids apart.
+    key = "compaction:" + (state.get("root_id") or "")
+    pending = {
+        "span_id": span_id_for(key + (ident or str(rec.timestamp_ns))),
+        "parent_span_id": state["turn"]["span_id"],
+        # Codex does not say how long it took: the line is the moment.
+        "start_ns": rec.timestamp_ns, "end_ns": rec.timestamp_ns,
+        "attrs": attrs, "summary_at": _hold(ctx, rec),
+    }
+    # A newer compaction takes over: the one still waiting for its size
+    # keeps what it was sent with, and is not given the newer one's.
+    state["open_compaction"] = pending
+    state["compact_next"] = True
+    _emit_compaction(ctx, pending, out)
+
+
+def _settle_compaction(state, ctx, out, tokens_after, at_ns) -> None:
+    """The first size Codex gives for the context after a compaction. A count
+    dated before the line (the rollout read from the top again) is not it."""
+    pending = state.get("open_compaction")
+    if not isinstance(pending, dict) or at_ns < pending["start_ns"]:
+        return
+    state["open_compaction"] = None
+    attrs = pending["attrs"]
+    after = _positive(tokens_after)
+    if after:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_AFTER] = after
+        before = attrs.get(semconv.RIUS_COMPACTION_TOKENS_BEFORE)
+        if before is not None and before >= after:
+            attrs[semconv.RIUS_COMPACTION_TOKENS_DROPPED] = before - after
+    if (_positive(state.get("context_window"))
+            and semconv.RIUS_COMPACTION_CONTEXT_WINDOW not in attrs):
+        attrs[semconv.RIUS_COMPACTION_CONTEXT_WINDOW] = state["context_window"]
+    _emit_compaction(ctx, pending, out)
+
+
+def _emit_compaction(ctx: Ctx, pending: dict, out: list) -> None:
+    """The compaction's span, once per id in `out`: a batch that holds the
+    line and the count after it sends only the finished copy."""
+    attrs = _attrs(ctx, "CHAIN")
+    attrs[semconv.GEN_AI_OPERATION_NAME] = COMPACTION_OPERATION
+    attrs.update(pending["attrs"])
+    # The summary is content: read again from the rollout, behind the gate.
+    summary = _recall(ctx, pending.get("summary_at"), "message")
+    if summary:
+        _content_attr(ctx, attrs, semconv.RIUS_COMPACTION_SUMMARY_TEXT, summary)
+    out[:] = [s for s in out if s.span_id != pending["span_id"]]
+    out.append(_finished(ctx, pending["span_id"], pending["parent_span_id"],
+                         COMPACTION_OPERATION, "CHAIN", pending["start_ns"],
+                         pending["end_ns"], attrs))
 
 
 def _on_tool_call(rec, state, ctx, out):
@@ -684,6 +808,7 @@ _HANDLERS = {
     cr.USER_MESSAGE: _on_user_message,
     cr.AGENT_MESSAGE: _on_agent_message,
     cr.USAGE: _on_usage,
+    cr.COMPACTED: _on_compacted,
     cr.TOOL_CALL: _on_tool_call,
     cr.MCP_RESULT: _on_mcp_result,
     cr.SUBAGENT_STARTED: _on_subagent_started,
@@ -695,7 +820,7 @@ _HANDLERS = {
 # Kinds that only mean something inside a turn. One seen with no turn open
 # began before this session was traced, and is dropped.
 _NEEDS_TURN = {cr.USER_MESSAGE, cr.AGENT_MESSAGE, cr.USAGE, cr.TOOL_CALL,
-               cr.TURN_END}
+               cr.COMPACTED, cr.TURN_END}
 
 
 def _inherited(rec, state: dict) -> bool:

@@ -48,6 +48,11 @@ summary entry itself is not a turn. Claude Code writes it just after the
 boundary, so the span can be sent once without the summary and again, under
 the same span id, with it.
 
+**Codex compactions are `CHAIN` spans too**, read from the `compacted` line
+in the rollout, with the same flag on the next model call. See
+[Rius for Codex](codex.md#compactions) for what they carry and what is not
+known.
+
 **Each generation says what its prompt held**, as sizes, in
 `rius.context.sizes` (the attribute the Rius SDKs send). The console's
 Context panel uses it to split a call's prompt into user and assistant

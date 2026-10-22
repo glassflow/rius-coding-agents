@@ -87,6 +87,7 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | LLM `<model>` | one per model call: `input_tokens` (includes cached), `cache_read.input_tokens`, `output_tokens`, `reasoning.output_tokens` |
 | TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>` (`exec.exit_<n>` when a code-mode script ran it), an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
 | AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
+| CHAIN `compaction` | one per compaction Codex records, in the turn it happened in (below) |
 
 Resource attributes: `service.name=codex`, `service.version` (Codex's
 version), `process.working_directory`, `vcs.ref.head.name`,
@@ -95,6 +96,41 @@ the plugin's version. Content rules are the same as for Claude Code:
 `$rius:rius-enable-here` sends structure only, `$rius:rius-enable-content-here`
 adds content with secrets removed, and `RIUS_CAPTURE_CONTENT=false` turns
 content off everywhere.
+
+### Compactions
+
+When Codex compacts a conversation it writes a `compacted` line, and Rius
+sends it as a `CHAIN` span with `gen_ai.operation.name` set to `compaction`
+(`rius.compaction.*`):
+
+- `kind` is `summarize`. `executor` is `provider` when Codex recorded the id
+  of a model response for the compaction, else `client`. The trigger (`auto`
+  or `manual`) is not set: the rollout does not say.
+- `tokens.before` is the prompt size of the last model call before it,
+  `tokens.after` the size of the context Codex counts next, and
+  `tokens.dropped` the difference when it is positive. After a local
+  compaction Codex counts its own estimate of the new context (a
+  `token_count` that used no tokens); that is `tokens.after`, and it is not a
+  model call, so it gets no `LLM` span. Otherwise the next call's prompt size
+  is used. `context_window` and `id` (Codex's window id) are set when known.
+- The span has no duration: Codex does not say how long a compaction took,
+  so it starts and ends at its line. It is sent when the line is read and
+  sent again, under the same span id, once the size after it is known.
+- The first model call after a compaction has `gen_ai.conversation.compacted`
+  set; the later ones do not.
+- `summary.bytes` is the size of the summary. The summary text
+  (`summary.text`) is content: it is sent only where content is, with
+  secrets removed and capped like the rest, and is not kept in the state
+  file.
+
+This was written from Codex's source (openai/codex: the `compacted` rollout
+line and the `token_count` event), not from a recorded compaction: none of
+the rollouts used here holds one, and the tests run on a synthetic rollout
+(`tests/fixtures/codex/synthetic_compaction.jsonl`). In particular, whether
+a response id is set only for a compaction a model did on the provider's
+side is not confirmed: Codex's own, model-written summaries may carry one
+too, and would read as `provider`. A compaction written while no turn is
+open (or inside a turn a forked session copied) is dropped.
 
 ### How a session ends
 
