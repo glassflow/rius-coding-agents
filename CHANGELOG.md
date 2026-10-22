@@ -4,6 +4,24 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.8.0 (2026-10-22)
+
+- Claude Code: a compaction becomes a `CHAIN` span (`gen_ai.operation.name`
+  `compaction`, `rius.compaction.*`) beside the generations of the turn it
+  happened in. It carries the trigger (`auto` or `manual`), the tokens before
+  and after, the tokens dropped, the messages kept and the size of the summary
+  that replaced the history. The summary text is content, so it is sent only
+  where content is. The first model call after a compaction has
+  `gen_ai.conversation.compacted` set.
+- Codex: each `compacted` line in the rollout becomes the same `compaction`
+  span, with `executor` `client` or `provider` and the token counts Codex
+  reports. Written from Codex's source and a synthetic rollout; no real Codex
+  session with a compaction has been checked yet.
+- Cursor: the `preCompact` hook becomes a `rius.compaction` event on the
+  running generation's `LLM` span, and the next `LLM` span is flagged with
+  `gen_ai.conversation.compacted`. Built from Cursor's hooks documentation; no
+  real Cursor compaction has been checked yet.
+
 ## 0.7.0 (2026-10-20)
 
 - An `agent-observability` skill, installed with
