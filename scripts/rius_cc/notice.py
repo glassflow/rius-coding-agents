@@ -191,9 +191,3 @@ def line_for_session_start(session_id: str, cfg, home: str) -> Optional[str]:
         return None
     _remember_shown(session_id, home, line)
     return line
-
-
-def for_session_start(session_id: str, cfg, home: str) -> Optional[str]:
-    """The hook JSON to print at SessionStart, or None to print nothing."""
-    line = line_for_session_start(session_id, cfg, home)
-    return None if line is None else json.dumps({"systemMessage": line})

@@ -8,6 +8,9 @@ it; the model never does, and nothing here is ever printed as plain stdout):
   * at SessionStart after a compaction (and at Stop, for a compaction the
     SessionStart did not show), how much the compaction dropped.
 
+A failed write of the record drops the lines already computed, on purpose:
+better no line than the same line again at every Stop.
+
 Everything is read locally from the tail of the session's transcript. No
 network, and no tracing needed: it works in a folder where tracing is off.
 It does need a stored key, because scripts/hook.sh exits before starting
@@ -75,7 +78,8 @@ WARNING = ("Context is %d%% full (%s of %s). Quality may drop; consider "
            "/compact or a new session.")
 COMPACTED = ("Compacted %s to %s tokens. Check that instructions you rely on "
              "are still followed.")
-COMPACTED_FROM = "Compacted from %s tokens."
+COMPACTED_FROM = ("Compacted from %s tokens. Check that instructions you rely "
+                  "on are still followed.")
 
 
 def enabled(env) -> bool:
@@ -123,20 +127,23 @@ def window_for(model: Any, requested: Any, context: int,
 
 class Boundary:
     """A compaction, as the transcript's compact_boundary row says it."""
-    __slots__ = ("id", "before", "after")
+    __slots__ = ("id", "before")
 
     def __init__(self, entry) -> None:
         meta = entry.compact_metadata()
         self.id = entry.uuid or str(entry.timestamp_ns)
         self.before = _count(meta.get("preTokens"))
-        self.after = _count(meta.get("postTokens"))
 
-    def line(self) -> Optional[str]:
+    def line(self, context: Optional[int] = None) -> Optional[str]:
+        """`context` is the size of the first model call after the
+        compaction, when there is one. `postTokens` is not used for the second
+        number: it leaves out the system prompt and the tools, so it reads
+        about 49k below what the next call sends."""
         if not self.before:
             return None
-        if not self.after:
+        if not context:
             return COMPACTED_FROM % tokens(self.before)
-        return COMPACTED % (tokens(self.before), tokens(self.after))
+        return COMPACTED % (tokens(self.before), tokens(context))
 
 
 class Tail:
@@ -174,6 +181,8 @@ def _lines_from_end(path: str) -> Iterator[bytes]:
 def _context_of(entry) -> Optional[int]:
     """The context a real assistant row was sent with, or None."""
     if entry.kind != "assistant" or entry.is_sidechain:
+        return None
+    if not isinstance(entry.message, dict):
         return None
     if entry.raw.get("isApiErrorMessage") or entry.message.get("model") in (
             None, "<synthetic>"):
@@ -216,8 +225,12 @@ def _parse(raw: bytes):
 
 
 def threshold_line(context: int, window: int) -> Optional[tuple]:
-    """(level, line) for the highest threshold `context` has passed, or None."""
-    for level in sorted(THRESHOLDS, reverse=True):
+    """(level, line) for the highest threshold `context` has passed, or None.
+    Only the first threshold is used on the standard window: a session there
+    compacts itself at about 83% (167k), so a 90% line is nearly always a 1M
+    session on a plain model id, measured against the wrong window."""
+    levels = THRESHOLDS if window > STANDARD_WINDOW else THRESHOLDS[:1]
+    for level in sorted(levels, reverse=True):
         if context * 100 >= window * level:
             return level, WARNING % (context * 100 // window, tokens(context),
                                      tokens(window))
@@ -288,7 +301,8 @@ def lines(event: str, payload: dict, session_id: str, home: str) -> List[str]:
         if tail.boundary.id != record["boundary"]:
             record["boundary"] = tail.boundary.id
             record["level"] = 0         # the usage fell: the warnings re-arm
-            line = tail.boundary.line()
+            line = tail.boundary.line(
+                tail.context if event == "Stop" else None)
             if line:
                 out.append(line)
     if event == "Stop" and tail.context is not None:

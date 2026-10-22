@@ -267,8 +267,11 @@ def _print_system_message(lines) -> None:
     lines = [line for line in lines if line]
     if not lines:
         return
-    sys.stdout.write(json.dumps({"systemMessage": "\n".join(lines)}) + "\n")
-    sys.stdout.flush()
+    try:
+        sys.stdout.write(json.dumps({"systemMessage": "\n".join(lines)}) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass        # a closed pipe must not cost the Stop its export
 
 
 def _run_cursor(event: str, raw: str, profile) -> None:

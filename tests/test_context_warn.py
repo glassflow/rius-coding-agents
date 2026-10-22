@@ -147,24 +147,43 @@ def test_exactly_seventy_percent_fires(tr, home):
         "/compact or a new session."]
 
 
-def test_seventy_then_ninety_are_separate_messages(tr, home):
-    tr.assistant(144_000)
-    assert stop(tr, home) == [WARN_72]
-    tr.assistant(182_400)
+ONE_M = OPUS + "[1m]"
+
+
+def test_seventy_then_ninety_are_separate_messages_on_a_proven_window(tr, home):
+    tr.assistant(720_000, requested=ONE_M)
     assert stop(tr, home) == [
-        "Context is 91% full (182k of 200k). Quality may drop; consider "
+        "Context is 72% full (720k of 1M). Quality may drop; consider "
         "/compact or a new session."]
-    tr.assistant(190_000)
+    tr.assistant(912_000, requested=ONE_M)
+    assert stop(tr, home) == [
+        "Context is 91% full (912k of 1M). Quality may drop; consider "
+        "/compact or a new session."]
+    tr.assistant(950_000, requested=ONE_M)
     assert stop(tr, home) == []
 
 
 def test_a_jump_past_ninety_fires_only_the_ninety_message(tr, home):
+    tr.assistant(925_000, requested=ONE_M)
+    assert stop(tr, home) == [
+        "Context is 92% full (925k of 1M). Quality may drop; consider "
+        "/compact or a new session."]
+    tr.assistant(750_000, requested=ONE_M)  # both are marked shown
+    assert stop(tr, home) == []
+
+
+def test_the_ninety_line_waits_for_a_window_above_the_standard_one(tr, home):
+    """A session that compacts itself at 167k is nearly always a 1M session
+    on a plain model id, so 90% of 200k is no warning."""
     tr.assistant(185_000)
     assert stop(tr, home) == [
         "Context is 92% full (185k of 200k). Quality may drop; consider "
         "/compact or a new session."]
-    tr.assistant(150_000)       # both are marked shown: no 70% afterwards
+    tr.assistant(195_000)
     assert stop(tr, home) == []
+    assert _record(home)["level"] == 70
+    assert context_warn.threshold_line(195_000, 200_000)[0] == 70
+    assert context_warn.threshold_line(950_000, 1_000_000)[0] == 90
 
 
 def test_context_is_input_plus_both_cache_counts(tr, home):
@@ -278,7 +297,7 @@ def test_a_compaction_from_above_the_standard_window_proves_it(tr, home):
     tr.assistant(250_000)
     tr.boundary(pre=250_000, post=30_000)
     tr.assistant(160_000)
-    assert stop(tr, home) == ["Compacted 250k to 30k tokens. Check that "
+    assert stop(tr, home) == ["Compacted 250k to 160k tokens. Check that "
                               "instructions you rely on are still followed."]
 
 
@@ -330,7 +349,7 @@ def test_messages_reads_the_process_environment_by_default(
 
 # the compaction line -------------------------------------------------------
 
-LINE = ("Compacted 168k to 31k tokens. Check that instructions you rely on "
+LINE = ("Compacted from 168k tokens. Check that instructions you rely on "
         "are still followed.")
 
 
@@ -359,7 +378,7 @@ def test_a_newer_boundary_is_reported_again(tr, home):
     assert compact_start(tr, home) == [LINE]
     tr.assistant(60_000)
     tr.boundary(pre=170_000, post=25_000)
-    assert stop(tr, home) == ["Compacted 170k to 25k tokens. Check that "
+    assert stop(tr, home) == ["Compacted from 170k tokens. Check that "
                               "instructions you rely on are still followed."]
 
 
@@ -374,7 +393,8 @@ def test_stop_reports_a_boundary_session_start_did_not_show(tr, home):
 @pytest.mark.parametrize("post", [None, 0])
 def test_without_post_tokens_only_the_before_size_is_given(tr, home, post):
     tr.boundary(pre=167_600, post=post)
-    assert compact_start(tr, home) == ["Compacted from 168k tokens."]
+    assert compact_start(tr, home) == ["Compacted from 168k tokens. Check that instructions "
+                                          "you rely on are still followed."]
 
 
 @pytest.mark.parametrize("pre", [None, 0])
@@ -434,12 +454,10 @@ def test_the_thresholds_re_arm_after_a_compaction(tr, home):
     tr.boundary(pre=185_000, post=30_000)
     tr.assistant(40_000)
     assert stop(tr, home) == [
-        "Compacted 185k to 30k tokens. Check that instructions you rely on "
+        "Compacted 185k to 40k tokens. Check that instructions you rely on "
         "are still followed."]
     tr.assistant(144_000)
     assert stop(tr, home) == [WARN_72]
-    tr.assistant(182_400)
-    assert len(stop(tr, home)) == 1
     assert stop(tr, home) == []
 
 
@@ -447,7 +465,7 @@ def test_a_row_from_before_the_compaction_is_not_the_context(tr, home):
     tr.assistant(190_000)
     tr.boundary(pre=190_000, post=30_000)
     out = stop(tr, home)
-    assert out == ["Compacted 190k to 30k tokens. Check that instructions "
+    assert out == ["Compacted from 190k tokens. Check that instructions "
                    "you rely on are still followed."]
     assert _record(home)["level"] == 0
 
@@ -457,7 +475,7 @@ def test_a_stale_row_does_not_warn_when_the_boundary_was_already_shown(
     tr.assistant(190_000)
     tr.boundary(pre=190_000, post=30_000)
     assert compact_start(tr, home) == [
-        "Compacted 190k to 30k tokens. Check that instructions you rely on "
+        "Compacted from 190k tokens. Check that instructions you rely on "
         "are still followed."]
     assert stop(tr, home) == []
 
@@ -833,7 +851,7 @@ def test_e2e_the_warning_is_once_per_threshold_across_processes(tr, tmp_path):
     third = _run_hook("Stop", _payload(tr, tmp_path, "Stop"), env)
     assert _only_message(first.stdout) == WARN_72
     assert second.stdout == ""
-    assert _only_message(third.stdout).startswith("Context is 92% full")
+    assert third.stdout == ""       # 90% of 200k is not a line (see above)
 
 
 def test_e2e_compact_session_start_prints_the_compaction_line(tr, tmp_path):
@@ -903,3 +921,75 @@ def test_e2e_through_the_launcher_a_signed_out_user_pays_for_nothing(
     tr.assistant(144_000)
     r = _run_launcher(_isolated_env(), _payload(tr, tmp_path, "Stop"))
     assert (r.returncode, r.stdout) == (0, "")
+
+
+# review round 1 -------------------------------------------------------------------
+
+def test_stop_gives_the_first_context_after_a_compaction_as_the_size_to(tr, home):
+    """postTokens leaves out the system prompt and the tools: the next call's
+    context is what the session really is at."""
+    tr.assistant(100_000)
+    tr.boundary(pre=167_600, post=24_000)
+    tr.assistant(73_000)
+    assert stop(tr, home) == ["Compacted 168k to 73k tokens. Check that "
+                              "instructions you rely on are still followed."]
+
+
+def test_session_start_gives_only_the_size_from(tr, home):
+    tr.boundary(pre=167_600, post=24_000)
+    assert compact_start(tr, home) == [
+        "Compacted from 168k tokens. Check that instructions you rely on "
+        "are still followed."]
+
+
+def test_a_compaction_that_leaves_the_context_above_seventy_re_arms_the_levels(
+        tr, home):
+    tr.assistant(720_000, requested=ONE_M)
+    assert len(stop(tr, home)) == 1
+    tr.assistant(950_000, requested=ONE_M)
+    assert len(stop(tr, home)) == 1
+    tr.boundary(pre=950_000, post=800_000)
+    compact_start(tr, home)
+    assert _record(home)["level"] == 0
+    tr.assistant(720_000, requested=ONE_M)
+    assert len(stop(tr, home)) == 1
+
+
+def test_exactly_the_standard_window_in_a_boundary_is_not_proof(tr, home):
+    tr.boundary(pre=200_000, post=30_000)
+    compact_start(tr, home)
+    assert _record(home)["large"] is False
+    tr.boundary(pre=200_001, post=30_000)
+    compact_start(tr, home)
+    assert _record(home)["large"] is True
+
+
+def test_a_context_over_the_standard_window_on_another_model_is_no_proof(
+        tr, home):
+    tr.assistant(250_000, model="some-other-model")
+    assert stop(tr, home) == []
+    assert not os.path.exists(os.path.join(
+        home, ".claude", "rius", "notices", SID + ".context")) or \
+        _record(home)["large"] is False
+    tr.assistant(150_000)
+    assert stop(tr, home) == [
+        "Context is 75% full (150k of 200k). Quality may drop; consider "
+        "/compact or a new session."]
+
+
+def test_a_row_with_a_string_message_does_not_silence_the_warning(tr, home):
+    tr.assistant(144_000)
+    tr.add(tr._stamp("assistant", message="not a dict", usage={}))
+    assert stop(tr, home) == [WARN_72]
+
+
+def test_a_closed_stdout_is_swallowed(monkeypatch):
+    class Closed:
+        def write(self, text):
+            raise BrokenPipeError()
+
+        def flush(self):
+            raise BrokenPipeError()
+
+    monkeypatch.setattr(sys, "stdout", Closed())
+    hook_mod._print_system_message(["a line"])

@@ -254,17 +254,21 @@ followed, the heartbeat, and why generation durations run long.
 
 Rius also tells you in Claude Code when a session's context is filling up.
 You see one line the first time the context passes 70% of the model's
-window, and one more the first time it passes 90%:
+window, and one more the first time it passes 90% of a window larger than
+200k:
 
 ```
 Context is 72% full (144k of 200k). Quality may drop; consider /compact or a new session.
 ```
 
-After a compaction you see one line with how much it dropped:
+After a compaction you see one line with the size it was compacted from:
 
 ```
-Compacted 168k to 31k tokens. Check that instructions you rely on are still followed.
+Compacted from 168k tokens. Check that instructions you rely on are still followed.
 ```
+
+(If the compaction is only noticed after the next reply, the line gives the
+size that reply was sent with, for example "Compacted 168k to 73k tokens".)
 
 Both are computed on your machine from the end of the session's transcript,
 shown to you only (they are never sent to the model), and need no network or
@@ -274,7 +278,10 @@ hook, not before you have run `/rius:login`. A compaction starts the
 knows, and a session on any other model gets no warning. Claude Code records
 the same model id for a 200k and a 1M session, so Rius assumes 200k until the
 model is requested with `[1m]` or the context passes 200k; a 1M session can
-therefore be warned once between 140k and 200k. Set `RIUS_CONTEXT_WARN=0` to
+therefore get the 70% line once between 140k and 200k. Because a session
+on the standard window compacts itself at about 167k, the 90% line is only
+shown once a window above 200k is known, so a 1M session on a plain id is not
+told it is 90% full at 180k. Set `RIUS_CONTEXT_WARN=0` to
 turn both lines off.
 
 ## Enabling a folder
