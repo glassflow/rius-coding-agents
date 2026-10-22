@@ -50,6 +50,11 @@ the same span id, with it. Cursor compactions are not spans but a
 `rius.compaction` event on the `LLM` span they interrupted, with the next
 `LLM` span flagged the same way; see [Cursor](cursor.md).
 
+**Codex compactions are `CHAIN` spans too**, read from the `compacted` line
+in the rollout, with the same flag on the next model call. See
+[Rius for Codex](codex.md#compactions) for what they carry and what is not
+known.
+
 **Each generation says what its prompt held**, as sizes, in
 `rius.context.sizes` (the attribute the Rius SDKs send). The console's
 Context panel uses it to split a call's prompt into user and assistant
