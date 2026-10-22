@@ -13,8 +13,9 @@ THE FIXTURE IS SYNTHETIC. No rollout recorded by the installed Codex
 is built from the field names and nesting in openai/codex
 (codex-rs/history/src/lib.rs, rollout_payload.rs, protocol/src/protocol.rs),
 not captured from a real run. It has a local compaction (150000 tokens down
-to an estimated 20000) and a remote one (answered by a model response, no
-estimate after it), each followed by two model calls.
+to an estimated 20000) and a remote one (an empty message: the provider wrote
+the summary; no estimate after it), each followed by two model calls. Both
+carry a compaction_response_id, as Codex 0.162.1 writes it for either.
 """
 import json
 import shutil
@@ -170,16 +171,38 @@ def test_a_remote_compaction_is_done_by_the_provider(fixtures_dir):
     assert remote.attributes["rius.compaction.tokens.before"] == 200000
     assert remote.attributes["rius.compaction.tokens.after"] == 18000
     assert remote.attributes["rius.compaction.tokens.dropped"] == 182000
-    # bytes, not characters: the e-acute is two
-    assert remote.attributes["rius.compaction.summary.bytes"] == len(SUMMARY_2) + 1
+    # the provider wrote the summary, and Codex kept no text of it
+    assert "rius.compaction.summary.bytes" not in remote.attributes
 
 
-def test_the_executor_is_the_provider_only_when_a_response_id_is_set(tmp_path):
-    for response_id, executor in (("resp_1", "provider"), (None, "client"),
-                                  ("", "client"), (7, "client")):
-        path = _write(tmp_path, _turn([_compacted_line(compaction_response_id=response_id)]))
-        (span,), = [_compactions(_build_path(path)[0])]
-        assert span.attributes["rius.compaction.executor"] == executor, response_id
+def test_the_executor_is_the_provider_when_the_summary_message_is_empty(tmp_path):
+    """Both writers set the response id (compact.rs, compact_remote_v2.rs),
+    so it cannot tell them apart; the message can."""
+    for message, response_id, executor in (
+            ("summary text", "resp_1", "client"), ("summary text", None, "client"),
+            ("", "resp_1", "provider"), ("", None, "provider"),
+            (None, "resp_1", "provider")):
+        path = _write(tmp_path, _turn([_compacted_line(
+            message=message, compaction_response_id=response_id)]))
+        (span,) = _compactions(_build_path(path)[0])
+        assert span.attributes["rius.compaction.executor"] == executor, (message, response_id)
+
+
+def test_the_summary_size_is_in_bytes_not_characters(tmp_path):
+    path = _write(tmp_path, _turn([_compacted_line(message=SUMMARY_2)]))
+    (span,) = _compactions(_build_path(path)[0])
+    assert span.attributes["rius.compaction.summary.bytes"] == len(SUMMARY_2) + 1   # the e-acute
+
+
+def test_a_remote_compaction_is_followed_by_an_estimate_too(tmp_path):
+    """compact_remote_v2.rs re-counts the context after it as well."""
+    lines = _turn([_count_line("10:00:05.000Z", 9000, total=9000),
+                   _compacted_line(message="", compaction_response_id="resp_r"),
+                   _count_line("10:00:40.000Z", 0, estimate=400)])
+    (span,) = _final_compactions(_build_path(_write(tmp_path, lines))[0])
+    assert span.attributes["rius.compaction.executor"] == "provider"
+    assert span.attributes["rius.compaction.tokens.after"] == 400
+    assert span.attributes["rius.compaction.tokens.dropped"] == 8600
 
 
 def test_a_compaction_is_the_moment_of_its_line_under_the_open_turn(fixtures_dir):
@@ -312,8 +335,50 @@ def test_a_newer_compaction_takes_the_size_after_not_the_older_one(tmp_path):
     assert "rius.compaction.tokens.after" not in old.attributes
     assert new.attributes["rius.compaction.id"] == "new"
     assert new.attributes["rius.compaction.tokens.after"] == 700
+    # the size before the older one is not the size before this one
+    assert "rius.compaction.tokens.before" not in new.attributes
+    assert "rius.compaction.tokens.dropped" not in new.attributes
+    assert old.attributes["rius.compaction.tokens.before"] == 9000
     # one flag for the two: the older one is not owed a call of its own
     assert [s.attributes.get(FLAG) for s in out if s.kind_oi == "LLM"] == [None, True]
+
+
+def test_an_estimate_is_the_size_before_the_next_compaction(tmp_path):
+    """No model call between the two: Codex's own count is what the context
+    was when the second one ran."""
+    lines = _turn([_count_line("10:00:05.000Z", 9000, total=9000),
+                   _compacted_line(ts="10:00:10.000Z", window_id="a"),
+                   _count_line("10:00:11.000Z", 0, estimate=700),
+                   _compacted_line(ts="10:00:30.000Z", window_id="b"),
+                   _count_line("10:00:31.000Z", 0, estimate=300)])
+    first, second = _final_compactions(_build_path(_write(tmp_path, lines))[0])
+    assert first.attributes["rius.compaction.tokens.after"] == 700
+    assert second.attributes["rius.compaction.tokens.before"] == 700
+    assert second.attributes["rius.compaction.tokens.dropped"] == 400
+
+
+def test_an_estimate_in_the_same_millisecond_is_the_size_after(tmp_path):
+    """Codex counts right after it writes the line: the same timestamp."""
+    lines = _turn([_count_line("10:00:05.000Z", 9000, total=9000),
+                   _compacted_line(ts="10:00:10.000Z"),
+                   _count_line("10:00:10.000Z", 0, estimate=700)])
+    (span,) = _final_compactions(_build_path(_write(tmp_path, lines))[0])
+    assert span.attributes["rius.compaction.tokens.after"] == 700
+
+
+def test_a_count_before_the_line_is_not_the_size_after(tmp_path):
+    lines = _turn([_count_line("10:00:05.000Z", 9000, total=9000),
+                   _compacted_line(ts="10:00:10.000Z"),
+                   _count_line("10:00:09.999Z", 0, estimate=123)])
+    (span,) = _final_compactions(_build_path(_write(tmp_path, lines))[0])
+    assert "rius.compaction.tokens.after" not in span.attributes
+
+
+def test_the_window_learned_after_the_line_is_added_when_the_size_arrives(tmp_path):
+    lines = _turn([_compacted_line(ts="10:00:10.000Z"),
+                   _count_line("10:00:11.000Z", 0, estimate=700, window=111000)])
+    (span,) = _final_compactions(_build_path(_write(tmp_path, lines))[0])
+    assert span.attributes["rius.compaction.context_window"] == 111000
 
 
 def test_a_count_that_repeats_the_last_call_is_not_the_size_after(tmp_path):
@@ -335,11 +400,12 @@ def test_the_summary_text_is_content_and_follows_the_capture_gate(fixtures_dir):
     off, st_off = _build(fixtures_dir, capture=False)
     for span in _compactions(off):
         assert "rius.compaction.summary.text" not in span.attributes
-        assert "rius.compaction.summary.bytes" in span.attributes
+    assert all("rius.compaction.summary.bytes" in s.attributes
+               for s in _final_compactions(off)[:1])
     on, _ = _build(fixtures_dir, capture=True)
     local, remote = _final_compactions(on)
     assert local.attributes["rius.compaction.summary.text"] == SUMMARY_1
-    assert remote.attributes["rius.compaction.summary.text"] == SUMMARY_2
+    assert "rius.compaction.summary.text" not in remote.attributes     # an empty message
     assert "rius.compaction.summary.text" in semconv.CONTENT_ATTRIBUTES
     assert "rius.compaction.summary.bytes" not in semconv.CONTENT_ATTRIBUTES
 
@@ -355,7 +421,7 @@ def test_the_summary_text_never_waits_in_the_state_file(fixtures_dir):
     assert len(blobs) == 2 * 2 * (count - 1)
     for blob in blobs:
         assert "repository layout" not in blob
-        assert "menu code lives" not in blob
+        assert "café menu" not in blob
     # With capture off, nothing of where to read it from is kept either.
     seen = []
     _build_path(path, capture=False, cuts=range(1, count),
@@ -549,7 +615,9 @@ def test_the_context_compacted_marker_is_not_a_record(fixtures_dir):
     assert cr.parse_line(marker) is None
     compacted = [r for r in records if r.kind == cr.COMPACTED]
     assert compacted[0].get("window_id") == "win-2"
-    assert compacted[0].get("compaction_response_id") == ""
+    assert compacted[0].get("compaction_response_id") == "resp_local_1"
+    assert compacted[0].get("message") == SUMMARY_1
+    assert compacted[1].get("message") == ""
     assert compacted[0].get("recorded_tokens") == 150000
     assert compacted[1].get("compaction_response_id") == "resp_remote_1"
     usage = [r for r in records if r.kind == cr.USAGE]

@@ -103,16 +103,23 @@ When Codex compacts a conversation it writes a `compacted` line, and Rius
 sends it as a `CHAIN` span with `gen_ai.operation.name` set to `compaction`
 (`rius.compaction.*`):
 
-- `kind` is `summarize`. `executor` is `provider` when Codex recorded the id
-  of a model response for the compaction, else `client`. The trigger (`auto`
-  or `manual`) is not set: the rollout does not say.
+- `kind` is `summarize`. `executor` is `client` when the `compacted` line
+  carries the summary text Codex wrote, and `provider` when its message is
+  empty (a remote compaction, where the provider wrote the summary). The
+  response id cannot tell them apart: Codex 0.162.1 sets it on both. The
+  trigger (`auto` or `manual`) is not set: the rollout does not say.
 - `tokens.before` is the prompt size of the last model call before it,
   `tokens.after` the size of the context Codex counts next, and
   `tokens.dropped` the difference when it is positive. After a local
   compaction Codex counts its own estimate of the new context (a
   `token_count` that used no tokens); that is `tokens.after`, and it is not a
-  model call, so it gets no `LLM` span. Otherwise the next call's prompt size
-  is used. `context_window` and `id` (Codex's window id) are set when known.
+  model call, so it gets no `LLM` span (a remote compaction is counted the
+  same way). Otherwise the next call's prompt size is used. `tokens.before`
+  is a measured prompt size and `tokens.after` may be Codex's estimate, so
+  `tokens.dropped` mixes the two. A compaction that follows another before
+  any count arrived has no `tokens.before`: the size known then is from
+  before the older one. `context_window` and `id` (Codex's window id) are
+  set when known.
 - The span has no duration: Codex does not say how long a compaction took,
   so it starts and ends at its line. It is sent when the line is read and
   sent again, under the same span id, once the size after it is known.
@@ -126,10 +133,10 @@ sends it as a `CHAIN` span with `gen_ai.operation.name` set to `compaction`
 This was written from Codex's source (openai/codex: the `compacted` rollout
 line and the `token_count` event), not from a recorded compaction: none of
 the rollouts used here holds one, and the tests run on a synthetic rollout
-(`tests/fixtures/codex/synthetic_compaction.jsonl`). In particular, whether
-a response id is set only for a compaction a model did on the provider's
-side is not confirmed: Codex's own, model-written summaries may carry one
-too, and would read as `provider`. A compaction written while no turn is
+(`tests/fixtures/codex/synthetic_compaction.jsonl`). The `executor`
+rule (an empty message means the provider did it) was checked against the
+0.162.1 source (`compact.rs`, `compact_remote_v2.rs`), and holds for that
+version only; older writers were not read. A compaction written while no turn is
 open (or inside a turn a forked session copied) is dropped.
 
 ### How a session ends

@@ -265,7 +265,9 @@ def _on_usage(rec, state, ctx, out):
         state["context_window"] = rec.get("context_window")
     if rec.get("local_estimate"):
         # Codex re-counted its context itself: no model call, so no LLM span
-        # and no flag, but it is the size the context was left at.
+        # and no flag, but it is the size the context was left at. (Codex's
+        # "context window full" update has the same shape, with a delta that
+        # is not a size; it is rare and, in a long session, zero.)
         state["context_tokens"] = rec.get("context_tokens")
         _settle_compaction(state, ctx, out, rec.get("context_tokens"),
                            rec.timestamp_ns)
@@ -311,16 +313,24 @@ def _on_compacted(rec, state, ctx, out):
     state["last_compaction"] = rec.timestamp_ns
     attrs: Dict[str, Any] = {
         semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
-        # A compaction answered by a model response was done on the
-        # provider's side; the trigger is not known (Codex registers no
-        # hook for it), so it is not set.
+        # Codex 0.162.1 sets compaction_response_id on every compaction, the
+        # local summarizer's too, so the id says nothing about who did it.
+        # What differs: a local one carries the summary text it wrote, and a
+        # remote (provider-side) one writes an empty message. The trigger is
+        # not known (Codex registers no hook for it), so it is not set.
         semconv.RIUS_COMPACTION_EXECUTOR: (
-            semconv.RIUS_COMPACTION_EXECUTOR_PROVIDER
-            if rec.get("compaction_response_id")
-            else semconv.RIUS_COMPACTION_EXECUTOR_CLIENT),
+            semconv.RIUS_COMPACTION_EXECUTOR_CLIENT
+            if rec.get("message")
+            else semconv.RIUS_COMPACTION_EXECUTOR_PROVIDER),
     }
-    before = (_positive(state.get("context_tokens"))
-              or _positive(rec.get("recorded_tokens")))
+    # tokens.before is a measured prompt size and tokens.after (when Codex
+    # estimates it) is Codex's own count, so `dropped` mixes the two.
+    # A compaction right after one still waiting for its size has no size of
+    # its own before it: what is known is the size before the older one.
+    older_unsettled = isinstance(state.get("open_compaction"), dict)
+    before = None if older_unsettled else (
+        _positive(state.get("context_tokens"))
+        or _positive(rec.get("recorded_tokens")))
     if before:
         attrs[semconv.RIUS_COMPACTION_TOKENS_BEFORE] = before
     if _positive(state.get("context_window")):
