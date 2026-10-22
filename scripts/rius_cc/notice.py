@@ -182,12 +182,18 @@ def prune_shown(home: str, keep: str, now: Optional[float] = None) -> None:
             pass
 
 
-def for_session_start(session_id: str, cfg, home: str) -> Optional[str]:
-    """The hook JSON to print at SessionStart, or None to print nothing."""
+def line_for_session_start(session_id: str, cfg, home: str) -> Optional[str]:
+    """The line to show at SessionStart, or None for nothing."""
     prune_shown(home, keep=session_id)
     stopped = bool(state.load(session_id, home).get("content_stopped"))
     line = current(cfg, home, stopped)
     if line is None or _shown_before(session_id, home, line):
         return None
     _remember_shown(session_id, home, line)
-    return json.dumps({"systemMessage": line})
+    return line
+
+
+def for_session_start(session_id: str, cfg, home: str) -> Optional[str]:
+    """The hook JSON to print at SessionStart, or None to print nothing."""
+    line = line_for_session_start(session_id, cfg, home)
+    return None if line is None else json.dumps({"systemMessage": line})

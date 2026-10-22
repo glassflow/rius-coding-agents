@@ -250,6 +250,33 @@ auto-update**, so Claude Code keeps the plugin updated from then on.
 [How it works](docs/how-it-works.md) has the span tree, how subagents are
 followed, the heartbeat, and why generation durations run long.
 
+## Context warnings
+
+Rius also tells you in Claude Code when a session's context is filling up.
+You see one line the first time the context passes 70% of the model's
+window, and one more the first time it passes 90%:
+
+```
+Context is 72% full (144k of 200k). Quality may drop; consider /compact or a new session.
+```
+
+After a compaction you see one line with how much it dropped:
+
+```
+Compacted 168k to 31k tokens. Check that instructions you rely on are still followed.
+```
+
+Both are computed on your machine from the end of the session's transcript,
+shown to you only (they are never sent to the model), and need no network or
+tracing: they work in a folder where tracing is off, but, like every Rius
+hook, not before you have run `/rius:login`. A compaction starts the
+70% and 90% lines over. The window comes from a table of the models Rius
+knows, and a session on any other model gets no warning. Claude Code records
+the same model id for a 200k and a 1M session, so Rius assumes 200k until the
+model is requested with `[1m]` or the context passes 200k; a 1M session can
+therefore be warned once between 140k and 200k. Set `RIUS_CONTEXT_WARN=0` to
+turn both lines off.
+
 ## Enabling a folder
 
 Tracing defaults to off everywhere. To turn it on for the folder you're
@@ -369,6 +396,7 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 | `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
 | `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
+| `RIUS_CONTEXT_WARN` | on | `0`, `false` or `off` turns off the [context warnings](#context-warnings) and the line after a compaction. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
 Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of
