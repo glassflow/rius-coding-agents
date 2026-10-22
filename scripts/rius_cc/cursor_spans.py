@@ -12,6 +12,10 @@ One trace per conversation:
 Every span is rebuilt from the whole spool each time, with ids and start
 times derived from the events, so a span sent pending and later finished
 is the same row. Cursor reports no token counts, so no LLM span has any.
+
+A compaction (preCompact) happens inside a generation, so it is a
+rius.compaction event on that generation's LLM span, and the next LLM span
+carries gen_ai.conversation.compacted: Cursor reports no size after it.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 from . import command_class, distro, scrub
-from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Span,
+from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Span, _count,
                     exportable, span_id_for, tool_error_line, trace_id_for)
 from . import _semconv_generated as semconv
 
@@ -117,6 +121,10 @@ class _Fold:
         self.tools: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.subagents: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.last_ns = 0
+        # Times of preCompact hooks that name no turn of ours: nothing to
+        # hang an event on, but the next turn still ran on the compacted
+        # context.
+        self.orphan_compactions: List[int] = []
         # Bumped by each sessionEnd: `cursor-agent -p --resume` runs one
         # prompt per process, each closed by its own sessionEnd.
         self.segment = 0
@@ -176,7 +184,8 @@ class _Fold:
                     "end_ns": None, "prompt": None, "status": "",
                     "loop_count": None, "model": "", "model_id": "",
                     "texts": [], "response_ns": 0, "thought_ms": 0,
-                    "context": {}, "segment": self.segment}
+                    "context": {}, "compactions": [],
+                    "segment": self.segment}
             self.turns[key] = turn
         turn["model"] = _model_of(event) or turn["model"]
         turn["model_id"] = str(event.get("model_id") or "") or turn["model_id"]
@@ -255,10 +264,39 @@ _CONTEXT_KEYS = {
 }
 
 
+def _compaction_event(e: Dict[str, Any]) -> Dict[str, Any]:
+    """A preCompact hook as the rius.compaction event's attributes. Cursor
+    summarizes and the client does it; only a size that is a count is sent,
+    and what Cursor does not say is left out."""
+    attrs: Dict[str, Any] = {
+        semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
+        semconv.RIUS_COMPACTION_EXECUTOR: semconv.RIUS_COMPACTION_EXECUTOR_CLIENT,
+    }
+    if e.get("trigger") in (semconv.RIUS_COMPACTION_TRIGGER_AUTO,
+                            semconv.RIUS_COMPACTION_TRIGGER_MANUAL):
+        attrs[semconv.RIUS_COMPACTION_TRIGGER] = e["trigger"]
+    total = _count(e.get("message_count"))
+    compacted = _count(e.get("messages_to_compact"))
+    for key, value in ((semconv.RIUS_COMPACTION_TOKENS_BEFORE,
+                        _count(e.get("context_tokens"))),
+                       (semconv.RIUS_COMPACTION_CONTEXT_WINDOW,
+                        _count(e.get("context_window_size"))),
+                       (semconv.RIUS_COMPACTION_MESSAGES_COMPACTED, compacted)):
+        if value is not None:
+            attrs[key] = value
+    if total is not None and compacted is not None and total >= compacted:
+        attrs[semconv.RIUS_COMPACTION_MESSAGES_KEPT] = total - compacted
+    return attrs
+
+
 def _on_compact(fold: _Fold, e: Dict[str, Any]) -> None:
     turn = fold.turn_for(e)
     if turn is None:
+        if fold.scope_of(e) == fold.cid:
+            fold.orphan_compactions.append(e["ts"])
         return
+    turn["compactions"].append((e["ts"], semconv.RIUS_COMPACTION_EVENT,
+                                _compaction_event(e)))
     for key in _CONTEXT_KEYS:
         value = e.get(key)
         if value is None:
@@ -469,7 +507,7 @@ def _root_span(fold: _Fold, ctx: Ctx, ids: _Ids, end_ns: Optional[int]) -> Span:
 
 
 def _turn_spans(fold: _Fold, ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
-                final_ns: Optional[int]) -> List[Span]:
+                final_ns: Optional[int], compacted: bool = False) -> List[Span]:
     end_ns = turn["end_ns"] or final_ns
     attrs = _base_attrs(ctx, "CHAIN")
     _set(attrs, semconv.CURSOR_TURN_STATUS, turn["status"])
@@ -478,15 +516,17 @@ def _turn_spans(fold: _Fold, ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
     status = _TURN_STATUS.get(turn["status"], "OK" if turn["end_ns"] else "UNSET")
     out = [_span(ids, ids.turn(turn["key"]), ids.root, "turn", "CHAIN",
                  turn["start_ns"], end_ns, attrs, status)]
-    llm = _llm_span(ctx, ids, turn, end_ns)
+    llm = _llm_span(ctx, ids, turn, end_ns, compacted)
     if llm is not None:
         out.append(llm)
     return out
 
 
 def _llm_span(ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
-              turn_end_ns: Optional[int]) -> Optional[Span]:
-    """The generation's answer, once there is one or the turn is over."""
+              turn_end_ns: Optional[int], compacted: bool = False
+              ) -> Optional[Span]:
+    """The generation's answer, once there is one or the turn is over.
+    `compacted`: the context it ran on was compacted by an earlier turn."""
     end_ns = turn["response_ns"] or turn_end_ns
     if end_ns is None:
         return None
@@ -498,11 +538,13 @@ def _llm_span(ctx: Ctx, ids: _Ids, turn: Dict[str, Any],
         attrs[semconv.CURSOR_THINKING_DURATION_MS] = turn["thought_ms"]
     for key, value in turn["context"].items():
         attrs[_CONTEXT_KEYS[key]] = value
+    if compacted:
+        attrs[semconv.GEN_AI_CONVERSATION_COMPACTED] = True
     _content(ctx, attrs, semconv.OUTPUT_VALUE, "".join(turn["texts"]))
     status = "ERROR" if turn["status"] == "error" else "OK"
     return _span(ids, ids.llm(turn["key"]), ids.turn(turn["key"]),
                  model or "assistant", "LLM", turn["start_ns"], end_ns, attrs,
-                 status)
+                 status, events=turn["compactions"])
 
 
 def tool_error_type(tool: Dict[str, Any]) -> str:
@@ -629,8 +671,20 @@ def build(events: List[Dict[str, Any]], ctx: Ctx,
     ids = _Ids(ctx.conversation_id)
     root_end = fold.root.get("end_ns") or final_ns
     out = [_root_span(fold, ctx, ids, root_end)]
+    owed = False
     for turn in fold.turns.values():
-        out += _turn_spans(fold, ctx, ids, turn, final_ns)
+        # A compaction owes the flag to the next LLM span, and to that one
+        # only: a turn with no LLM span yet (still open, nothing said)
+        # passes it on.
+        while (fold.orphan_compactions
+               and fold.orphan_compactions[0] <= turn["start_ns"]):
+            fold.orphan_compactions.pop(0)
+            owed = True
+        spans = _turn_spans(fold, ctx, ids, turn, final_ns, owed)
+        if spans[-1].kind_oi == "LLM":
+            owed = False
+        owed = owed or bool(turn["compactions"])
+        out += spans
     out += [_tool_span(fold, ctx, ids, t, final_ns) for t in fold.tools.values()]
     out += [_subagent_span(fold, ctx, ids, s, final_ns)
             for s in fold.subagents.values()]

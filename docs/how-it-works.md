@@ -46,7 +46,9 @@ content is, and capped like the rest. The first model call after a
 compaction has `gen_ai.conversation.compacted` set; later calls do not. The
 summary entry itself is not a turn. Claude Code writes it just after the
 boundary, so the span can be sent once without the summary and again, under
-the same span id, with it.
+the same span id, with it. Cursor compactions are not spans but a
+`rius.compaction` event on the `LLM` span they interrupted, with the next
+`LLM` span flagged the same way; see [Cursor](cursor.md).
 
 **Each generation says what its prompt held**, as sizes, in
 `rius.context.sizes` (the attribute the Rius SDKs send). The console's

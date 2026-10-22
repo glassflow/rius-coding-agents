@@ -46,6 +46,31 @@ so Cursor LLM spans have no `gen_ai.usage.*` attributes and Rius shows no
 cost for them. The one size figure Cursor gives, the context size before a
 compaction, is sent as `cursor.context.*`.
 
+**Compactions.** Cursor's `preCompact` hook fires while a generation is
+running, so Rius sends it as a `rius.compaction` event on that generation's
+`LLM` span, not as a span of its own (Claude Code's compactions are their own
+`CHAIN` span, see [how it works](how-it-works.md)). The event says the kind
+(`summarize`), that the client did it, the trigger (`auto` or `manual`), the
+tokens before (`context_tokens`), the context window, how many messages were
+compacted and how many were kept (the message count minus the compacted
+ones). A value Cursor leaves out, or sends as anything but a count, is left
+out of the event too. The three `cursor.context.*` attributes stay on the
+span as before.
+
+Cursor has no hook after a compaction and reports no size after it. What
+marks the drop in context is `gen_ai.conversation.compacted`, set on the next
+`LLM` span (the first one after the compaction, and only that one), so a
+reader can tell a compaction from lost history. A compaction the hook sends
+without a generation, or from a subagent, has no span to carry an event, so
+only the main conversation's next `LLM` span is flagged in the first case and
+nothing is sent in the second. The event is built from the spool each time,
+so it is sent again on the span's next export and is identical on a replay.
+
+The `preCompact` payload this was built from is the one in Cursor's hooks
+documentation. Rius has not captured a real compaction, so what Cursor sends
+in practice (a different trigger value, a missing field) is untested beyond
+the checks above.
+
 Other gaps:
 
 - Times are when each hook fired, not when the model call started.
