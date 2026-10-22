@@ -10,9 +10,10 @@
 
 Does as little as possible: resolve config, and if enabled, hand off to a
 DETACHED exporter and exit. stdout is a control channel for hooks: the only
-thing ever written there is SessionStart's one-line notice for the user, as
-hook JSON (rius_cc.notice). Never exits non-zero -- instrumentation that can
-break the session it observes is worse than no instrumentation.
+thing ever written there is one hook JSON object whose systemMessage the user
+sees: SessionStart's notice (rius_cc.notice) and the context warnings
+(rius_cc.context_warn), joined. Never exits non-zero -- instrumentation that
+can break the session it observes is worse than no instrumentation.
 
 With `--agent cursor` it spools the event instead (rius_cc/cursor_hook.py)
 and, being Cursor's hook, always answers on stdout: Cursor reads that answer
@@ -143,8 +144,16 @@ def main() -> None:
                                   home)
             except Exception:
                 pass
+        lines = []
         if event == "SessionStart":
-            _print_notice(session_id, cfg, home)
+            lines.append(_notice_line(session_id, cfg, home))
+        if (profile.name == agent.CLAUDE_CODE.name
+                and event in ("SessionStart", "Stop")):
+            # Local, and not gated on tracing: a folder that is off still
+            # wants to hear that the context is full. (hook.sh has already
+            # stopped a machine with no key from getting this far.)
+            lines.extend(_context_lines(event, payload, session_id, cfg, home))
+        _print_system_message(lines)
         # A session disabled after its trace started still needs the
         # exporter: it records the stop, and on SessionEnd closes the trace.
         # So does a conversation that brought its stop with it.
@@ -236,15 +245,33 @@ def _spawn_exporter(script_dir, event, payload, args, stderr, detach):
         raise
 
 
-def _print_notice(session_id: str, cfg, home: str) -> None:
+def _notice_line(session_id: str, cfg, home: str):
     try:
         from rius_cc import notice
-        output = notice.for_session_start(session_id, cfg, home)
+        return notice.line_for_session_start(session_id, cfg, home)
     except Exception:
+        return None
+
+
+def _context_lines(event, payload, session_id, cfg, home) -> list:
+    try:
+        from rius_cc import context_warn
+        return context_warn.messages(event, payload, session_id, cfg, home)
+    except Exception:
+        return []
+
+
+def _print_system_message(lines) -> None:
+    """The one hook JSON object for this event, or nothing: two objects on
+    stdout would not parse."""
+    lines = [line for line in lines if line]
+    if not lines:
         return
-    if output:
-        sys.stdout.write(output + "\n")
+    try:
+        sys.stdout.write(json.dumps({"systemMessage": "\n".join(lines)}) + "\n")
         sys.stdout.flush()
+    except Exception:
+        pass        # a closed pipe must not cost the Stop its export
 
 
 def _run_cursor(event: str, raw: str, profile) -> None:
