@@ -36,6 +36,18 @@ span with its usage counted once, and every tool it called hangs beneath it.
 A response whose lines arrive over several hook events is re-sent under the
 same span id; the backend keeps the latest copy.
 
+**Each compaction is a `CHAIN` span** with `gen_ai.operation.name` set to
+`compaction`, beside the generations in the turn it happened in. It carries
+the trigger (`auto` or `manual`), the tokens before and after, the tokens
+dropped, how many messages were kept, and the size of the summary in bytes
+(`rius.compaction.*`). It starts `durationMs` before Claude Code's boundary
+entry and ends at it. The summary text is content: it is sent only where
+content is, and capped like the rest. The first model call after a
+compaction has `gen_ai.conversation.compacted` set; later calls do not. The
+summary entry itself is not a turn. Claude Code writes it just after the
+boundary, so the span can be sent once without the summary and again, under
+the same span id, with it.
+
 **Each generation says what its prompt held**, as sizes, in
 `rius.context.sizes` (the attribute the Rius SDKs send). The console's
 Context panel uses it to split a call's prompt into user and assistant

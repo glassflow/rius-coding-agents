@@ -50,6 +50,14 @@ def new_state() -> dict:
         "open_gen": None,
         # Running prompt-size account (context_sizes.py): sizes, no content.
         "context": None,
+        # The compaction whose summary entry has not been read yet (sizes
+        # and ids only), and whether the next model call is the first one
+        # after a compaction (see spans.emit_entries).
+        "open_compaction": None,
+        "compact_next": False,
+        # The time (ns) of the latest boundary read, so reading it or an
+        # earlier one again emits and flags nothing.
+        "last_compaction": None,
         # Subagent drilldown. A subagent's transcript is a separate file, so
         # each one needs its own byte offset and its own span bookkeeping,
         # keyed by agent id; sub_links maps the spawning tool_use id to the
