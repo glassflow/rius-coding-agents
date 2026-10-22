@@ -21,6 +21,10 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   running generation's `LLM` span, and the next `LLM` span is flagged with
   `gen_ai.conversation.compacted`. Built from Cursor's hooks documentation; no
   real Cursor compaction has been checked yet.
+- Claude Code: a line in the session when the context first passes 70% of the
+  model's window, one more at 90% (only on a window above 200k), and one after
+  a compaction saying how much it dropped. Computed on your machine from the
+  transcript, shown to you only. `RIUS_CONTEXT_WARN=0` turns them off.
 
 ## 0.7.0 (2026-10-20)
 
