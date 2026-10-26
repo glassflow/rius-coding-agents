@@ -406,6 +406,7 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 | `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CONTEXT_WARN` | on | `0`, `false` or `off` turns off the [context warnings](#context-warnings) and the line after a compaction. |
+| `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS` | `false` | `true` adds a `gen_ai.tool.call.decision` event to each tool span whose call Claude Code allowed, denied, or asked you about before running it (`allow`, `deny`, `require_approval`), with the call's id and tool name. It follows an OTel GenAI proposal that is not final, so the names may change. No content; the environment may turn it on because it neither starts tracing nor sends more content. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
 Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of

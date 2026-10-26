@@ -60,7 +60,7 @@ class Config:
     def __init__(self, enabled, reason, api_key, endpoint, service_name,
                  capture_content, max_attr_bytes, debug, key_source=None,
                  workspace_name=None, ignored_env=(), unchosen_rule=None,
-                 user_id=None):
+                 user_id=None, tool_decisions=False):
         self.enabled = enabled
         self.reason = reason
         self.api_key = api_key
@@ -79,6 +79,8 @@ class Config:
         # The developer every span names as `user.id`: the member who
         # approved this key at /rius:login, or None (see _credential).
         self.user_id = user_id
+        # Send the experimental tool call decision events (spans.py).
+        self.tool_decisions = tool_decisions
 
 
 def _rius_dir(home: str) -> str:
@@ -458,6 +460,11 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         ignored_env.append(IGNORED_CAPTURE)
     max_attr_bytes = _max_attr_bytes(env)
     debug = bool(_parse_bool_env(env.get(profile.env_var("DEBUG"))))
+    # Opt-in, and the environment may turn it on: the events say only
+    # whether a call the trace already holds was allowed, so they neither
+    # enable tracing nor raise capture.
+    tool_decisions = bool(_parse_bool_env(
+        env.get(profile.env_var("EXPERIMENTAL_TOOL_DECISIONS"))))
 
     enabled, reason = _enabled(session_id, cwd, env, home)
     if not api_key:
@@ -481,4 +488,5 @@ def resolve(session_id: str, cwd: str, env: Mapping[str, str], home: str) -> Con
         ignored_env=ignored_env,
         unchosen_rule=unchosen_rule,
         user_id=user_id,
+        tool_decisions=tool_decisions,
     )

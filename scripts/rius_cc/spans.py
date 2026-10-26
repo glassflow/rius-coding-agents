@@ -90,6 +90,17 @@ SYSTEM_TURN_PREFIXES = (
     "<user-prompt-submit-hook",
 )
 
+# The decision Claude Code made on a proposed tool call before running it,
+# as a span event in the shape of an OPEN OTel GenAI proposal (a
+# `gen_ai.tool.call.decision` event). Not merged upstream and not in the
+# vendored registry, so it is only sent when the user opts in
+# (Ctx.tool_decisions); the names follow the proposal until it lands.
+TOOL_CALL_DECISION_EVENT = "gen_ai.tool.call.decision"
+TOOL_CALL_DECISION_OUTCOME = "gen_ai.tool.call.decision.outcome"
+DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
+DECISION_REQUIRE_APPROVAL = "require_approval"
+
 # The generated semconv module has no constant for this operation name (it
 # only lists "compaction" as a key of its operation-to-kind map).
 COMPACTION_OPERATION = "compaction"
@@ -171,7 +182,7 @@ class Ctx:
 
     def __init__(self, session_id, cwd, git_branch, cc_version, service_name,
                  capture_content, max_attr_bytes, conversation_id="",
-                 continued_from=""):
+                 continued_from="", tool_decisions=False):
         self.session_id = session_id
         # The conversation this session id carries on. It is the session id
         # itself unless Claude Code moved the conversation to a new id; the
@@ -185,6 +196,8 @@ class Ctx:
         self.service_name = service_name
         self.capture_content = capture_content
         self.max_attr_bytes = max_attr_bytes
+        # Whether tool spans carry TOOL_CALL_DECISION_EVENT events.
+        self.tool_decisions = tool_decisions
 
 
 class Span:
@@ -315,6 +328,48 @@ def _skill_dirs(entries: List[Any]) -> Dict[str, str]:
         if match:
             out[call_id] = match.group(1).strip()
     return out
+
+
+def tool_decision(raw: Dict[str, Any]):
+    """(outcome, asked) for the decision recorded on a tool_result entry,
+    or (None, False) when none is.
+
+    Claude Code 2.1.296 and later write `permissionDecision` on the entry
+    holding a call's result: `accept` or `reject`, and a `source` that
+    starts with `user` when the user was asked. Earlier versions mark only
+    a denial, with `toolDenialKind` (`user-rejected` when the user said no).
+    The text of the result is never read for it.
+    """
+    decision = raw.get("permissionDecision")
+    if isinstance(decision, dict):
+        source = decision.get("source")
+        asked = isinstance(source, str) and source.startswith("user")
+        outcome = {"accept": DECISION_ALLOW,
+                   "reject": DECISION_DENY}.get(decision.get("decision"))
+        return outcome, asked and outcome is not None
+    kind = raw.get("toolDenialKind")
+    if isinstance(kind, str) and kind:
+        return DECISION_DENY, kind.startswith("user")
+    return None, False
+
+
+def _decision_events(entry: Any, tool_use_id: str, tool: Dict[str, Any]) -> list:
+    """The decision events for one call: `require_approval` when the user
+    was asked, at the proposal, then `allow` there too, or `deny` when the
+    refusal came back. Claude Code does not record when the user answered."""
+    outcome, asked = tool_decision(entry.raw)
+    if outcome is None:
+        return []
+    identity = {semconv.GEN_AI_TOOL_CALL_ID: tool_use_id,
+                semconv.GEN_AI_TOOL_NAME: tool["tool_name"]}
+    events = []
+    if asked:
+        events.append((tool["start_ns"], TOOL_CALL_DECISION_EVENT, dict(
+            identity, **{TOOL_CALL_DECISION_OUTCOME: DECISION_REQUIRE_APPROVAL})))
+    at = entry.timestamp_ns if outcome == DECISION_DENY else tool["start_ns"]
+    events.append((at, TOOL_CALL_DECISION_EVENT,
+                   dict(identity, **{TOOL_CALL_DECISION_OUTCOME: outcome})))
+    return events
 
 
 def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
@@ -708,6 +763,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # only is not the guarantee the README makes it out to be.
                     status_message = ""
                     events = []
+                    if ctx.tool_decisions and len(tool_results) == 1:
+                        # The entry's decision is this call's: Claude Code
+                        # writes none on an entry holding several results.
+                        events += _decision_events(entry, tool_use_id, open_tool)
                     if is_error:
                         error_type = tool_error_type(open_tool["tool_name"], content_str)
                         if not ctx.capture_content:

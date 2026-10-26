@@ -13,6 +13,13 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   Code loaded it from, as `gen_ai.skill.source.uri` (`file://...`). A
   built-in skill, which Claude Code unpacks to a temporary folder, gets no
   source.
+- Experimental, off unless `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS=true`:
+  each tool span carries a `gen_ai.tool.call.decision` event for the
+  decision Claude Code made before running the call (`allow`, `deny`, or
+  `require_approval` when it asked you first), read from the
+  `permissionDecision` Claude Code 2.1.296 and later records, or the
+  `toolDenialKind` of an earlier version's denial. It follows an open OTel
+  GenAI proposal, so its names may change before it is final.
 
 ## 0.7.0 (2026-10-20)
 
