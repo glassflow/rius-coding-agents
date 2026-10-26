@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
 import re
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,26 @@ TITLE_MAX_CHARS = 200
 SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # The tools whose input is a shell command line (command_class.py).
 SHELL_TOOL_NAMES = ("Bash",)
+# The tool that loads an Agent Skill, its input `{"skill": <name>}`.
+SKILL_TOOL_NAMES = ("Skill",)
+
+# The Agent Skill keys of the OTel GenAI conventions, on the execute_tool span
+# of a call that loads a skill. Merged upstream, but not in the vendored
+# rius-semconv registry yet: use its constants once a release carries them.
+SKILL_NAME = "gen_ai.skill.name"
+SKILL_SOURCE_URI = "gen_ai.skill.source.uri"
+
+# How the entry Claude Code writes after a skill loads opens: the folder the
+# skill resolved from, then the SKILL.md body. The entry names the call it
+# belongs to in `sourceToolUseID`.
+_SKILL_BASE_DIR = re.compile(r"Base directory for this skill: ([^\n]+)")
+# A skill's name as Claude Code spells it: `plugin:skill` or a bare name.
+# The model writes it and it is kept with capture off, so nothing longer or
+# shaped otherwise is kept.
+_SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+# Where Claude Code unpacks its built-in skills for one run: a temporary
+# copy, which the conventions say a source URI must not name.
+_BUNDLED_SKILLS_DIR = "bundled-skills"
 
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
@@ -224,6 +245,76 @@ def _call_id_attr(attrs: Dict[str, Any], tool_use_id: Any) -> None:
     share: an id, not content, so it is on the pending span too."""
     if isinstance(tool_use_id, str) and tool_use_id:
         attrs[semconv.GEN_AI_TOOL_CALL_ID] = tool_use_id
+
+
+def _skill_attrs(ctx: Ctx, attrs: Dict[str, Any], name: str,
+                 base_dir: str) -> None:
+    """The skill a Skill call loaded, and where it resolved from when
+    Claude Code said so. The name is identity, like a tool's; the folder is
+    a path on the developer's machine, so it is content."""
+    if name:
+        attrs[SKILL_NAME] = name
+    uri = _skill_source_uri(base_dir)
+    if uri:
+        _content_attr(ctx, attrs, SKILL_SOURCE_URI, uri)
+
+
+def _skill_name(tool_input: Any) -> str:
+    name = tool_input.get("skill") if isinstance(tool_input, dict) else None
+    if isinstance(name, str) and _SKILL_NAME_RE.fullmatch(name):
+        return name
+    return ""
+
+
+def _skill_name_at(source_path: str, offset: Any, tool_id: str) -> str:
+    """The skill named by the tool_use `tool_id` on the transcript line at
+    `offset`. The open tool keeps only where that line is, never the name:
+    the state file holds no tool input, whatever the capture."""
+    if not source_path or not isinstance(offset, int) or offset < 0:
+        return ""
+    from . import transcript
+    try:
+        with open(source_path, "rb") as fh:
+            fh.seek(offset)
+            entry = transcript.parse_line(fh.readline().decode("utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for block in entry.tool_uses() if entry is not None else []:
+        if block.get("id") == tool_id:
+            return _skill_name(block.get("input"))
+    return ""
+
+
+def _skill_source_uri(base_dir: str) -> str:
+    """`file:///...` for the folder a skill was loaded from, or "" for a
+    temporary copy or a path that is not absolute."""
+    if not base_dir:
+        return ""
+    for flavour in (pathlib.PurePosixPath, pathlib.PureWindowsPath):
+        path = flavour(base_dir)
+        if _BUNDLED_SKILLS_DIR in path.parts:
+            return ""
+        try:
+            return path.as_uri()
+        except ValueError:
+            continue
+    return ""
+
+
+def _skill_dirs(entries: List[Any]) -> Dict[str, str]:
+    """tool_use id -> the folder its skill resolved from, for the Skill
+    calls whose folder entry is in `entries`. It follows the tool_result a
+    line or two later; one read past it by a hook is never joined."""
+    out: Dict[str, str] = {}
+    for entry in entries:
+        call_id = entry.raw.get("sourceToolUseID")
+        if entry.kind != "user" or not entry.raw.get("isMeta") \
+                or not isinstance(call_id, str):
+            continue
+        match = _SKILL_BASE_DIR.match(entry.text())
+        if match:
+            out[call_id] = match.group(1).strip()
+    return out
 
 
 def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
@@ -544,6 +635,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     # (record, summary text) per compaction touched in this batch, for the
     # same reason: a boundary and its summary entry are separate lines.
     batch_compactions: Dict[str, Any] = {}
+    skill_dirs = _skill_dirs(entries) if ctx.capture_content else {}
     for entry in entries:
         if entry.is_compact_boundary():
             # Claude Code writes the boundary, then (a few lines later, with
@@ -601,6 +693,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
                     _call_id_attr(attrs, tool_use_id)
                     _command_attrs(attrs, open_tool)
+                    if open_tool["tool_name"] in SKILL_TOOL_NAMES:
+                        _skill_attrs(ctx, attrs, _skill_name_at(
+                            source_path, open_tool.get("offset"), tool_use_id),
+                            skill_dirs.get(tool_use_id, ""))
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, scrub.SECRET_FILE_MARKER
@@ -710,6 +806,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # kept as one word: the command itself is not.
                     "command_class": (command_class.of_input(block.get("input"))
                                       if tool_name in SHELL_TOOL_NAMES else None),
+                    # Where the tool_use line is, for a Skill call: its
+                    # finished span reads the skill's name back from there.
+                    "offset": entry.offset if tool_name in SKILL_TOOL_NAMES else -1,
                 }
                 if tool_name in SUBAGENT_TOOL_NAMES:
                     scope["open_task_spans"].append(tool_span_id)

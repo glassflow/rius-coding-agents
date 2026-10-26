@@ -8,6 +8,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 
 - Every Claude Code tool span carries `gen_ai.tool.call.id`, the id of the
   model's tool_use, as Cursor's already did.
+- A `Skill` call's span names the Agent Skill it loaded, with the OTel GenAI
+  conventions' `gen_ai.skill.name`, and, in content mode, the folder Claude
+  Code loaded it from, as `gen_ai.skill.source.uri` (`file://...`). A
+  built-in skill, which Claude Code unpacks to a temporary folder, gets no
+  source.
 
 ## 0.7.0 (2026-10-20)
 
