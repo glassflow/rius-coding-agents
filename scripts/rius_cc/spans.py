@@ -89,6 +89,7 @@ _PENDING_ALLOWED_KEYS = {
     semconv.GEN_AI_OPERATION_NAME,
     semconv.GEN_AI_PROVIDER_NAME,
     semconv.GEN_AI_TOOL_NAME,
+    semconv.GEN_AI_TOOL_CALL_ID,
     semconv.SESSION_ID,
     semconv.RIUS_SPAN_PENDING,
     # Identity, not content: which named agent this is and where a turn's
@@ -216,6 +217,13 @@ def exit_code_of(output: str) -> Optional[int]:
     output: Claude Code reports no exit code for a command that succeeded."""
     match = _EXIT_CODE.match(output.lstrip().split("\n", 1)[0])
     return int(match.group(1)) if match else None
+
+
+def _call_id_attr(attrs: Dict[str, Any], tool_use_id: Any) -> None:
+    """The model's id for the call, which its tool_use and tool_result
+    share: an id, not content, so it is on the pending span too."""
+    if isinstance(tool_use_id, str) and tool_use_id:
+        attrs[semconv.GEN_AI_TOOL_CALL_ID] = tool_use_id
 
 
 def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
@@ -591,6 +599,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
+                    _call_id_attr(attrs, tool_use_id)
                     _command_attrs(attrs, open_tool)
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])
@@ -721,6 +730,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
                 attrs = _base_attrs(ctx, "TOOL")
                 attrs[semconv.GEN_AI_TOOL_NAME] = tool_name
+                _call_id_attr(attrs, tool_id)
                 _command_attrs(attrs, scope["open_tools"][tool_id])
                 attrs[semconv.RIUS_SPAN_PENDING] = True
                 out.append(Span(
@@ -890,9 +900,10 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     mid-call) must still get a finished row: the backend counts a trace only
     when every one of its spans has one."""
     out: List[Span] = []
-    for tool in scope["open_tools"].values():
+    for tool_id, tool in scope["open_tools"].items():
         attrs = _base_attrs(ctx, "TOOL")
         attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
+        _call_id_attr(attrs, tool_id)
         _command_attrs(attrs, tool)
         _content_attr(ctx, attrs, semconv.INPUT_VALUE, tool.get("input_json", ""))
         out.append(Span(

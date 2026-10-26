@@ -84,7 +84,7 @@ capped at 32 KB.
 | `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` | `claude-opus-5-5`, `["tool_use"]` | always |
 | `gen_ai.usage.*` | input, output, reasoning, cache read and cache write token counts | always |
 | `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
-| `gen_ai.tool.name` | `Bash`, `mcp__github__create_issue` | always |
+| `gen_ai.tool.name`, `gen_ai.tool.call.id` | `Bash`, `mcp__github__create_issue`; the model's id for the call | always |
 | `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
 | `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |

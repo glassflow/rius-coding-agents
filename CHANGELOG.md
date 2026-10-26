@@ -4,6 +4,11 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.8.0 (unreleased)
+
+- Every Claude Code tool span carries `gen_ai.tool.call.id`, the id of the
+  model's tool_use, as Cursor's already did.
+
 ## 0.7.0 (2026-10-20)
 
 - An `agent-observability` skill, installed with
