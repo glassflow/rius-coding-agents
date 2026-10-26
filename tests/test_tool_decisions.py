@@ -13,7 +13,7 @@ import json
 import pytest
 
 import exporter
-from rius_cc import config, spans, transcript
+from rius_cc import config, spans, state, subagents, transcript
 from rius_cc import _semconv_generated as semconv
 from tests import signed_in
 
@@ -74,14 +74,30 @@ def test_the_event_names_the_call_and_its_tool(fixtures_dir):
 def test_a_denial_is_dated_when_it_came_back_and_the_rest_at_the_proposal(
         fixtures_dir):
     """Claude Code does not record when the user answered. A denial is known
-    when its result is written; an approval only that it came before the run."""
+    when its result is written; an approval only that it came before the run,
+    so it is put 1 ns after the ask, for a backend that orders by time."""
     tools = _tools(fixtures_dir)
     rejected = tools["toolu_rejected"]
     assert _decisions(rejected) == [(rejected.start_ns, "require_approval"),
                                     (rejected.end_ns, "deny")]
     approved = tools["toolu_approved"]
     assert _decisions(approved) == [(approved.start_ns, "require_approval"),
-                                    (approved.start_ns, "allow")]
+                                    (approved.start_ns + 1, "allow")]
+
+
+def test_an_outcome_never_shares_the_asks_time():
+    """A denial whose result is stamped in the same millisecond as the call
+    still comes after the ask."""
+    entry = transcript.parse_line(json.dumps({
+        "type": "user", "uuid": "r1", "timestamp": "2026-10-23T12:20:00.000Z",
+        "permissionDecision": {"decision": "reject", "source": "user_reject"},
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}}))
+    tool = {"tool_name": "Edit", "start_ns": entry.timestamp_ns}
+    assert [(at, attrs[spans.TOOL_CALL_DECISION_OUTCOME]) for at, _, attrs
+            in spans._decision_events(entry, "t1", tool)] == [
+        (entry.timestamp_ns, "require_approval"),
+        (entry.timestamp_ns + 1, "deny")]
 
 
 def test_a_denied_call_still_reads_as_a_failed_tool(fixtures_dir):
@@ -151,6 +167,50 @@ def test_an_entry_with_several_results_gives_none_its_decision(tmp_path):
     tools = [s for s in spans.build(entries, st, ctx) if s.kind_oi == "TOOL"
              and not s.pending]
     assert len(tools) == 2 and all(not s.events for s in tools)
+
+
+SUB_SID = "7a7a7a7a-0000-4000-8000-000000000072"
+
+
+def test_a_subagents_calls_carry_their_decisions(fixtures_dir):
+    """A subagent's results are in its own file, and Claude Code writes the
+    decision on them as it does in the main transcript."""
+    path = str(fixtures_dir / "skill_subagent" / (SUB_SID + ".jsonl"))
+    st = state.new_state()
+    ctx = spans.Ctx(session_id=SUB_SID, cwd="/tmp/proj", git_branch="main",
+                    cc_version="2.1.303", service_name="claude-code",
+                    capture_content=False, max_attr_bytes=32768,
+                    tool_decisions=True)
+    entries, _ = transcript.read_from(path, 0)
+    out = spans.build(entries, st, ctx, source_path=path)
+    out += subagents.expand(st, ctx, subagents.dir_for(path, SUB_SID))
+    tools = {s.attributes[semconv.GEN_AI_TOOL_CALL_ID]: _outcomes(s)
+             for s in out if s.kind_oi == "TOOL" and not s.pending}
+    assert tools == {"toolu_agent": [],
+                     "toolu_sub_skill": ["allow"],
+                     "toolu_sub_old": [],
+                     "toolu_sub_rejected": ["require_approval", "deny"]}
+
+
+def test_an_adopted_subagent_keeps_the_opt_in(tmp_path, monkeypatch):
+    """The subagents of a session id this one took over are built with a
+    context of their own; it has to carry the opt-in, or their events are
+    lost without anything failing."""
+    home = str(tmp_path)
+    old_id = "7a7a7a7a-0000-4000-8000-0000000000a1"
+    old = state.new_state()
+    old["sub_links"] = {"toolu_agent": {"span_id": "0" * 16}}
+    state.save(old_id, home, old)
+    seen = []
+    monkeypatch.setattr(subagents, "expand",
+                        lambda st, ctx, subdir: seen.append(ctx) or [])
+    ctx = spans.Ctx(session_id=SESSION, cwd="/tmp/proj", git_branch="main",
+                    cc_version="2.1.303", service_name="claude-code",
+                    capture_content=False, max_attr_bytes=32768,
+                    tool_decisions=True)
+    st = {"adopted": [{"session_id": old_id, "transcript_path": ""}]}
+    exporter._adopted_subagents(st, ctx, None, home, "PostToolUse", 0, False)
+    assert [c.tool_decisions for c in seen] == [True]
 
 
 @pytest.mark.parametrize("value,on", [

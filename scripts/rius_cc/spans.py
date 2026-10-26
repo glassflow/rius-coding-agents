@@ -11,6 +11,7 @@ import json
 import pathlib
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from . import agent, command_class, context_sizes, scrub
 from . import _semconv_generated as semconv
@@ -273,10 +274,26 @@ def _skill_attrs(ctx: Ctx, attrs: Dict[str, Any], name: str,
 
 
 def _skill_name(tool_input: Any) -> str:
-    name = tool_input.get("skill") if isinstance(tool_input, dict) else None
+    return _checked_skill_name(
+        tool_input.get("skill") if isinstance(tool_input, dict) else None)
+
+
+def _checked_skill_name(name: Any) -> str:
     if isinstance(name, str) and _SKILL_NAME_RE.fullmatch(name):
         return name
     return ""
+
+
+def _loaded_skill_name(entry: Any, single: bool, source_path: str,
+                       offset: Any, tool_id: str) -> str:
+    """The skill a Skill call that succeeded loaded: the name Claude Code
+    resolved, which it writes on the result entry as
+    `toolUseResult.commandName`, or, on an entry without one (an older
+    version), the call's own input read back from the transcript."""
+    result = entry.raw.get("toolUseResult") if single else None
+    if isinstance(result, dict) and "commandName" in result:
+        return _checked_skill_name(result.get("commandName"))
+    return _skill_name_at(source_path, offset, tool_id)
 
 
 def _skill_name_at(source_path: str, offset: Any, tool_id: str) -> str:
@@ -308,10 +325,26 @@ def _skill_source_uri(base_dir: str) -> str:
         if _BUNDLED_SKILLS_DIR in path.parts:
             return ""
         try:
-            return path.as_uri()
+            uri = _file_uri(path)
         except ValueError:
             continue
+        if uri:
+            return uri
     return ""
+
+
+def _file_uri(path: Any) -> str:
+    """What `PurePath.as_uri()` gives, which Python 3.14 deprecates, or ""
+    for a path that is not absolute."""
+    if not path.is_absolute():
+        return ""
+    drive = path.drive
+    if len(drive) == 2 and drive[1] == ":":
+        return "file:///" + drive + quote(path.as_posix()[2:])
+    if drive:
+        # A UNC share: its host is the URI's.
+        return "file:" + quote(path.as_posix())
+    return "file://" + quote(path.as_posix())
 
 
 def _skill_dirs(entries: List[Any]) -> Dict[str, str]:
@@ -356,7 +389,9 @@ def tool_decision(raw: Dict[str, Any]):
 def _decision_events(entry: Any, tool_use_id: str, tool: Dict[str, Any]) -> list:
     """The decision events for one call: `require_approval` when the user
     was asked, at the proposal, then `allow` there too, or `deny` when the
-    refusal came back. Claude Code does not record when the user answered."""
+    refusal came back. Claude Code does not record when the user answered,
+    so an outcome that would share the ask's time is put 1 ns after it, for
+    a backend that orders events by time."""
     outcome, asked = tool_decision(entry.raw)
     if outcome is None:
         return []
@@ -367,6 +402,8 @@ def _decision_events(entry: Any, tool_use_id: str, tool: Dict[str, Any]) -> list
         events.append((tool["start_ns"], TOOL_CALL_DECISION_EVENT, dict(
             identity, **{TOOL_CALL_DECISION_OUTCOME: DECISION_REQUIRE_APPROVAL})))
     at = entry.timestamp_ns if outcome == DECISION_DENY else tool["start_ns"]
+    if asked:
+        at = max(at, tool["start_ns"] + 1)
     events.append((at, TOOL_CALL_DECISION_EVENT,
                    dict(identity, **{TOOL_CALL_DECISION_OUTCOME: outcome})))
     return events
@@ -748,9 +785,12 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
                     _call_id_attr(attrs, tool_use_id)
                     _command_attrs(attrs, open_tool)
-                    if open_tool["tool_name"] in SKILL_TOOL_NAMES:
-                        _skill_attrs(ctx, attrs, _skill_name_at(
-                            source_path, open_tool.get("offset"), tool_use_id),
+                    if open_tool["tool_name"] in SKILL_TOOL_NAMES and not is_error:
+                        # A failed call (an unknown skill, a denial) loaded
+                        # nothing, whatever name the model gave it.
+                        _skill_attrs(ctx, attrs, _loaded_skill_name(
+                            entry, len(tool_results) == 1, source_path,
+                            open_tool.get("offset"), tool_use_id),
                             skill_dirs.get(tool_use_id, ""))
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])

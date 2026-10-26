@@ -12,7 +12,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   conventions' `gen_ai.skill.name`, and, in content mode, the folder Claude
   Code loaded it from, as `gen_ai.skill.source.uri` (`file://...`). A
   built-in skill, which Claude Code unpacks to a temporary folder, gets no
-  source.
+  source. A call that failed, such as an unknown skill, names none.
 - Experimental, off unless `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS=true`:
   each tool span carries a `gen_ai.tool.call.decision` event for the
   decision Claude Code made before running the call (`allow`, `deny`, or
