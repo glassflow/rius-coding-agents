@@ -84,13 +84,15 @@ capped at 32 KB.
 | `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` | `claude-opus-5-5`, `["tool_use"]` | always |
 | `gen_ai.usage.*` | input, output, reasoning, cache read and cache write token counts | always |
 | `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
-| `gen_ai.tool.name` | `Bash`, `mcp__github__create_issue` | always |
+| `gen_ai.tool.name`, `gen_ai.tool.call.id` | `Bash`, `mcp__github__create_issue`; the model's id for the call | always |
+| `gen_ai.skill.name` | `superpowers:systematic-debugging`: the Agent Skill a `Skill` call loaded | always |
 | `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
 | `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
 | `rius.span.pending` | `true` while a span is still running | always |
 | `input.value`, `output.value` | prompt, reply, tool input and output | content mode |
 | `gen_ai.agent.description` | a subagent's description | content mode |
+| `gen_ai.skill.source.uri` | `file:///Users/ana/.claude/skills/review`: the folder a skill loaded from, when Claude Code names it (not for its built-in skills, which it unpacks to a temporary folder) | content mode |
 | session span name | the session title instead of `claude-code session` | content mode |
 | `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)` | content mode |
 
@@ -404,6 +406,7 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 | `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
 | `RIUS_CONTEXT_WARN` | on | `0`, `false` or `off` turns off the [context warnings](#context-warnings) and the line after a compaction. |
+| `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS` | `false` | `true` adds a `gen_ai.tool.call.decision` event to each tool span whose call Claude Code allowed, denied, or asked you about before running it (`allow`, `deny`, `require_approval`), with the call's id and tool name. It follows an OTel GenAI proposal that is not final, so the names may change. No content; the environment may turn it on because it neither starts tracing nor sends more content. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
 Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of
