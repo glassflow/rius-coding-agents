@@ -143,7 +143,13 @@ _PENDING_ALLOWED_KEYS = {
 def _filter_pending_attrs(attributes: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for k, v in attributes.items():
-        if k in _PENDING_ALLOWED_KEYS or k.startswith(semconv.GEN_AI_REQUEST_PREFIX):
+        if k in _PENDING_ALLOWED_KEYS:
+            out[k] = v
+        # The request prefix admits identity parameters only: a content key
+        # under it (gen_ai.request.messages, ...) stays off a pending span.
+        elif (k.startswith(semconv.GEN_AI_REQUEST_PREFIX)
+              and k not in semconv.CONTENT_ATTRIBUTES
+              and not k.startswith(semconv.CONTENT_ATTRIBUTE_PREFIXES)):
             out[k] = v
     return out
 
