@@ -113,6 +113,11 @@ class Entry:
         """The user entry that holds a compaction's summary text."""
         return self.kind == "user" and bool(self.raw.get("isCompactSummary"))
 
+    def api_error(self) -> str:
+        """Claude Code's name for the stop it wrote this row for, else ""."""
+        value = self.raw.get("apiError")
+        return value if isinstance(value, str) else ""
+
     def compact_metadata(self) -> Dict[str, Any]:
         meta = self.raw.get("compactMetadata")
         return meta if isinstance(meta, dict) else {}

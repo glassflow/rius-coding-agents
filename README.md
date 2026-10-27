@@ -86,7 +86,7 @@ capped at 32 KB.
 | `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
 | `gen_ai.tool.name`, `gen_ai.tool.call.id` | `Bash`, `mcp__github__create_issue`; the model's id for the call | always |
 | `gen_ai.skill.name` | `superpowers:systematic-debugging`: the Agent Skill a `Skill` call loaded | always |
-| `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
+| `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error`, `autocompact_thrashing`: Claude Code stopped the turn because compaction kept refilling the context | always |
 | `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
 | `rius.span.pending` | `true` while a span is still running | always |
@@ -94,7 +94,7 @@ capped at 32 KB.
 | `gen_ai.agent.description` | a subagent's description | content mode |
 | `gen_ai.skill.source.uri` | `file:///Users/ana/.claude/skills/review`: the folder a skill loaded from, when Claude Code names it (not for its built-in skills, which it unpacks to a temporary folder) | content mode |
 | session span name | the session title instead of `claude-code session` | content mode |
-| `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)` | content mode |
+| `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)`. For `autocompact_thrashing`, Claude Code's message; otherwise just `autocompact_thrashing` | content mode |
 
 The plugin sends token counts. Rius prices them at API rates, so the cost in
 the console isn't what you pay on a Pro or Max subscription.

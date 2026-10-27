@@ -52,6 +52,14 @@ _BUNDLED_SKILLS_DIR = "bundled-skills"
 # not send you the detail" from "the detail went missing".
 TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
 
+# Claude Code stops the turn with a row of this apiError when compaction keeps
+# refilling the context. The row is a synthetic assistant message, so the span
+# built from it is marked as the failure it is.
+AUTOCOMPACT_THRASHING = "autocompact_thrashing"
+# Its message is one fixed sentence of about 260 bytes, which the tool-error
+# cap would cut in the middle of its advice.
+AUTOCOMPACT_MESSAGE_MAX_BYTES = 512
+
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
 # was piped after, say) must never be it. The cap bounds the SIZE, not the
@@ -625,14 +633,30 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
     if gen.get("context_sizes"):
         # Sizes, not content: sent whatever the capture setting.
         attrs[semconv.RIUS_CONTEXT_SIZES] = gen["context_sizes"]
-    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE,
-                  earlier_text + "".join(line.text() for line in lines))
+    text = earlier_text + "".join(line.text() for line in lines)
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, text)
+
+    status_code, status_message, events = "OK", "", []
+    if any(line.api_error() == AUTOCOMPACT_THRASHING for line in lines):
+        # The stop has no hook and no span of its own: this row is all there
+        # is. Its text is Claude Code's message, but a later version may
+        # quote a path in it, so it follows the capture gate like a tool's.
+        status_code = "ERROR"
+        status_message = AUTOCOMPACT_THRASHING
+        if ctx.capture_content and text:
+            status_message = exportable(text, AUTOCOMPACT_MESSAGE_MAX_BYTES)
+        attrs[semconv.ERROR_TYPE] = AUTOCOMPACT_THRASHING
+        events.append((lines[-1].timestamp_ns, semconv.EXCEPTION_EVENT, {
+            semconv.EXCEPTION_TYPE: AUTOCOMPACT_THRASHING,
+            semconv.EXCEPTION_MESSAGE: status_message,
+        }))
 
     return Span(
         trace_id=trace_id, span_id=gen["span_id"],
         parent_span_id=gen["parent_span_id"], name=model or "assistant",
         kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
-        attributes=attrs, status_code="OK", status_message="", pending=False,
+        attributes=attrs, status_code=status_code, status_message=status_message,
+        pending=False, events=events,
     )
 
 
