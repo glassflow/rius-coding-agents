@@ -50,11 +50,15 @@ _BUNDLED_SKILLS_DIR = "bundled-skills"
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
+TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
+
 # Claude Code stops the turn with a row of this apiError when compaction keeps
 # refilling the context. The row is a synthetic assistant message, so the span
 # built from it is marked as the failure it is.
 AUTOCOMPACT_THRASHING = "autocompact_thrashing"
-TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
+# Its message is one fixed sentence of about 260 bytes, which the tool-error
+# cap would cut in the middle of its advice.
+AUTOCOMPACT_MESSAGE_MAX_BYTES = 512
 
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
@@ -640,7 +644,7 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         status_code = "ERROR"
         status_message = AUTOCOMPACT_THRASHING
         if ctx.capture_content and text:
-            status_message = scrub.scrub(text)
+            status_message = exportable(text, AUTOCOMPACT_MESSAGE_MAX_BYTES)
         attrs[semconv.ERROR_TYPE] = AUTOCOMPACT_THRASHING
         events.append((lines[-1].timestamp_ns, semconv.EXCEPTION_EVENT, {
             semconv.EXCEPTION_TYPE: AUTOCOMPACT_THRASHING,

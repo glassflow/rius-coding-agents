@@ -86,3 +86,16 @@ def test_other_api_errors_are_left_as_they_were(fixtures_dir):
     out = _build(entries)
     assert _stops(out) == []
     assert all(s.status_code == "OK" for s in _llm(out))
+
+
+def test_a_long_stop_message_is_capped(fixtures_dir):
+    lines = (fixtures_dir / "autocompact_thrashing.jsonl").read_text().splitlines()
+    row = json.loads(lines[-1])
+    row["message"]["content"][0]["text"] += " Please retry." * 200
+    entries = [transcript.parse_line(json.dumps(r))
+               for r in [json.loads(lines[0]), json.loads(lines[1]), row]]
+    [stop] = _stops(_build(entries))
+    assert len(stop.status_message.encode("utf-8")) < 600
+    assert stop.status_message.startswith(STOP_TEXT)
+    [(_, _, attrs)] = stop.events
+    assert attrs[semconv.EXCEPTION_MESSAGE] == stop.status_message
