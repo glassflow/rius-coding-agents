@@ -35,12 +35,6 @@ SHELL_TOOL_NAMES = ("Bash",)
 # The tool that loads an Agent Skill, its input `{"skill": <name>}`.
 SKILL_TOOL_NAMES = ("Skill",)
 
-# The Agent Skill keys of the OTel GenAI conventions, on the execute_tool span
-# of a call that loads a skill. Merged upstream, but not in the vendored
-# rius-semconv registry yet: use its constants once a release carries them.
-SKILL_NAME = "gen_ai.skill.name"
-SKILL_SOURCE_URI = "gen_ai.skill.source.uri"
-
 # How the entry Claude Code writes after a skill loads opens: the folder the
 # skill resolved from, then the SKILL.md body. The entry names the call it
 # belongs to in `sourceToolUseID`.
@@ -267,10 +261,10 @@ def _skill_attrs(ctx: Ctx, attrs: Dict[str, Any], name: str,
     Claude Code said so. The name is identity, like a tool's; the folder is
     a path on the developer's machine, so it is content."""
     if name:
-        attrs[SKILL_NAME] = name
+        attrs[semconv.GEN_AI_SKILL_NAME] = name
     uri = _skill_source_uri(base_dir)
     if uri:
-        _content_attr(ctx, attrs, SKILL_SOURCE_URI, uri)
+        _content_attr(ctx, attrs, semconv.GEN_AI_SKILL_SOURCE_URI, uri)
 
 
 def _skill_name(tool_input: Any) -> str:
@@ -615,8 +609,9 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         # compatibility fallback that will eventually be removed.
         # Revisit and drop the legacy key once every deployment is
         # known to be at 000013+.
-        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = usage["cache_creation_input_tokens"]
-        attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
+        cache_write = usage["cache_creation_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = cache_write
+        attrs[semconv.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = cache_write
     if stop_reason:
         attrs[semconv.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
     if gen.get("compacted"):
@@ -825,7 +820,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # without one.
                         events.append((entry.timestamp_ns, "exception", {
                             semconv.EXCEPTION_TYPE: error_type,
-                            "exception.message": status_message,
+                            semconv.EXCEPTION_MESSAGE: status_message,
                         }))
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
