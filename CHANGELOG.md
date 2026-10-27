@@ -40,10 +40,10 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   `toolDenialKind` of an earlier version's denial. It follows an open OTel
   GenAI proposal, so its names may change before it is final.
 - Claude Code: when Claude Code stops a turn because compaction kept
-  refilling the context (autocompact thrashing), the turn's span is marked
-  as an error with `error.type` `autocompact_thrashing` and an exception
-  event, so the stop shows up as a failure on the trace. Its message is sent
-  only where content is.
+  refilling the context (autocompact thrashing), the model call where it
+  stopped is marked as an error on its `LLM` span, with `error.type`
+  `autocompact_thrashing` and an exception event, so the stop shows up as a
+  failure on the trace. Its message is sent only where content is.
 
 ## 0.7.0 (2026-10-20)
 
