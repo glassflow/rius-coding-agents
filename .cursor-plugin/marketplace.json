@@ -11,7 +11,7 @@
       "name": "rius",
       "source": "./",
       "description": "Cursor plugin (beta) that streams your agent sessions to Rius as OpenTelemetry traces: prompts, model answers, tool calls and subagents.",
-      "version": "0.8.0"
+      "version": "0.8.1"
     }
   ]
 }
