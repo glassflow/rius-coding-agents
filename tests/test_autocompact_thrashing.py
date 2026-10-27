@@ -50,6 +50,9 @@ def test_the_stop_is_an_error_span_with_its_time_and_text(fixtures_dir):
     assert attrs[semconv.EXCEPTION_TYPE] == "autocompact_thrashing"
     assert attrs[semconv.EXCEPTION_MESSAGE].startswith(STOP_TEXT)
     assert stop.status_message.startswith(STOP_TEXT)
+    # The real message is about 257 bytes: kept whole, not cut by a cap.
+    assert "…[truncated" not in attrs[semconv.EXCEPTION_MESSAGE]
+    assert "…[truncated" not in stop.status_message
 
 
 def test_the_stop_text_follows_the_capture_gate(fixtures_dir):
