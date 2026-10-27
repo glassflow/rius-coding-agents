@@ -623,7 +623,7 @@ def _tool_span(fold: _Fold, ctx: Ctx, ids: _Ids, tool: Dict[str, Any],
         message = _tool_error_message(ctx, tool, error_type)
         attrs[semconv.ERROR_TYPE] = error_type
         events.append((tool["end_ns"], "exception", {
-            semconv.EXCEPTION_TYPE: error_type, "exception.message": message}))
+            semconv.EXCEPTION_TYPE: error_type, semconv.EXCEPTION_MESSAGE: message}))
     start_ns = tool["start_ns"] if tool["start_ns"] is not None else fold.last_ns
     return _span(ids, span_id_for(tool["key"]), _tool_parent(fold, ids, tool),
                  tool["name"], "TOOL", start_ns, end_ns, attrs, status,
@@ -694,7 +694,7 @@ def build(events: List[Dict[str, Any]], ctx: Ctx,
 def resource_attributes(events: List[Dict[str, Any]], instance_id: str = "",
                         service_name: str = SERVICE_NAME) -> Dict[str, Any]:
     """The OTLP resource for a Cursor conversation's spans."""
-    attrs: Dict[str, Any] = {"service.name": service_name}
+    attrs: Dict[str, Any] = {semconv.SERVICE_NAME: service_name}
     _set(attrs, semconv.SERVICE_INSTANCE_ID, instance_id)
     for key, source in ((semconv.SERVICE_VERSION, "cursor_version"),
                         (semconv.PROCESS_WORKING_DIRECTORY, "cwd"),

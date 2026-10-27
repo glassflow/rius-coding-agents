@@ -275,6 +275,6 @@ def finalize(st: dict, ctx: Ctx, end_ns: int) -> List[Span]:
 
 def resource_attributes(service_name: str, instance_id: str,
                         st: dict) -> Dict[str, str]:
-    attrs = {"service.name": service_name, semconv.SERVICE_INSTANCE_ID: instance_id}
+    attrs = {semconv.SERVICE_NAME: service_name, semconv.SERVICE_INSTANCE_ID: instance_id}
     attrs.update(codex_spans.resource_attributes(st))
     return attrs

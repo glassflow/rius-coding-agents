@@ -49,7 +49,7 @@ def _skills(fixtures_dir, capture=True):
 
 def test_a_skill_call_names_the_skill_it_loaded(fixtures_dir):
     tools = _skills(fixtures_dir)
-    assert {k: s.attributes.get(spans.SKILL_NAME) for k, s in tools.items()} == {
+    assert {k: s.attributes.get(semconv.GEN_AI_SKILL_NAME) for k, s in tools.items()} == {
         "toolu_plugin": "superpowers:systematic-debugging",
         "toolu_user": "browser-navigation",
         "toolu_bundled": "dataviz",
@@ -69,8 +69,8 @@ def test_a_skill_call_that_failed_names_no_skill(fixtures_dir, call_id):
     for capture in (True, False):
         span = _skills(fixtures_dir, capture)[call_id]
         assert span.status_code == "ERROR"
-        assert spans.SKILL_NAME not in span.attributes
-        assert spans.SKILL_SOURCE_URI not in span.attributes
+        assert semconv.GEN_AI_SKILL_NAME not in span.attributes
+        assert semconv.GEN_AI_SKILL_SOURCE_URI not in span.attributes
 
 
 def _one_skill_call(tmp_path, skill, result_extra):
@@ -104,18 +104,18 @@ def test_the_name_claude_code_resolved_comes_first(tmp_path, monkeypatch):
     monkeypatch.setattr(spans, "_skill_name_at", lambda *a: pytest.fail("re-read"))
     span = _one_skill_call(tmp_path, "brainstorm", {
         "toolUseResult": {"success": True, "commandName": "superpowers:brainstorm"}})
-    assert span.attributes[spans.SKILL_NAME] == "superpowers:brainstorm"
+    assert span.attributes[semconv.GEN_AI_SKILL_NAME] == "superpowers:brainstorm"
 
 
 def test_without_a_resolved_name_the_input_is_read_back(tmp_path):
     span = _one_skill_call(tmp_path, "superpowers:brainstorm", {})
-    assert span.attributes[spans.SKILL_NAME] == "superpowers:brainstorm"
+    assert span.attributes[semconv.GEN_AI_SKILL_NAME] == "superpowers:brainstorm"
 
 
 def test_a_resolved_name_that_is_not_a_skill_name_is_not_kept(tmp_path):
     span = _one_skill_call(tmp_path, "superpowers:brainstorm", {
         "toolUseResult": {"success": True, "commandName": "../etc/passwd"}})
-    assert spans.SKILL_NAME not in span.attributes
+    assert semconv.GEN_AI_SKILL_NAME not in span.attributes
 
 
 SUB_SID = "7a7a7a7a-0000-4000-8000-000000000072"
@@ -132,7 +132,7 @@ def test_a_subagent_skill_call_names_its_skill(fixtures_dir):
     entries, _ = transcript.read_from(path, 0)
     out = spans.build(entries, st, ctx, source_path=path)
     out += subagents.expand(st, ctx, subagents.dir_for(path, SUB_SID))
-    names = {s.attributes[semconv.GEN_AI_TOOL_CALL_ID]: s.attributes.get(spans.SKILL_NAME)
+    names = {s.attributes[semconv.GEN_AI_TOOL_CALL_ID]: s.attributes.get(semconv.GEN_AI_SKILL_NAME)
              for s in out if s.name == "Skill" and not s.pending}
     assert names == {"toolu_sub_skill": "superpowers:brainstorming",
                      "toolu_sub_old": "dataviz"}
@@ -140,9 +140,9 @@ def test_a_subagent_skill_call_names_its_skill(fixtures_dir):
 
 def test_the_source_is_the_folder_claude_code_loaded_it_from(fixtures_dir):
     tools = _skills(fixtures_dir)
-    assert tools["toolu_plugin"].attributes[spans.SKILL_SOURCE_URI] == \
+    assert tools["toolu_plugin"].attributes[semconv.GEN_AI_SKILL_SOURCE_URI] == \
         "file://" + PLUGIN_DIR
-    assert tools["toolu_user"].attributes[spans.SKILL_SOURCE_URI] == \
+    assert tools["toolu_user"].attributes[semconv.GEN_AI_SKILL_SOURCE_URI] == \
         "file:///Users/dev/.claude/skills/browser-navigation"
 
 
@@ -150,15 +150,15 @@ def test_no_source_is_invented(fixtures_dir):
     """A built-in skill's folder is a temporary copy, which the conventions
     say a source URI must not name; a skill that writes no folder has none."""
     tools = _skills(fixtures_dir)
-    assert spans.SKILL_SOURCE_URI not in tools["toolu_bundled"].attributes
-    assert spans.SKILL_SOURCE_URI not in tools["toolu_prompt"].attributes
+    assert semconv.GEN_AI_SKILL_SOURCE_URI not in tools["toolu_bundled"].attributes
+    assert semconv.GEN_AI_SKILL_SOURCE_URI not in tools["toolu_prompt"].attributes
 
 
 def test_the_name_is_sent_with_capture_off_and_the_folder_is_not(fixtures_dir):
     tools = _skills(fixtures_dir, capture=False)
     plugin = tools["toolu_plugin"].attributes
-    assert plugin[spans.SKILL_NAME] == "superpowers:systematic-debugging"
-    assert spans.SKILL_SOURCE_URI not in plugin
+    assert plugin[semconv.GEN_AI_SKILL_NAME] == "superpowers:systematic-debugging"
+    assert semconv.GEN_AI_SKILL_SOURCE_URI not in plugin
 
 
 def test_a_folder_entry_a_later_read_brings_is_not_joined(fixtures_dir):
@@ -174,8 +174,8 @@ def test_a_folder_entry_a_later_read_brings_is_not_joined(fixtures_dir):
     plugin = [s for s in first + second if not s.pending
               and s.attributes.get(semconv.GEN_AI_TOOL_CALL_ID) == "toolu_plugin"]
     assert len(plugin) == 1
-    assert plugin[0].attributes[spans.SKILL_NAME] == "superpowers:systematic-debugging"
-    assert spans.SKILL_SOURCE_URI not in plugin[0].attributes
+    assert plugin[0].attributes[semconv.GEN_AI_SKILL_NAME] == "superpowers:systematic-debugging"
+    assert semconv.GEN_AI_SKILL_SOURCE_URI not in plugin[0].attributes
 
 
 def test_the_skill_body_is_not_a_turn(fixtures_dir):
@@ -197,7 +197,7 @@ def test_the_name_is_read_back_from_the_transcript_not_kept(fixtures_dir):
     out = spans.build(entries[use + 1:], st, ctx, source_path=path)
     plugin = [s for s in out if not s.pending
               and s.attributes.get(semconv.GEN_AI_TOOL_CALL_ID) == "toolu_plugin"]
-    assert plugin[0].attributes[spans.SKILL_NAME] == "superpowers:systematic-debugging"
+    assert plugin[0].attributes[semconv.GEN_AI_SKILL_NAME] == "superpowers:systematic-debugging"
 
 
 def test_a_line_that_is_not_the_call_names_no_skill(fixtures_dir):

@@ -307,7 +307,7 @@ def _on_shipped(session_id, home, st, saves):
 
 def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
     return {
-        "service.name": cfg.service_name,
+        semconv.SERVICE_NAME: cfg.service_name,
         semconv.SERVICE_INSTANCE_ID: instance_id,
         semconv.SERVICE_VERSION: version,
         semconv.PROCESS_WORKING_DIRECTORY: cwd,
