@@ -7,7 +7,7 @@
       "name": "rius",
       "description": "Claude Code, Codex and Cursor plugin that streams your sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, tool calls and subagents.",
       "source": "./",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "category": "monitoring",
       "tags": ["observability", "opentelemetry", "tracing", "llm", "mcp", "rius", "llm-observability", "agent-observability", "llm-cost", "cost-tracking", "monitoring", "claude-code", "codex", "cursor", "coding-agents", "token-usage"]
     }

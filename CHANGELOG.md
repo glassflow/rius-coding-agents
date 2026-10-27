@@ -4,6 +4,15 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.8.1 (2026-10-28)
+
+- Claude Code: a session you named (`claude --name X` or `/rename`) now files
+  under that name as its agent, instead of `claude-code`. A rename mid-session
+  applies from the next export.
+- Claude Code: the `/rius:*` commands now run in Claude Code's default manual
+  permission mode. They used to fail with a "shell command permission check
+  failed" error and only worked in auto mode.
+
 ## 0.8.0 (2026-10-27)
 
 - Claude Code: a compaction becomes a `CHAIN` span (`gen_ai.operation.name`
