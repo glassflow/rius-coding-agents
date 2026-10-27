@@ -11,10 +11,10 @@ from tests.signed_in import sign_in
 CTL = str(pathlib.Path(__file__).parent.parent / "scripts" / "rius_ctl.py")
 
 
-def _run(args, home, env=None):
+def _run(args, home, env=None, cwd=None):
     e = {"HOME": home, "PATH": "/usr/bin:/bin"}
     e.update(env or {})
-    return subprocess.run([sys.executable, CTL] + args,
+    return subprocess.run([sys.executable, CTL] + args, cwd=cwd,
                           capture_output=True, text=True, env=e, timeout=30)
 
 
@@ -230,7 +230,7 @@ def test_command_frontmatter_permits_only_its_own_action(action):
 @pytest.mark.parametrize("command", sorted(FOLDER_COMMANDS))
 def test_folder_commands_pass_no_arguments(command):
     assert _command_line(command) == (
-        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s'
         % FOLDER_COMMANDS[command])
 
 
@@ -254,13 +254,12 @@ NO_ARGUMENT_ACTIONS = ("enable-here", "disable-here", "logout")
 @pytest.mark.parametrize("action", NO_ARGUMENT_ACTIONS)
 def test_command_passes_its_action_and_no_typed_text(action):
     assert _command_line(action) == (
-        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s --cwd "$PWD"'
-        % action)
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s' % action)
 
 
 def test_login_passes_typed_text_as_one_single_quoted_word():
     assert _command_line("login") == (
-        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login --cwd "$PWD" '
+        'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login '
         "-- '$ARGUMENTS'")
 
 
@@ -268,7 +267,30 @@ def test_login_passes_typed_text_as_one_single_quoted_word():
 def test_session_commands_pass_the_session_id(action):
     assert _command_line(action) == (
         'bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" %s '
-        '--session ${CLAUDE_SESSION_ID} --cwd "$PWD"' % action)
+        '--session ${CLAUDE_SESSION_ID}' % action)
+
+
+@pytest.mark.parametrize("action", ALL_ACTIONS)
+def test_command_line_has_no_shell_variable(action):
+    """RIUS-1702: in manual permission mode Claude Code refuses a `!` line
+    with a shell variable, quoted or not, so the command never runs. Only
+    its own placeholders, filled in before the check, may appear."""
+    line = _command_line(action)
+    for placeholder in ("${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_SESSION_ID}",
+                        "$ARGUMENTS"):
+        line = line.replace(placeholder, "")
+    assert "$" not in line, line
+
+
+def test_folder_commands_default_to_the_folder_they_run_in(tmp_path):
+    """The slash commands pass no --cwd: the script runs in the session's
+    folder, so that is the folder enable-here and status act on."""
+    home = _signed_in_home(tmp_path)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _run(["enable-here"], home, cwd=str(proj))
+    r = _run(["status", "--session", "s1"], home, cwd=str(proj))
+    assert "Rule: `%s` enables this folder" % os.path.realpath(proj) in r.stdout
 
 
 @pytest.mark.parametrize("action", ALL_ACTIONS)
