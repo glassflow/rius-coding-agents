@@ -4,7 +4,7 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.8.0 (2026-10-22)
+## 0.8.0 (2026-10-27)
 
 - Claude Code: a compaction becomes a `CHAIN` span (`gen_ai.operation.name`
   `compaction`, `rius.compaction.*`) beside the generations of the turn it
@@ -25,6 +25,25 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
   model's window, one more at 90% (only on a window above 200k), and one after
   a compaction saying how much it dropped. Computed on your machine from the
   transcript, shown to you only. `RIUS_CONTEXT_WARN=0` turns them off.
+- Every Claude Code tool span carries `gen_ai.tool.call.id`, the id of the
+  model's tool_use, as Cursor's already did.
+- A `Skill` call's span names the Agent Skill it loaded, with the OTel GenAI
+  conventions' `gen_ai.skill.name`, and, in content mode, the folder Claude
+  Code loaded it from, as `gen_ai.skill.source.uri` (`file://...`). A
+  built-in skill, which Claude Code unpacks to a temporary folder, gets no
+  source. A call that failed, such as an unknown skill, names none.
+- Experimental, off unless `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS=true`:
+  each tool span carries a `gen_ai.tool.call.decision` event for the
+  decision Claude Code made before running the call (`allow`, `deny`, or
+  `require_approval` when it asked you first), read from the
+  `permissionDecision` Claude Code 2.1.296 and later records, or the
+  `toolDenialKind` of an earlier version's denial. It follows an open OTel
+  GenAI proposal, so its names may change before it is final.
+- Claude Code: when Claude Code stops a turn because compaction kept
+  refilling the context (autocompact thrashing), the turn's span is marked
+  as an error with `error.type` `autocompact_thrashing` and an exception
+  event, so the stop shows up as a failure on the trace. Its message is sent
+  only where content is.
 
 ## 0.7.0 (2026-10-20)
 

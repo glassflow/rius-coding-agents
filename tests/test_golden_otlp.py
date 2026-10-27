@@ -17,6 +17,7 @@ import pytest
 
 import exporter
 from rius_cc import command_class, config
+from rius_cc import _semconv_generated as semconv
 from tests import otlp_json, signed_in
 
 GOLDEN = pathlib.Path(__file__).parent / "fixtures" / "golden"
@@ -46,10 +47,12 @@ def home(tmp_path):
     return str(h)
 
 
-# Added after 0.4.5 and tested on their own (test_command_class.py): a
-# shell call's class and exit code. Dropped here so the rest of each span is
-# still compared with 0.4.5's bytes, not with a regenerated golden.
-LATER_ATTRIBUTES = {command_class.ATTRIBUTE, command_class.EXIT_CODE_ATTRIBUTE}
+# Added after 0.4.5 and tested on their own (test_command_class.py,
+# test_tool_call_id.py): a shell call's class and exit code, and a tool
+# call's id. Dropped here so the rest of each span is still compared with
+# 0.4.5's bytes, not with a regenerated golden.
+LATER_ATTRIBUTES = {command_class.ATTRIBUTE, command_class.EXIT_CODE_ATTRIBUTE,
+                    semconv.GEN_AI_TOOL_CALL_ID}
 # Added after 0.4.5 on the resource: the distribution marker.
 LATER_RESOURCE_ATTRIBUTES = {"telemetry.distro.name", "telemetry.distro.version"}
 # Keys renamed to their registry spelling after 0.4.5, mapped back to the

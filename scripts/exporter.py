@@ -245,6 +245,7 @@ def _ctx(st, session_id, cfg, cwd, git_branch="", cc_version="",
         max_attr_bytes=cfg.max_attr_bytes,
         conversation_id=st.get("conversation") or "",
         continued_from=st.get("continued_from") or "",
+        tool_decisions=cfg.tool_decisions,
     )
 
 
@@ -272,7 +273,8 @@ def _adopted_subagents(st, ctx, cfg, home, event, now_ns, final):
             cc_version=ctx.cc_version, service_name=ctx.service_name,
             capture_content=ctx.capture_content,
             max_attr_bytes=ctx.max_attr_bytes,
-            conversation_id=ctx.conversation_id)
+            conversation_id=ctx.conversation_id,
+            tool_decisions=ctx.tool_decisions)
         sub_dir = subagents.dir_for(item.get("transcript_path") or "", old_id)
         try:
             if not final:
@@ -305,7 +307,7 @@ def _on_shipped(session_id, home, st, saves):
 
 def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
     return {
-        "service.name": cfg.service_name,
+        semconv.SERVICE_NAME: cfg.service_name,
         semconv.SERVICE_INSTANCE_ID: instance_id,
         semconv.SERVICE_VERSION: version,
         semconv.PROCESS_WORKING_DIRECTORY: cwd,

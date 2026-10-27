@@ -672,7 +672,7 @@ def _on_tool_output(rec, state, ctx, out):
         else:
             status_message = error_line(_error_detail(ctx, tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
-            semconv.EXCEPTION_TYPE: error_type, "exception.message": status_message}))
+            semconv.EXCEPTION_TYPE: error_type, semconv.EXCEPTION_MESSAGE: status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                          _name(tool), "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
@@ -777,7 +777,7 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
             status_message = error_type if ctx.capture_content else TOOL_ERROR_WITHHELD
             events.append((now_ns, "exception", {
                 semconv.EXCEPTION_TYPE: error_type,
-                "exception.message": status_message}))
+                semconv.EXCEPTION_MESSAGE: status_message}))
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                              _name(tool), "TOOL", tool["start_ns"], now_ns,
                              attrs, "ERROR" if error_type else "UNSET",

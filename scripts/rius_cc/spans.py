@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from . import agent, command_class, context_sizes, scrub
 from . import _semconv_generated as semconv
@@ -30,11 +32,33 @@ TITLE_MAX_CHARS = 200
 SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # The tools whose input is a shell command line (command_class.py).
 SHELL_TOOL_NAMES = ("Bash",)
+# The tool that loads an Agent Skill, its input `{"skill": <name>}`.
+SKILL_TOOL_NAMES = ("Skill",)
+
+# How the entry Claude Code writes after a skill loads opens: the folder the
+# skill resolved from, then the SKILL.md body. The entry names the call it
+# belongs to in `sourceToolUseID`.
+_SKILL_BASE_DIR = re.compile(r"Base directory for this skill: ([^\n]+)")
+# A skill's name as Claude Code spells it: `plugin:skill` or a bare name.
+# The model writes it and it is kept with capture off, so nothing longer or
+# shaped otherwise is kept.
+_SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+# Where Claude Code unpacks its built-in skills for one run: a temporary
+# copy, which the conventions say a source URI must not name.
+_BUNDLED_SKILLS_DIR = "bundled-skills"
 
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
 TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
+
+# Claude Code stops the turn with a row of this apiError when compaction keeps
+# refilling the context. The row is a synthetic assistant message, so the span
+# built from it is marked as the failure it is.
+AUTOCOMPACT_THRASHING = "autocompact_thrashing"
+# Its message is one fixed sentence of about 260 bytes, which the tool-error
+# cap would cut in the middle of its advice.
+AUTOCOMPACT_MESSAGE_MAX_BYTES = 512
 
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
@@ -69,6 +93,17 @@ SYSTEM_TURN_PREFIXES = (
     "<user-prompt-submit-hook",
 )
 
+# The decision Claude Code made on a proposed tool call before running it,
+# as a span event in the shape of an OPEN OTel GenAI proposal (a
+# `gen_ai.tool.call.decision` event). Not merged upstream and not in the
+# vendored registry, so it is only sent when the user opts in
+# (Ctx.tool_decisions); the names follow the proposal until it lands.
+TOOL_CALL_DECISION_EVENT = "gen_ai.tool.call.decision"
+TOOL_CALL_DECISION_OUTCOME = "gen_ai.tool.call.decision.outcome"
+DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
+DECISION_REQUIRE_APPROVAL = "require_approval"
+
 # The generated semconv module has no constant for this operation name (it
 # only lists "compaction" as a key of its operation-to-kind map).
 COMPACTION_OPERATION = "compaction"
@@ -89,6 +124,7 @@ _PENDING_ALLOWED_KEYS = {
     semconv.GEN_AI_OPERATION_NAME,
     semconv.GEN_AI_PROVIDER_NAME,
     semconv.GEN_AI_TOOL_NAME,
+    semconv.GEN_AI_TOOL_CALL_ID,
     semconv.SESSION_ID,
     semconv.RIUS_SPAN_PENDING,
     # Identity, not content: which named agent this is and where a turn's
@@ -115,7 +151,13 @@ _PENDING_ALLOWED_KEYS = {
 def _filter_pending_attrs(attributes: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for k, v in attributes.items():
-        if k in _PENDING_ALLOWED_KEYS or k.startswith(semconv.GEN_AI_REQUEST_PREFIX):
+        if k in _PENDING_ALLOWED_KEYS:
+            out[k] = v
+        # The request prefix admits identity parameters only: a content key
+        # under it (gen_ai.request.messages, ...) stays off a pending span.
+        elif (k.startswith(semconv.GEN_AI_REQUEST_PREFIX)
+              and k not in semconv.CONTENT_ATTRIBUTES
+              and not k.startswith(semconv.CONTENT_ATTRIBUTE_PREFIXES)):
             out[k] = v
     return out
 
@@ -149,7 +191,7 @@ class Ctx:
 
     def __init__(self, session_id, cwd, git_branch, cc_version, service_name,
                  capture_content, max_attr_bytes, conversation_id="",
-                 continued_from=""):
+                 continued_from="", tool_decisions=False):
         self.session_id = session_id
         # The conversation this session id carries on. It is the session id
         # itself unless Claude Code moved the conversation to a new id; the
@@ -163,6 +205,8 @@ class Ctx:
         self.service_name = service_name
         self.capture_content = capture_content
         self.max_attr_bytes = max_attr_bytes
+        # Whether tool spans carry TOOL_CALL_DECISION_EVENT events.
+        self.tool_decisions = tool_decisions
 
 
 class Span:
@@ -216,6 +260,161 @@ def exit_code_of(output: str) -> Optional[int]:
     output: Claude Code reports no exit code for a command that succeeded."""
     match = _EXIT_CODE.match(output.lstrip().split("\n", 1)[0])
     return int(match.group(1)) if match else None
+
+
+def _call_id_attr(attrs: Dict[str, Any], tool_use_id: Any) -> None:
+    """The model's id for the call, which its tool_use and tool_result
+    share: an id, not content, so it is on the pending span too."""
+    if isinstance(tool_use_id, str) and tool_use_id:
+        attrs[semconv.GEN_AI_TOOL_CALL_ID] = tool_use_id
+
+
+def _skill_attrs(ctx: Ctx, attrs: Dict[str, Any], name: str,
+                 base_dir: str) -> None:
+    """The skill a Skill call loaded, and where it resolved from when
+    Claude Code said so. The name is identity, like a tool's; the folder is
+    a path on the developer's machine, so it is content."""
+    if name:
+        attrs[semconv.GEN_AI_SKILL_NAME] = name
+    uri = _skill_source_uri(base_dir)
+    if uri:
+        _content_attr(ctx, attrs, semconv.GEN_AI_SKILL_SOURCE_URI, uri)
+
+
+def _skill_name(tool_input: Any) -> str:
+    return _checked_skill_name(
+        tool_input.get("skill") if isinstance(tool_input, dict) else None)
+
+
+def _checked_skill_name(name: Any) -> str:
+    if isinstance(name, str) and _SKILL_NAME_RE.fullmatch(name):
+        return name
+    return ""
+
+
+def _loaded_skill_name(entry: Any, single: bool, source_path: str,
+                       offset: Any, tool_id: str) -> str:
+    """The skill a Skill call that succeeded loaded: the name Claude Code
+    resolved, which it writes on the result entry as
+    `toolUseResult.commandName`, or, on an entry without one (an older
+    version), the call's own input read back from the transcript."""
+    result = entry.raw.get("toolUseResult") if single else None
+    if isinstance(result, dict) and "commandName" in result:
+        return _checked_skill_name(result.get("commandName"))
+    return _skill_name_at(source_path, offset, tool_id)
+
+
+def _skill_name_at(source_path: str, offset: Any, tool_id: str) -> str:
+    """The skill named by the tool_use `tool_id` on the transcript line at
+    `offset`. The open tool keeps only where that line is, never the name:
+    the state file holds no tool input, whatever the capture."""
+    if not source_path or not isinstance(offset, int) or offset < 0:
+        return ""
+    from . import transcript
+    try:
+        with open(source_path, "rb") as fh:
+            fh.seek(offset)
+            entry = transcript.parse_line(fh.readline().decode("utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for block in entry.tool_uses() if entry is not None else []:
+        if block.get("id") == tool_id:
+            return _skill_name(block.get("input"))
+    return ""
+
+
+def _skill_source_uri(base_dir: str) -> str:
+    """`file:///...` for the folder a skill was loaded from, or "" for a
+    temporary copy or a path that is not absolute."""
+    if not base_dir:
+        return ""
+    for flavour in (pathlib.PurePosixPath, pathlib.PureWindowsPath):
+        path = flavour(base_dir)
+        if _BUNDLED_SKILLS_DIR in path.parts:
+            return ""
+        try:
+            uri = _file_uri(path)
+        except ValueError:
+            continue
+        if uri:
+            return uri
+    return ""
+
+
+def _file_uri(path: Any) -> str:
+    """What `PurePath.as_uri()` gives, which Python 3.14 deprecates, or ""
+    for a path that is not absolute."""
+    if not path.is_absolute():
+        return ""
+    drive = path.drive
+    if len(drive) == 2 and drive[1] == ":":
+        return "file:///" + drive + quote(path.as_posix()[2:])
+    if drive:
+        # A UNC share: its host is the URI's.
+        return "file:" + quote(path.as_posix())
+    return "file://" + quote(path.as_posix())
+
+
+def _skill_dirs(entries: List[Any]) -> Dict[str, str]:
+    """tool_use id -> the folder its skill resolved from, for the Skill
+    calls whose folder entry is in `entries`. It follows the tool_result a
+    line or two later; one read past it by a hook is never joined."""
+    out: Dict[str, str] = {}
+    for entry in entries:
+        call_id = entry.raw.get("sourceToolUseID")
+        if entry.kind != "user" or not entry.raw.get("isMeta") \
+                or not isinstance(call_id, str):
+            continue
+        match = _SKILL_BASE_DIR.match(entry.text())
+        if match:
+            out[call_id] = match.group(1).strip()
+    return out
+
+
+def tool_decision(raw: Dict[str, Any]):
+    """(outcome, asked) for the decision recorded on a tool_result entry,
+    or (None, False) when none is.
+
+    Claude Code 2.1.296 and later write `permissionDecision` on the entry
+    holding a call's result: `accept` or `reject`, and a `source` that
+    starts with `user` when the user was asked. Earlier versions mark only
+    a denial, with `toolDenialKind` (`user-rejected` when the user said no).
+    The text of the result is never read for it.
+    """
+    decision = raw.get("permissionDecision")
+    if isinstance(decision, dict):
+        source = decision.get("source")
+        asked = isinstance(source, str) and source.startswith("user")
+        outcome = {"accept": DECISION_ALLOW,
+                   "reject": DECISION_DENY}.get(decision.get("decision"))
+        return outcome, asked and outcome is not None
+    kind = raw.get("toolDenialKind")
+    if isinstance(kind, str) and kind:
+        return DECISION_DENY, kind.startswith("user")
+    return None, False
+
+
+def _decision_events(entry: Any, tool_use_id: str, tool: Dict[str, Any]) -> list:
+    """The decision events for one call: `require_approval` when the user
+    was asked, at the proposal, then `allow` there too, or `deny` when the
+    refusal came back. Claude Code does not record when the user answered,
+    so an outcome that would share the ask's time is put 1 ns after it, for
+    a backend that orders events by time."""
+    outcome, asked = tool_decision(entry.raw)
+    if outcome is None:
+        return []
+    identity = {semconv.GEN_AI_TOOL_CALL_ID: tool_use_id,
+                semconv.GEN_AI_TOOL_NAME: tool["tool_name"]}
+    events = []
+    if asked:
+        events.append((tool["start_ns"], TOOL_CALL_DECISION_EVENT, dict(
+            identity, **{TOOL_CALL_DECISION_OUTCOME: DECISION_REQUIRE_APPROVAL})))
+    at = entry.timestamp_ns if outcome == DECISION_DENY else tool["start_ns"]
+    if asked:
+        at = max(at, tool["start_ns"] + 1)
+    events.append((at, TOOL_CALL_DECISION_EVENT,
+                   dict(identity, **{TOOL_CALL_DECISION_OUTCOME: outcome})))
+    return events
 
 
 def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
@@ -424,8 +623,9 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         # compatibility fallback that will eventually be removed.
         # Revisit and drop the legacy key once every deployment is
         # known to be at 000013+.
-        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = usage["cache_creation_input_tokens"]
-        attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
+        cache_write = usage["cache_creation_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = cache_write
+        attrs[semconv.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = cache_write
     if stop_reason:
         attrs[semconv.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
     if gen.get("compacted"):
@@ -433,14 +633,30 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
     if gen.get("context_sizes"):
         # Sizes, not content: sent whatever the capture setting.
         attrs[semconv.RIUS_CONTEXT_SIZES] = gen["context_sizes"]
-    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE,
-                  earlier_text + "".join(line.text() for line in lines))
+    text = earlier_text + "".join(line.text() for line in lines)
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, text)
+
+    status_code, status_message, events = "OK", "", []
+    if any(line.api_error() == AUTOCOMPACT_THRASHING for line in lines):
+        # The stop has no hook and no span of its own: this row is all there
+        # is. Its text is Claude Code's message, but a later version may
+        # quote a path in it, so it follows the capture gate like a tool's.
+        status_code = "ERROR"
+        status_message = AUTOCOMPACT_THRASHING
+        if ctx.capture_content and text:
+            status_message = exportable(text, AUTOCOMPACT_MESSAGE_MAX_BYTES)
+        attrs[semconv.ERROR_TYPE] = AUTOCOMPACT_THRASHING
+        events.append((lines[-1].timestamp_ns, semconv.EXCEPTION_EVENT, {
+            semconv.EXCEPTION_TYPE: AUTOCOMPACT_THRASHING,
+            semconv.EXCEPTION_MESSAGE: status_message,
+        }))
 
     return Span(
         trace_id=trace_id, span_id=gen["span_id"],
         parent_span_id=gen["parent_span_id"], name=model or "assistant",
         kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
-        attributes=attrs, status_code="OK", status_message="", pending=False,
+        attributes=attrs, status_code=status_code, status_message=status_message,
+        pending=False, events=events,
     )
 
 
@@ -536,6 +752,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     # (record, summary text) per compaction touched in this batch, for the
     # same reason: a boundary and its summary entry are separate lines.
     batch_compactions: Dict[str, Any] = {}
+    skill_dirs = _skill_dirs(entries) if ctx.capture_content else {}
     for entry in entries:
         if entry.is_compact_boundary():
             # Claude Code writes the boundary, then (a few lines later, with
@@ -591,7 +808,15 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
                     attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
+                    _call_id_attr(attrs, tool_use_id)
                     _command_attrs(attrs, open_tool)
+                    if open_tool["tool_name"] in SKILL_TOOL_NAMES and not is_error:
+                        # A failed call (an unknown skill, a denial) loaded
+                        # nothing, whatever name the model gave it.
+                        _skill_attrs(ctx, attrs, _loaded_skill_name(
+                            entry, len(tool_results) == 1, source_path,
+                            open_tool.get("offset"), tool_use_id),
+                            skill_dirs.get(tool_use_id, ""))
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])
                     _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, scrub.SECRET_FILE_MARKER
@@ -603,6 +828,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # only is not the guarantee the README makes it out to be.
                     status_message = ""
                     events = []
+                    if ctx.tool_decisions and len(tool_results) == 1:
+                        # The entry's decision is this call's: Claude Code
+                        # writes none on an entry holding several results.
+                        events += _decision_events(entry, tool_use_id, open_tool)
                     if is_error:
                         error_type = tool_error_type(open_tool["tool_name"], content_str)
                         if not ctx.capture_content:
@@ -621,7 +850,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # without one.
                         events.append((entry.timestamp_ns, "exception", {
                             semconv.EXCEPTION_TYPE: error_type,
-                            "exception.message": status_message,
+                            semconv.EXCEPTION_MESSAGE: status_message,
                         }))
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
@@ -701,6 +930,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # kept as one word: the command itself is not.
                     "command_class": (command_class.of_input(block.get("input"))
                                       if tool_name in SHELL_TOOL_NAMES else None),
+                    # Where the tool_use line is, for a Skill call: its
+                    # finished span reads the skill's name back from there.
+                    "offset": entry.offset if tool_name in SKILL_TOOL_NAMES else -1,
                 }
                 if tool_name in SUBAGENT_TOOL_NAMES:
                     scope["open_task_spans"].append(tool_span_id)
@@ -721,6 +953,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
                 attrs = _base_attrs(ctx, "TOOL")
                 attrs[semconv.GEN_AI_TOOL_NAME] = tool_name
+                _call_id_attr(attrs, tool_id)
                 _command_attrs(attrs, scope["open_tools"][tool_id])
                 attrs[semconv.RIUS_SPAN_PENDING] = True
                 out.append(Span(
@@ -890,9 +1123,10 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     mid-call) must still get a finished row: the backend counts a trace only
     when every one of its spans has one."""
     out: List[Span] = []
-    for tool in scope["open_tools"].values():
+    for tool_id, tool in scope["open_tools"].items():
         attrs = _base_attrs(ctx, "TOOL")
         attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
+        _call_id_attr(attrs, tool_id)
         _command_attrs(attrs, tool)
         _content_attr(ctx, attrs, semconv.INPUT_VALUE, tool.get("input_json", ""))
         out.append(Span(
