@@ -67,7 +67,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rius_cc import agent, net, platform_compat, session_name  # noqa: E402
+from rius_cc import agent, net, platform_compat  # noqa: E402
 
 PAYLOAD_VERSION = 1
 OPEN_TRACES_CAP = 32
@@ -293,8 +293,8 @@ def main() -> None:
         % (watch_pid if watch_pid > 0 else "<unknown>", url))
     pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport,
                     watch_pid, log=log,
-                    name_now=lambda: session_name.agent_name(
-                        state.load(session_id, home)))
+                    name_now=lambda: state.load(session_id, home).get(
+                        "agent_name_sent") or "")
     pinger.run()
 
 
