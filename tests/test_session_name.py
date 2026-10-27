@@ -437,3 +437,49 @@ def test_an_agent_name_fits_the_heartbeat_limit_in_bytes(home, sent, tmp_path):
     name = _last_root(sent).attributes[AGENT]
     assert 0 < len(name.encode("utf-8")) <= 256
     assert set(name) == {"é"}
+
+
+def test_a_named_session_keeps_its_subagents_under_their_type(home, sent,
+                                                              tmp_path):
+    path = _transcript(
+        tmp_path, custom_title("crew-orchestrator"),
+        prompt("u1", "p1", "2026-09-30T10:00:00.000Z", "look around"),
+        _agent_call("a1", "2026-09-30T10:00:01.000Z"))
+    subdir = tmp_path / SID / "subagents"
+    subdir.mkdir(parents=True)
+    (subdir / "agent-ex1.meta.json").write_text(json.dumps({
+        "agentType": "Explore", "toolUseId": "toolu_ex",
+        "requestShape": "background", "model": "haiku"}))
+    _append(subdir / "agent-ex1.jsonl",
+            dict(prompt("s1", "p1", "2026-09-30T10:00:01.500Z", "look around"),
+                 isSidechain=True),
+            _sub_reply("s2", "2026-09-30T10:00:05.000Z"))
+    _run("Stop", path, home)
+    _run("SessionEnd", path, home)
+    latest = {s.span_id: s for batch in sent for s in batch}
+    agent = latest[spans.span_id_for("subagent:agent-ex1")]
+    assert agent.attributes[AGENT] == "Explore"
+    assert latest[ROOT].attributes[AGENT] == "crew-orchestrator"
+    assert {s.attributes.get(AGENT) for s in latest.values()
+            if s.parent_span_id == agent.span_id} == {"crew-orchestrator"}
+
+
+def _agent_call(uuid, ts):
+    return {"parentUuid": None, "isSidechain": False, "type": "assistant",
+            "uuid": uuid, "timestamp": ts, "sessionId": SID, "cwd": "/tmp/proj",
+            "message": {"id": "msg_" + uuid, "role": "assistant",
+                        "model": "claude-opus-5", "stop_reason": "tool_use",
+                        "content": [{"type": "tool_use", "id": "toolu_ex",
+                                     "name": "Agent",
+                                     "input": {"prompt": "look around",
+                                               "run_in_background": True}}],
+                        "usage": {"input_tokens": 2, "output_tokens": 9}}}
+
+
+def _sub_reply(uuid, ts):
+    return {"parentUuid": None, "isSidechain": True, "type": "assistant",
+            "uuid": uuid, "timestamp": ts, "sessionId": SID, "cwd": "/tmp/proj",
+            "message": {"id": "msg_" + uuid, "role": "assistant",
+                        "model": "claude-haiku-5", "stop_reason": "end_turn",
+                        "content": [{"type": "text", "text": "done"}],
+                        "usage": {"input_tokens": 2, "output_tokens": 4}}}

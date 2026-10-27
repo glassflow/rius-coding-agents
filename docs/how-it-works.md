@@ -28,12 +28,13 @@ in a folder that sends structure only it is never sent, and the trace keeps the
 `claude-code session` title. A session disabled mid-way closes under the
 name it had already sent, never one given after the disable.
 
-**A session you named files under that name.** The name you gave it (not a
-title Claude Code generated) is also the agent the session's spans and
+**A session you named files under that name.** The name you gave it (not the
+title Claude Code writes from your first prompt; a bare `/rename`, which makes
+Claude Code pick the name, counts as naming it) is also the agent the session's spans and
 heartbeats are sent for, so the Agents filter lists it instead of
 `claude-code`. It is set on the spans, not on the resource, so subagents keep
 their own agent type, and `RIUS_SERVICE_NAME` still sets `service.name`. A
-name is cut to 256 bytes. A session that was never named, or one in a folder
+name is cut to 256 bytes, so a long name in a non-Latin script can be shorter than the trace title. A session that was never named, or one in a folder
 that sends structure only, files under the service name as before.
 
 **One generation per API response.** Claude Code writes a single model

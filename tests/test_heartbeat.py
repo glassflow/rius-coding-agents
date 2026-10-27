@@ -511,10 +511,10 @@ def test_main_pings_under_the_name_the_state_holds(monkeypatch, home):
     assert captured["agent_name"] == "claude-code"
     assert captured["name_now"]() == ""
 
-    st["title_custom"] = "crew-orchestrator"
+    st["title_custom"] = "typed-but-not-yet-sent"
+    state.save(sid, home, st)
+    assert captured["name_now"]() == ""
+
+    st["agent_name_sent"] = "crew-orchestrator"
     state.save(sid, home, st)
     assert captured["name_now"]() == "crew-orchestrator"
-
-    st["title_custom"] = "é" * 200
-    state.save(sid, home, st)
-    assert len(captured["name_now"]().encode("utf-8")) <= 256

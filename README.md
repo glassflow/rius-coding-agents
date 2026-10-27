@@ -94,7 +94,7 @@ capped at 32 KB.
 | `gen_ai.agent.description` | a subagent's description | content mode |
 | `gen_ai.skill.source.uri` | `file:///Users/ana/.claude/skills/review`: the folder a skill loaded from, when Claude Code names it (not for its built-in skills, which it unpacks to a temporary folder) | content mode |
 | session span name | the session title instead of `claude-code session` | content mode |
-| `gen_ai.agent.name` on the session's own spans | the name you gave the session with `/rename` or `claude --name`, so it files under that agent instead of `claude-code` (a title Claude Code generated is not used) | content mode |
+| `gen_ai.agent.name` on the session's own spans | the name you gave the session with `/rename` or `claude --name`, so it files under that agent instead of `claude-code` (the title Claude Code writes from your first prompt is not used; a bare `/rename`, which makes Claude Code pick the name, counts as naming it) | content mode |
 | `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)`. For `autocompact_thrashing`, Claude Code's message; otherwise just `autocompact_thrashing` | content mode |
 
 The plugin sends token counts. Rius prices them at API rates, so the cost in
