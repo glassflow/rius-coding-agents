@@ -128,7 +128,7 @@ def drop_copied(entries: List[Any], uuids: Set[str]) -> Tuple[List[Any], bool]:
 _MOVED = ("root_started", "root_start_ns", "content_stopped", "open_turns",
           "open_tools", "open_task_spans", "last_ns", "context",
           "open_compaction", "compact_next", "last_compaction",
-          "title_custom", "title_ai", "root_name_sent")
+          "title_custom", "title_ai", "root_name_sent", "agent_name_sent")
 
 HANDOFF_LOCK_TIMEOUT_S = 1.0
 

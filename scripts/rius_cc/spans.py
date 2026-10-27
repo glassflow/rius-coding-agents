@@ -13,7 +13,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from . import agent, command_class, context_sizes, scrub
+from . import agent, command_class, context_sizes, scrub, session_name
 from . import _semconv_generated as semconv
 
 PROVIDER_NAME = agent.CLAUDE_CODE.provider
@@ -191,7 +191,7 @@ class Ctx:
 
     def __init__(self, session_id, cwd, git_branch, cc_version, service_name,
                  capture_content, max_attr_bytes, conversation_id="",
-                 continued_from="", tool_decisions=False):
+                 continued_from="", tool_decisions=False, agent_name=""):
         self.session_id = session_id
         # The conversation this session id carries on. It is the session id
         # itself unless Claude Code moved the conversation to a new id; the
@@ -207,6 +207,9 @@ class Ctx:
         self.max_attr_bytes = max_attr_bytes
         # Whether tool spans carry TOOL_CALL_DECISION_EVENT events.
         self.tool_decisions = tool_decisions
+        # The name the user gave the session, which every span of the main
+        # agent files under (session_name.py). build() keeps it current.
+        self.agent_name = agent_name
 
 
 class Span:
@@ -239,6 +242,8 @@ def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
         attrs[semconv.GEN_AI_OPERATION_NAME] = op
     if kind_oi in ("LLM", "TOOL", "AGENT"):
         attrs[semconv.GEN_AI_PROVIDER_NAME] = PROVIDER_NAME
+    if ctx.agent_name:
+        attrs[semconv.GEN_AI_AGENT_NAME] = ctx.agent_name
     return attrs
 
 
@@ -1035,6 +1040,8 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
 
     note_titles(state, ctx, titles or {})
     name = root_name(state)
+    agent_name = session_name.agent_name(state)
+    ctx.agent_name = agent_name
     if entries:
         # A resumed session carries on after an earlier SessionEnd closed it.
         state["finalized"] = False
@@ -1042,15 +1049,18 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
         state["root_name_sent"] = name
+        state["agent_name_sent"] = agent_name
         out.append(_pending_root(ctx, trace_id, root_span_id,
                                  entries[0].timestamp_ns, name))
     elif (state.get("root_started")
-          and name != state.get("root_name_sent", DEFAULT_ROOT_NAME)):
+          and (name != state.get("root_name_sent", DEFAULT_ROOT_NAME)
+               or agent_name != state.get("agent_name_sent", ""))):
         # Renamed, or capture turned off. Recorded even on a closed trace,
         # which the next SessionEnd re-closes under this name. An open one
         # gets a pending copy now: the same span id and start, so the
         # backend replaces the row it has rather than adding one.
         state["root_name_sent"] = name
+        state["agent_name_sent"] = agent_name
         if not state.get("finalized"):
             out.append(_pending_root(ctx, trace_id, root_span_id,
                                      state["root_start_ns"], name))

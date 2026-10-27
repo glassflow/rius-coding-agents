@@ -246,6 +246,7 @@ def _ctx(st, session_id, cfg, cwd, git_branch="", cc_version="",
         conversation_id=st.get("conversation") or "",
         continued_from=st.get("continued_from") or "",
         tool_decisions=cfg.tool_decisions,
+        agent_name=st.get("agent_name_sent") or "",
     )
 
 
@@ -274,7 +275,7 @@ def _adopted_subagents(st, ctx, cfg, home, event, now_ns, final):
             capture_content=ctx.capture_content,
             max_attr_bytes=ctx.max_attr_bytes,
             conversation_id=ctx.conversation_id,
-            tool_decisions=ctx.tool_decisions)
+            tool_decisions=ctx.tool_decisions, agent_name=ctx.agent_name)
         sub_dir = subagents.dir_for(item.get("transcript_path") or "", old_id)
         try:
             if not final:
