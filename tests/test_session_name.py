@@ -64,6 +64,15 @@ def sent(monkeypatch):
     return batches
 
 
+@pytest.fixture
+def resources(monkeypatch, sent):
+    seen = []
+    monkeypatch.setattr(
+        exporter.otlp, "encode",
+        lambda resource, out: seen.append(resource) or sent.append(list(out)) or b"x")
+    return seen
+
+
 def _rules(home, enabled=(), disabled=()):
     with open(config.path_rules_path(home), "w") as fh:
         json.dump({"enabled_paths": list(enabled),
@@ -313,3 +322,118 @@ def test_a_rename_after_the_disable_never_leaves_the_machine(home, sent,
     names = [s.name for batch in sent for s in batch]
     assert "typed-after-the-disable" not in names
     assert _last_root(sent).name == "sent-before-the-disable"
+
+
+# --- the session's name is its agent name ---------------------------------------
+
+AGENT = "gen_ai.agent.name"
+
+
+def _agent_names(batches):
+    return {s.attributes.get(AGENT) for batch in batches for s in batch}
+
+
+def test_a_custom_title_is_the_agent_name_of_every_main_span(home, sent,
+                                                              tmp_path):
+    path = _transcript(tmp_path, custom_title("crew-orchestrator"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    _run("SessionEnd", path, home)
+    spans_sent = [s for batch in sent for s in batch]
+    assert {s.kind_oi for s in spans_sent} >= {"AGENT", "CHAIN"}
+    assert _agent_names(sent) == {"crew-orchestrator"}
+    assert not _last_root(sent).pending
+    assert _last_root(sent).attributes[AGENT] == "crew-orchestrator"
+
+
+def test_the_ai_title_is_not_an_agent_name(home, sent, tmp_path):
+    path = _transcript(tmp_path, prompt("u1", "p1", "2026-09-30T10:00:00.000Z"),
+                       ai_title("Summary of the prompt"))
+    _run("Stop", path, home)
+    _run("SessionEnd", path, home)
+    assert _last_root(sent).name == "Summary of the prompt"
+    assert _agent_names(sent) == {None}
+
+
+def test_a_session_nobody_named_has_no_agent_name(home, sent, tmp_path):
+    path = _transcript(tmp_path, prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("SessionEnd", path, home)
+    assert _agent_names(sent) == {None}
+
+
+def test_the_custom_name_wins_over_the_service_name_setting(home, sent,
+                                                            resources, tmp_path):
+    path = _transcript(tmp_path, custom_title("crew-orchestrator"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("SessionEnd", path, home, env=dict(ENV, RIUS_SERVICE_NAME="factory-x"))
+    assert _agent_names(sent) == {"crew-orchestrator"}
+    assert {r["service.name"] for r in resources} == {"factory-x"}
+    assert not any(AGENT in r for r in resources)
+
+
+def test_a_rename_mid_session_renames_the_agent_with_the_trace(home, sent,
+                                                               tmp_path):
+    path = _transcript(tmp_path, prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    _append(path, custom_title("renamed"),
+            prompt("u2", "p2", "2026-09-30T10:05:00.000Z"))
+    _run("Stop", path, home)
+    pending = [r for r in _roots(sent) if r.pending]
+    assert [r.attributes.get(AGENT) for r in pending] == [None, "renamed"]
+    _run("SessionEnd", path, home)
+    assert _last_root(sent).attributes[AGENT] == "renamed"
+
+
+def test_naming_a_session_after_its_ai_title_still_sets_the_agent(home, sent,
+                                                                  tmp_path):
+    # Same text, so the root's name does not change: the agent still must.
+    path = _transcript(tmp_path, ai_title("same words"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    _append(path, custom_title("same words"))
+    _run("Stop", path, home)
+    assert _last_root(sent).attributes[AGENT] == "same words"
+
+
+def test_capture_off_sends_no_agent_name(home, sent, tmp_path):
+    path = _transcript(tmp_path, custom_title("secret-customer-name"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home, env=NO_CAPTURE)
+    _run("SessionEnd", path, home, env=NO_CAPTURE)
+    assert _agent_names(sent) == {None}
+
+
+def test_turning_capture_off_stops_the_agent_name(home, sent, tmp_path):
+    path = _transcript(tmp_path, custom_title("sent-while-on"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    assert _last_root(sent).attributes[AGENT] == "sent-while-on"
+
+    _append(path, prompt("u2", "p2", "2026-09-30T10:05:00.000Z"))
+    _run("SessionEnd", path, home, env=NO_CAPTURE)
+    assert AGENT not in _last_root(sent).attributes
+    assert "sent-while-on" not in pathlib.Path(
+        state.state_path(SID, home)).read_text()
+
+
+def test_a_stopped_session_closes_under_the_agent_name_it_already_sent(
+        home, sent, tmp_path):
+    path = _transcript(tmp_path, custom_title("sent-before-the-disable"),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("Stop", path, home)
+    _disable(home)
+    _append(path, custom_title("typed-after-the-disable"))
+    _run("SessionEnd", path, home)
+    closing = _last_root(sent)
+    assert not closing.pending
+    assert closing.attributes[AGENT] == "sent-before-the-disable"
+    assert "typed-after-the-disable" not in _agent_names(sent)
+
+
+def test_an_agent_name_fits_the_heartbeat_limit_in_bytes(home, sent, tmp_path):
+    path = _transcript(tmp_path, custom_title("é" * 200),
+                       prompt("u1", "p1", "2026-09-30T10:00:00.000Z"))
+    _run("SessionEnd", path, home)
+    name = _last_root(sent).attributes[AGENT]
+    assert 0 < len(name.encode("utf-8")) <= 256
+    assert set(name) == {"é"}

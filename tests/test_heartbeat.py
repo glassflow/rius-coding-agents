@@ -261,6 +261,39 @@ def test_pid_lock_released_on_exit(tmp_path):
     assert not os.path.exists(pinger.pid_path())
 
 
+def test_pings_follow_the_name_the_session_is_given(tmp_path):
+    sent = []
+    name = {"now": ""}
+
+    def transport(p, t):
+        sent.append(p)
+        if len(sent) == 1:
+            name["now"] = "crew-orchestrator"
+        if len(sent) == 2:
+            with open(pinger.stop_path(), "w") as fh:
+                fh.write("")
+
+    pinger, clock, _ = _make_pinger(
+        tmp_path, transport, interval=15.0, poll_interval=1.0,
+        max_lifetime=1000.0, name_now=lambda: name["now"])
+    pinger.run()
+    assert [p["agent_name"] for p in sent] == [
+        "claude-code", "crew-orchestrator", "crew-orchestrator"]
+    assert sent[-1]["stopped"] is True
+
+
+def test_a_failing_name_lookup_keeps_the_starting_name(tmp_path):
+    sent = []
+
+    def boom():
+        raise OSError("state unreadable")
+
+    pinger, clock, _ = _make_pinger(
+        tmp_path, _stop_writer(tmp_path, sent), name_now=boom)
+    pinger.run()
+    assert {p["agent_name"] for p in sent} == {"claude-code"}
+
+
 # --- main() wiring: reads instance_id from persisted state, never invents one
 
 @pytest.fixture
@@ -452,3 +485,36 @@ def test_unwatched_pinger_keeps_running_instead_of_exiting(tmp_path, monkeypatch
     assert probed == [], "pid 0 must never be probed"
     assert any("unwatched" in m for m in logged), \
         "running unwatched was not reported anywhere"
+
+
+def test_main_pings_under_the_name_the_state_holds(monkeypatch, home):
+    sid = "44444444-4444-4444-4444-444444444444"
+    st = state.new_state()
+    st["instance_id"] = "persisted-instance-id"
+    state.save(sid, home, st)
+
+    captured = {}
+
+    class FakePinger:
+        def __init__(self, session_id, home, instance_id, agent_name, transport,
+                     watch_pid, name_now=None, **kw):
+            captured["agent_name"] = agent_name
+            captured["name_now"] = name_now
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(heartbeat, "Pinger", FakePinger)
+    monkeypatch.setattr(sys, "argv", ["heartbeat.py", sid, "/tmp/proj", home, str(os.getpid())])
+    sign_in(home, api_key="glassflow_k")
+    heartbeat.main()
+    assert captured["agent_name"] == "claude-code"
+    assert captured["name_now"]() == ""
+
+    st["title_custom"] = "crew-orchestrator"
+    state.save(sid, home, st)
+    assert captured["name_now"]() == "crew-orchestrator"
+
+    st["title_custom"] = "é" * 200
+    state.save(sid, home, st)
+    assert len(captured["name_now"]().encode("utf-8")) <= 256
