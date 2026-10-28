@@ -449,17 +449,35 @@ def _drop_copied_history(st, entries):
     return entries
 
 
-def _wait_for_final_answer(st, session_id, transcript_path, home, cfg):
+def _wait_for_turn_end(st, prompt_id, session_id, transcript_path, home, cfg):
     started = time.monotonic()
-    found = final_answer.wait(transcript_path, st.get("offset", 0),
-                              st.get("unanswered", True))
-    _log(home, cfg, "session %s: final answer %s after %.2fs"
+    found = final_answer.wait(transcript_path, st, prompt_id)
+    _log(home, cfg, "session %s: end of turn %s after %.2fs"
          % (session_id, "read" if found else "not written yet",
             time.monotonic() - started))
 
 
+def _read_new_lines(transcript_path, offset, end=None):
+    stats, titles = {}, {}
+    entries, new_offset = transcript.read_from(
+        transcript_path, offset, stats=stats, titles=titles, end=end)
+    return entries, new_offset, stats, titles
+
+
+def _read_to_turn_end(st, prompt_id, transcript_path):
+    """What a Stop reads: no further than the next turn's prompt, which the
+    next hook opens."""
+    offset = st.get("offset", 0)
+    entries, new_offset, stats, titles = _read_new_lines(transcript_path,
+                                                         offset)
+    cut = final_answer.next_turn(entries, st, prompt_id)
+    if cut == len(entries):
+        return entries, new_offset, stats, titles
+    return _read_new_lines(transcript_path, offset, end=entries[cut].offset)
+
+
 def _run_session(event, cfg, session_id, cwd, transcript_path, home,
-                 instance_id) -> int:
+                 instance_id, prompt_id="") -> int:
     block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
                      if event in FINAL_EVENTS else 0.0)
     with state.session_lock(session_id, home,
@@ -498,14 +516,14 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
         instance_id = stored
 
         if event == "Stop":
-            _wait_for_final_answer(st, session_id, transcript_path, home, cfg)
-        read_stats = {}
-        titles = {}
-        entries, new_offset = transcript.read_from(
-            transcript_path, st.get("offset", 0), stats=read_stats,
-            titles=titles)
-        st["unanswered"] = final_answer.unanswered(
-            entries, st.get("unanswered", True))
+            _wait_for_turn_end(st, prompt_id, session_id, transcript_path,
+                               home, cfg)
+            entries, new_offset, read_stats, titles = _read_to_turn_end(
+                st, prompt_id, transcript_path)
+        else:
+            entries, new_offset, read_stats, titles = _read_new_lines(
+                transcript_path, st.get("offset", 0))
+        final_answer.note(st, entries)
         _note_skipped_lines(home, cfg, session_id, st, read_stats)
         if entries and not st.get("continuation_checked"):
             _link(st, session_id, transcript_path, home, cfg, final=True)
@@ -739,8 +757,10 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             result = _run_codex_session(event, cfg, payload, home,
                                         instance_id)
         else:
-            result = _run_session(event, cfg, session_id, cwd,
-                                  transcript_path, home, instance_id)
+            prompt_id = payload.get("prompt_id")
+            result = _run_session(
+                event, cfg, session_id, cwd, transcript_path, home,
+                instance_id, prompt_id if isinstance(prompt_id, str) else "")
         if event == "SessionStart" and cfg.enabled and cfg.api_key:
             # After this session's own export: by then it has taken over any
             # conversation it continues, so that one's root is not swept.
