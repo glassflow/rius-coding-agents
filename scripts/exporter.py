@@ -16,9 +16,9 @@ from typing import Mapping
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
-                     cursor_export, cursor_spans, log as rius_log, notice,
-                     otlp, platform_compat, spans, state, subagents,
-                     transcript)
+                     cursor_export, cursor_spans, final_answer,
+                     log as rius_log, notice, otlp, platform_compat, spans,
+                     state, subagents, transcript)
 from rius_cc import _semconv_generated as semconv, distro  # noqa: E402
 
 
@@ -31,9 +31,10 @@ MAX_CONSECUTIVE_EXPORT_FAILURES = 5
 
 # Events after which nothing else will run for this session. Losing the lock
 # here means finalize_session never happens and the root span (plus any open
-# turn) stays pending forever, so these wait briefly for it.
+# turn) stays pending forever, so these wait briefly for it, outlasting a
+# Stop that holds the lock while it waits for the turn's final answer.
 FINAL_EVENTS = ("Stop", "SessionEnd")
-FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
+FINAL_EVENT_LOCK_TIMEOUT_S = 2.0 + final_answer.WAIT_S
 
 # A session whose trace is still open this long after it was last seen, and
 # whose Claude Code process and pinger are both gone, is taken to be dead.
@@ -448,6 +449,15 @@ def _drop_copied_history(st, entries):
     return entries
 
 
+def _wait_for_final_answer(st, session_id, transcript_path, home, cfg):
+    started = time.monotonic()
+    found = final_answer.wait(transcript_path, st.get("offset", 0),
+                              st.get("unanswered", True))
+    _log(home, cfg, "session %s: final answer %s after %.2fs"
+         % (session_id, "read" if found else "not written yet",
+            time.monotonic() - started))
+
+
 def _run_session(event, cfg, session_id, cwd, transcript_path, home,
                  instance_id) -> int:
     block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
@@ -487,11 +497,15 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
             state.save(session_id, home, st)
         instance_id = stored
 
+        if event == "Stop":
+            _wait_for_final_answer(st, session_id, transcript_path, home, cfg)
         read_stats = {}
         titles = {}
         entries, new_offset = transcript.read_from(
             transcript_path, st.get("offset", 0), stats=read_stats,
             titles=titles)
+        st["unanswered"] = final_answer.unanswered(
+            entries, st.get("unanswered", True))
         _note_skipped_lines(home, cfg, session_id, st, read_stats)
         if entries and not st.get("continuation_checked"):
             _link(st, session_id, transcript_path, home, cfg, final=True)
