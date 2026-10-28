@@ -358,13 +358,14 @@ def test_a_next_prompt_without_an_answer_ends_the_wait(
     if read_before_stop:
         exporter.run("PostToolUse", _payload(path, "PostToolUse"), ENV, home)
         captured.clear()
+    next_prompt_at = path.stat().st_size
 
     elapsed = _stop_while_appending(path, home, NEXT_PROMPT, prompt_id)
     assert elapsed < 1.5
     sent = _sent(captured)
     assert _finished(sent[TURN])
     assert FINAL_CALL not in sent and TURN2 not in sent
-    assert state.load(SID, home)["offset"] == len(UNANSWERED.encode())
+    assert state.load(SID, home)["offset"] == next_prompt_at
 
 
 def test_a_turn_left_open_by_an_interrupt_does_not_hide_the_next(
