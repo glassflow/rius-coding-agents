@@ -1,0 +1,78 @@
+# Tells glassflow-docs that a new plugin version is live, so its
+# release-notes-pr.yml drafts the customer release notes for it (from
+# CHANGELOG.md and the commit log) into a PR that a human reviews.
+#
+# The plugin has no GitHub releases: a version goes live when its version bump
+# lands on main, and users get it on their next plugin update. The version in
+# .claude-plugin/plugin.json is the authoritative one (CHANGELOG.md: "the
+# version in .claude-plugin/plugin.json is what the marketplace installs").
+# .claude-plugin/marketplace.json, the Codex and Cursor manifests and
+# pyproject.toml carry the same version, which tests/test_codex_plugin.py
+# enforces, so this watches that one file.
+#
+# Sends repository_dispatch `plugin-release` with {version, previous_version,
+# sha} only when the push raised the version (a revert of a bump sends
+# nothing). Without a readable push base, the previous version is read from
+# the pushed commit's parent. Needs DOCS_DISPATCH_TOKEN, a fine-grained PAT
+# (or GitHub App token) with contents:write on glassflow/glassflow-docs, the
+# same secret the SDK release workflows use; GITHUB_TOKEN cannot dispatch to
+# another repository. Skips with a warning while it is unset.
+
+name: docs-release-notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .claude-plugin/plugin.json
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the push's base commit, for the previous version
+
+      - name: Dispatch plugin-release to glassflow-docs
+        env:
+          TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          MANIFEST: .claude-plugin/plugin.json
+        run: |
+          set -o pipefail
+          version=$(jq -r '.version // empty' "$MANIFEST")
+          previous=""
+          # A new branch's push has an all-zero base; a force-push's base may
+          # be gone. Either way, fall back to the pushed commit's parent.
+          if [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            previous=$(git show "${BEFORE}:${MANIFEST}" 2>/dev/null | jq -r '.version // empty' || true)
+          fi
+          if [ -z "$previous" ]; then
+            previous=$(git show "${SHA}^:${MANIFEST}" 2>/dev/null | jq -r '.version // empty' || true)
+          fi
+          echo "manifest version: ${previous:-unknown} -> ${version}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$version" ] || [ "$version" = "$previous" ]; then
+            echo "version unchanged; nothing to dispatch" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -n "$previous" ] && [ "$(printf '%s\n%s\n' "$previous" "$version" | sort -V | tail -n1)" != "$version" ]; then
+            echo "version went down (a reverted bump); nothing to dispatch" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::DOCS_DISPATCH_TOKEN not configured; no release-notes draft requested from glassflow-docs for ${version}."
+            exit 0
+          fi
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/glassflow/glassflow-docs/dispatches \
+            -d "$(jq -n --arg v "$version" --arg p "$previous" --arg s "$SHA" \
+              '{event_type:"plugin-release",client_payload:{version:$v,previous_version:$p,sha:$s}}')"
+          echo "dispatched plugin-release ${previous:-?} -> ${version} to glassflow-docs" >> "$GITHUB_STEP_SUMMARY"
