@@ -41,9 +41,15 @@ FINAL_EVENT_LOCK_TIMEOUT_S = 2.0 + final_answer.WAIT_S
 # The pinger's own cap (heartbeat.MAX_LIFETIME_S): it covers a session whose
 # process could not be identified.
 STALE_AFTER_S = 12 * 60 * 60
-# Codex has no SessionEnd, so the sweep is the only thing that ever closes a
-# Codex trace: it waits an hour, not twelve, once the Codex process is gone.
+# Codex has no SessionEnd: its pinger closes the trace when it sees Codex exit
+# (close_exited_codex). The sweep is left for a session no pinger watched, and
+# waits an hour, not twelve, once the Codex process is gone.
 CODEX_STALE_AFTER_S = 60 * 60
+
+# How long the pinger waits for the session lock when Codex exits: a Stop
+# export still running then, waiting for the turn's final answer and
+# shipping it, finishes first.
+EXITED_LOCK_TIMEOUT_S = 30.0
 
 
 def _stale_after_s() -> int:
@@ -395,6 +401,51 @@ def sweep_stale(cfg, current_id, home, now_ns=None) -> None:
                  % (session_id, exc), force=True)
 
 
+def close_exited_codex(cfg, session_id, cwd, home, now_ns=None) -> int:
+    """Close a Codex session's trace when its pinger sees Codex exit.
+
+    Codex has no SessionEnd. Left to the sweep, the trace closes at the next
+    Codex session start, an hour or more after it was last seen, with spans
+    that end then; the Rius receiver refuses a span it gets more than an
+    hour after its end, so the root would stay pending for good. Closed
+    here, the trace ends when Codex exited, as a Claude Code trace ends at
+    its SessionEnd. The rollout is read first, so a Stop export that has not
+    taken the lock yet loses nothing to this close.
+    """
+    fingerprint = config.key_fingerprint(cfg.api_key, cfg.endpoint)
+    if not fingerprint:
+        return 0
+    with state.session_lock(session_id, home,
+                            block_timeout=EXITED_LOCK_TIMEOUT_S) as acquired:
+        if not acquired:
+            _log(home, cfg, "session %s: lock held as Codex exited; leaving "
+                            "the trace to the sweep" % session_id)
+            return 0
+        st = codex_session.load(state.load(session_id, home))
+        if not state.trace_is_open(st):
+            state.sync_open_marker(session_id, home, st)
+            return 0
+        # Sent with any other key, the closing spans would land in that
+        # key's workspace, or none (see _close_if_stale).
+        if st.get("key_fingerprint") != fingerprint:
+            return 0
+        _log(home, cfg, "session %s: Codex exited; closing its trace"
+             % session_id)
+        cwd = st.get("root_cwd") or cwd
+        out, offset = [], st.get("offset", 0)
+        if cfg.enabled and not st.get("content_stopped"):
+            out, offset = codex_session.build(
+                st, _ctx(st, session_id, cfg, cwd),
+                st.get("transcript_path") or None)
+        now_ns = _now_ns() if now_ns is None else now_ns
+        out += codex_session.finalize(
+            st, _ctx(st, session_id, cfg, cwd, capture_content=False), now_ns)
+        attrs = codex_session.resource_attributes(
+            cfg.service_name, st.get("instance_id") or "", st)
+        return _ship(out, attrs, st, offset, session_id, home, cfg,
+                     on_success=_on_shipped(session_id, home, st, []))
+
+
 def _run_stopped(event, st, cfg, session_id, cwd, transcript_path, home) -> int:
     """A session whose folder was disabled after its trace started.
 
@@ -602,7 +653,8 @@ def _ensure_instance_id(st, session_id, home, instance_id):
 
 def _run_codex_session(event, cfg, payload, home, instance_id) -> int:
     """One hook event of a Codex session. Codex has no SessionEnd, so the
-    root stays open until the sweep closes it (sweep_stale)."""
+    root stays open until Codex exits (close_exited_codex) or, unwatched,
+    the sweep closes it (sweep_stale)."""
     session_id, cwd = payload["session_id"], payload["cwd"]
     block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
                      if event in FINAL_EVENTS else 0.0)

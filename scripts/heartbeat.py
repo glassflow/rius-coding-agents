@@ -36,6 +36,8 @@ Lifetime -- exits on the FIRST of:
   2. The watched Claude Code process is no longer alive. Exits WITHOUT a
      stopped ping -- claiming a clean stop for a killed process would be a
      lie; the backend's stale -> gone path exists for exactly this case.
+     Codex has no SessionEnd, so for Codex this is how a session ends: the
+     pinger closes its trace first (``exporter.close_exited_codex``).
      The liveness probe lives in ``rius_cc.platform_compat.pid_alive``:
      ``os.kill(pid, 0)`` is a harmless probe on POSIX but an ATTACK on
      Windows (see that module), so it is never called there. A watch pid of
@@ -130,7 +132,7 @@ class Pinger:
                  watch_pid, interval=INTERVAL_S, max_lifetime=MAX_LIFETIME_S,
                  ping_timeout=PING_TIMEOUT_S, final_ping_timeout=FINAL_PING_TIMEOUT_S,
                  poll_interval=POLL_INTERVAL_S, clock=time.monotonic, sleep=time.sleep,
-                 log=None, name_now=None):
+                 log=None, name_now=None, on_exit=None):
         self.session_id = session_id
         self.home = home
         self.instance_id = instance_id
@@ -146,6 +148,7 @@ class Pinger:
         self.sleep = sleep
         self._log = log or (lambda _msg: None)
         self._name_now = name_now or (lambda: "")
+        self._on_exit = on_exit or (lambda: None)
 
     def _state_dir(self) -> str:
         return platform_compat.rius_dir(self.home, "state")
@@ -222,6 +225,12 @@ class Pinger:
         except Exception as exc:  # never retried, never raised
             self._log("heartbeat delivery failed: %r" % (exc,))
 
+    def _agent_exited(self) -> None:
+        try:
+            self._on_exit()
+        except Exception as exc:  # never raised
+            self._log("closing the trace on exit failed: %r" % (exc,))
+
     def run(self) -> None:
         if not self.acquire_pid_lock():
             self._log("another live pinger already owns this session")
@@ -241,7 +250,9 @@ class Pinger:
                     self._send(stopped=True)
                     return
                 if self.watch_pid > 0 and not self._pid_alive(self.watch_pid):
-                    return  # killed process: no stopped ping, that would lie
+                    # No stopped ping, that would lie about a killed process.
+                    self._agent_exited()
+                    return
                 if self.clock() - start >= self.max_lifetime:
                     return  # cap on the PINGER, not evidence the agent
                             # stopped: a live agent past 12h must not be
@@ -294,8 +305,23 @@ def main() -> None:
     pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport,
                     watch_pid, log=log,
                     name_now=lambda: state.load(session_id, home).get(
-                        "agent_name_sent") or "")
+                        "agent_name_sent") or "",
+                    on_exit=_closer(session_id, cwd, home))
     pinger.run()
+
+
+def _closer(session_id: str, cwd: str, home: str):
+    """What to run when the watched agent exits: for Codex, which has no
+    SessionEnd, closing its trace then, under the key in force at exit."""
+    if agent.active().name != agent.CODEX.name:
+        return None
+
+    def close() -> None:
+        import exporter
+        from rius_cc import config
+        cfg = config.resolve(session_id, cwd, os.environ, home)
+        exporter.close_exited_codex(cfg, session_id, cwd, home)
+    return close
 
 
 if __name__ == "__main__":
