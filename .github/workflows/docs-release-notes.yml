@@ -12,10 +12,12 @@
 #
 # Sends repository_dispatch `plugin-release` with {version, previous_version,
 # sha} only when the push raised the version (a revert of a bump sends
-# nothing). Needs DOCS_DISPATCH_TOKEN, a fine-grained PAT (or GitHub App
-# token) with contents:write on glassflow/glassflow-docs, the same secret the
-# SDK release workflows use; GITHUB_TOKEN cannot dispatch to another
-# repository. Skips with a warning while it is unset.
+# nothing). Without a readable push base, the previous version is read from
+# the pushed commit's parent. Needs DOCS_DISPATCH_TOKEN, a fine-grained PAT
+# (or GitHub App token) with contents:write on glassflow/glassflow-docs, the
+# same secret the SDK release workflows use; GITHUB_TOKEN cannot dispatch to
+# another repository. Skips with a warning while it is unset.
+
 name: docs-release-notes
 
 on:
@@ -47,9 +49,12 @@ jobs:
           version=$(jq -r '.version // empty' "$MANIFEST")
           previous=""
           # A new branch's push has an all-zero base; a force-push's base may
-          # be gone. Either way there is no previous version to read.
+          # be gone. Either way, fall back to the pushed commit's parent.
           if [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
             previous=$(git show "${BEFORE}:${MANIFEST}" 2>/dev/null | jq -r '.version // empty' || true)
+          fi
+          if [ -z "$previous" ]; then
+            previous=$(git show "${SHA}^:${MANIFEST}" 2>/dev/null | jq -r '.version // empty' || true)
           fi
           echo "manifest version: ${previous:-unknown} -> ${version}" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$version" ] || [ "$version" = "$previous" ]; then
