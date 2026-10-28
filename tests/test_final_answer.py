@@ -134,6 +134,12 @@ OLD_PROMPT = _line(type="user", uuid="u0", parentUuid=None, promptId="p0",
                    timestamp="2026-10-28T09:00:00.000Z",
                    message={"role": "user", "content": [
                        {"type": "text", "text": "an earlier session"}]})
+OLD_ANSWER = _line(type="assistant", uuid="a0", parentUuid="u0",
+                   timestamp="2026-10-28T09:00:05.000Z",
+                   message={"id": "msg_old", "role": "assistant",
+                            "model": "claude-opus-5-5", "stop_reason": "end_turn",
+                            "content": [{"type": "text", "text": "earlier"}],
+                            "usage": {"input_tokens": 3, "output_tokens": 1}})
 PROMPT_WITHOUT_ID = NEXT_PROMPT.replace('"promptId": "p2", ', "")
 COMPACT_SUMMARY = _line(type="user", uuid="c1", parentUuid="u2", promptId="p9",
                         isCompactSummary=True,
@@ -145,15 +151,22 @@ OPEN_P1 = {"p1": {}}
 
 @pytest.mark.parametrize("text, open_turns, prompt_id, cut_at", [
     (UNANSWERED + ANSWER + NEXT_PROMPT, {}, "p1", "u3"),
-    (TOOL_RESULT + ANSWER + NEXT_PROMPT, OPEN_P1, "", "u3"),
-    (UNANSWERED + ANSWER + NEXT_PROMPT, {}, "", "u3"),
+    (TOOL_RESULT + NEXT_PROMPT, OPEN_P1, "p1", "u3"),
     (OLD_PROMPT + UNANSWERED + ANSWER, {}, "p1", None),
     (UNANSWERED + ANSWER, OPEN_P0, "p1", None),
     (UNANSWERED + ANSWER + PROMPT_WITHOUT_ID, OPEN_P1, "p1", None),
     (UNANSWERED + COMPACT_SUMMARY + ANSWER, {}, "p1", None),
-], ids=["queued", "no-payload-id-open-turn", "no-payload-id-first-prompt",
-        "copied-history", "stale-open-turn", "prompt-without-id",
-        "compaction-summary"])
+    (UNANSWERED + ANSWER + NEXT_PROMPT, {}, "", "u3"),
+    (TOOL_RESULT + ANSWER + NEXT_PROMPT, OPEN_P1, "", "u3"),
+    (PROMPT + ANSWER, OPEN_P0, "", None),
+    (OLD_PROMPT + OLD_ANSWER + UNANSWERED + ANSWER, {}, "", None),
+    (TOOL_RESULT + SUBAGENT_ANSWER + NEXT_PROMPT, OPEN_P1, "", None),
+    (TOOL_RESULT + NEXT_PROMPT, OPEN_P1, "", None),
+], ids=["queued", "queued-with-no-answer", "copied-history",
+        "stale-open-turn", "prompt-without-id", "compaction-summary",
+        "no-id-queued", "no-id-queued-turn-read", "no-id-stale-open-turn",
+        "no-id-earlier-answer-read", "no-id-subagent-line",
+        "no-id-cannot-tell-a-prompt-with-no-answer"])
 def test_the_next_turn_starts_at_a_later_turns_prompt(text, open_turns,
                                                       prompt_id, cut_at):
     assert PROMPT_WITHOUT_ID != NEXT_PROMPT
@@ -349,8 +362,8 @@ def test_a_prompt_queued_behind_the_answer_keeps_its_own_turn(
     assert FINAL_CALL not in sent
 
 
-@pytest.mark.parametrize("prompt_id", ["p1", None])
-@pytest.mark.parametrize("read_before_stop", [False, True])
+@pytest.mark.parametrize("prompt_id, read_before_stop", [
+    ("p1", False), ("p1", True), (None, False)])
 def test_a_next_prompt_without_an_answer_ends_the_wait(
         home, captured, tmp_path, budget, prompt_id, read_before_stop):
     path = tmp_path / "t.jsonl"
@@ -368,17 +381,39 @@ def test_a_next_prompt_without_an_answer_ends_the_wait(
     assert state.load(SID, home)["offset"] == next_prompt_at
 
 
-def test_a_turn_left_open_by_an_interrupt_does_not_hide_the_next(
-        home, captured, tmp_path, budget):
-    """An interrupt fires no Stop, so its turn stays open. The next Stop
-    names its own turn in the payload, and reads it."""
+def _plain_turn(n):
+    """Turn n's prompt and its answer, with no tool calls."""
+    return (_line(type="user", uuid="u%d" % (100 + n), parentUuid=None,
+                  promptId="p%d" % n, timestamp="2026-10-28T10:0%d:00.000Z" % n,
+                  message={"role": "user", "content": [
+                      {"type": "text", "text": "turn %d" % n}]})
+            + _line(type="assistant", uuid="a%d" % (100 + n),
+                    parentUuid="u%d" % (100 + n),
+                    timestamp="2026-10-28T10:0%d:05.000Z" % n,
+                    message={"id": "msg_%d" % n, "role": "assistant",
+                             "model": "claude-opus-5-5",
+                             "stop_reason": "end_turn",
+                             "content": [{"type": "text", "text": "ok"}],
+                             "usage": {"input_tokens": 3, "output_tokens": 2}}))
+
+
+@pytest.mark.parametrize("with_prompt_id", [True, False])
+def test_after_an_interrupt_each_plain_turn_closes_at_its_own_stop(
+        home, captured, tmp_path, budget, with_prompt_id):
+    """An interrupt fires no Stop, so its turn stays open. A turn with no
+    tool calls is first read by its Stop, since UserPromptSubmit runs before
+    the prompt is written, and that Stop must still take it for its own."""
     path = tmp_path / "t.jsonl"
     path.write_text(OLD_PROMPT)
     exporter.run("UserPromptSubmit", _payload(path, "UserPromptSubmit"), ENV, home)
-    captured.clear()
-
-    _append(path, PROMPT + ANSWER)
-    exporter.run("Stop", _payload(path, "Stop", "p1"), ENV, home)
-    sent = _sent(captured)
-    assert sent[FINAL_CALL]["parentSpanId"] == TURN
-    assert _finished(sent[TURN])
+    for n in (1, 2, 3):
+        exporter.run("UserPromptSubmit", _payload(path, "UserPromptSubmit"),
+                     ENV, home)
+        _append(path, _plain_turn(n))
+        captured.clear()
+        exporter.run("Stop", _payload(path, "Stop",
+                                      with_prompt_id and "p%d" % n), ENV, home)
+        sent = _sent(captured)
+        turn = spans.span_id_for("turn:p%d" % n)
+        assert sent[spans.span_id_for("msg_%d" % n)]["parentSpanId"] == turn
+        assert _finished(sent[turn])

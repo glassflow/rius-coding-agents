@@ -30,14 +30,16 @@ def note(st: dict, entries: List[Any]) -> None:
 
 def next_turn(entries: List[Any], st: dict, prompt_id: str) -> int:
     """The index in `entries` of the first prompt after the turn a Stop ends,
-    else len(entries). `prompt_id` names that turn, as the Stop payload does;
-    without it, the latest open turn stands in, then the first prompt read."""
-    turn, seen = _stopping_turn(st, prompt_id)
+    else len(entries). `prompt_id` names that turn, as the Stop payload does.
+    Without it, the next turn is the one prompted after the last answer: the
+    open turns cannot say, since an interrupted turn stays open."""
+    if not prompt_id:
+        return _prompt_after_last_answer(entries)
+    seen = prompt_id in (st.get("open_turns") or {})
     for i, entry in enumerate(entries):
         if not _is_prompt(entry):
             continue
-        turn = turn or entry.prompt_id
-        if entry.prompt_id == turn:
+        if entry.prompt_id == prompt_id:
             seen = True
         elif seen:
             return i
@@ -80,12 +82,15 @@ def _unanswered(entries: List[Any], before: bool) -> bool:
     return before
 
 
-def _stopping_turn(st: dict, prompt_id: str):
-    """(the turn's prompt id, whether its prompt was read before)."""
-    open_turns = st.get("open_turns") or {}
-    if not prompt_id and open_turns:
-        prompt_id = next(reversed(open_turns))
-    return prompt_id, prompt_id in open_turns
+def _prompt_after_last_answer(entries: List[Any]) -> int:
+    answers = [i for i, entry in enumerate(entries) if _is_answer(entry)]
+    start = answers[-1] + 1 if answers else len(entries)
+    return next((i for i in range(start, len(entries))
+                 if _is_prompt(entries[i])), len(entries))
+
+
+def _is_answer(entry: Any) -> bool:
+    return entry.kind == "assistant" and not entry.is_sidechain
 
 
 def _is_prompt(entry: Any) -> bool:
