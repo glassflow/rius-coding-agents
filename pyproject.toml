@@ -1,6 +1,6 @@
 [project]
 name = "rius"
-version = "0.8.1"
+version = "0.8.2"
 description = "Claude Code, Codex and Cursor plugin that streams your sessions to Rius as OpenTelemetry traces: prompts, model calls, tokens, tool calls and subagents."
 requires-python = ">=3.9"
 dependencies = []
