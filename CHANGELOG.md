@@ -4,6 +4,15 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
+## 0.8.2 (2026-10-28)
+
+- Claude Code: each turn's last model call is now sent with its turn, when
+  the turn ends. Claude Code writes the final answer to the transcript just
+  after the end-of-turn hook fires, so it used to reach Rius at the next hook
+  event: minutes later, or never if the session went idle. The background
+  export now waits up to 2 seconds for it. A prompt you queued while Claude
+  worked keeps its own turn.
+
 ## 0.8.1 (2026-10-28)
 
 - Claude Code: a session you named (`claude --name X` or `/rename`) now files
