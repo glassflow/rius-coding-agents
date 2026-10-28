@@ -141,10 +141,17 @@ open (or inside a turn a forked session copied) is dropped.
 
 ### How a session ends
 
-Codex has no SessionEnd hook. A Codex trace is closed by the next Codex
-session you start with the same key, once the old session's Codex process
-has exited and it has been idle for an hour. The trace ends at the last
-thing the session did. Claude Code's own rule (12 hours) is unchanged.
+Codex has no SessionEnd hook. The plugin's heartbeat process watches Codex
+and closes the trace when Codex exits, so the trace ends when Codex exited,
+as a Claude Code trace ends at its SessionEnd. Rius refuses a span it
+receives more than an hour after the span ended, so a close sent later than
+that would leave the trace open for good.
+
+A session no heartbeat process watched (its Codex process could not be
+identified, or it ran past the heartbeat's 12-hour cap) is closed by the
+next Codex session you start with the same key, once the old session's Codex
+process has exited and it has been idle for an hour. That trace ends at the
+last thing the session did. Claude Code's own rule (12 hours) is unchanged.
 
 ## Querying traces (MCP)
 
