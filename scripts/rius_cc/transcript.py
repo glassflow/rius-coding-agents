@@ -185,8 +185,10 @@ def title_record(line: str) -> Optional[Tuple[str, str]]:
 
 
 def read_from(path: str, offset: int, stats: Optional[dict] = None,
-              titles: Optional[dict] = None) -> Tuple[List[Entry], int]:
-    """Read complete lines from `offset`. Returns (entries, new_offset).
+              titles: Optional[dict] = None,
+              end: Optional[int] = None) -> Tuple[List[Entry], int]:
+    """Read complete lines from `offset`, up to `end` if given. Returns
+    (entries, new_offset).
 
     A trailing partial line is left unconsumed -- the exporter races the writer,
     and half a JSON object must not advance the offset past itself.
@@ -219,7 +221,7 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None,
     try:
         with open(path, "rb") as fh:
             fh.seek(offset)
-            buf = fh.read()
+            buf = fh.read() if end is None else fh.read(max(0, end - offset))
     except OSError:
         return finish([], offset)
     start = 0

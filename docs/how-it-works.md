@@ -108,6 +108,14 @@ the finished span once the corresponding end event arrives. A session that
 dies mid-run leaves those pending spans unresolved, which is what "the agent
 died while running" looks like in the UI.
 
+**A turn's last model call goes out with the turn.** Claude Code writes the
+final answer to the transcript a moment after the turn's Stop hook fires, so
+the export for Stop waits up to 2 seconds for it. The export runs in the
+background, so the wait never holds up the session. An answer that is still
+not written by then is sent at the next hook event, outside the closed turn.
+A prompt you queued while Claude worked ends the wait too, and keeps its own
+turn.
+
 They do not stay pending forever. The backend counts a trace on the Agents
 and Users tabs only once every span of it has finished, so a killed session
 would be missing there for good. The next session you start with the same
