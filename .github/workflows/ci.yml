@@ -55,7 +55,9 @@ jobs:
     # 3.10+, so this job proves the SHIPPED code runs on 3.9 even though the
     # OTLP round-trip tests skip themselves here.
     name: runtime floor (py3.9, no proto)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which actions/setup-python has no
+    # 3.9 build for. Unpin when the floor moves past 3.9.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
