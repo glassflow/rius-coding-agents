@@ -64,7 +64,7 @@ def _latest_spans():
             resource = _attrs(rs.resource)
             for span in rs.scope_spans[0].spans:
                 prev = latest.get(span.span_id)
-                if prev is None or not _attrs(span).get("glassflow.span.pending"):
+                if prev is None or not _attrs(span).get("rius.span.pending"):
                     latest[span.span_id] = (span, resource)
     return latest
 
@@ -74,7 +74,7 @@ def _wait_for_closed_root(timeout_s=20):
     while time.time() < deadline:
         for span, _ in _latest_spans().values():
             if not span.parent_span_id and not _attrs(span).get(
-                    "glassflow.span.pending"):
+                    "rius.span.pending"):
                 return
         time.sleep(0.1)
     raise AssertionError("the closed root never arrived")
@@ -103,7 +103,7 @@ def test_a_cursor_session_reaches_the_receiver_as_one_tree(server, tmp_path):
     resource = next(iter(latest.values()))[1]
     assert resource["service.name"] == "cursor"
     assert len({span.trace_id for span in spans.values()}) == 1
-    assert not any(_attrs(s).get("glassflow.span.pending")
+    assert not any(_attrs(s).get("rius.span.pending")
                    for s in spans.values())
 
     root = spans["cursor session"]
@@ -162,7 +162,7 @@ def _wait_for(done, timeout_s=20):
 
 
 def _subagent_is_closed(spans):
-    return any(s.name == "explore" and not _attrs(s).get("glassflow.span.pending")
+    return any(s.name == "explore" and not _attrs(s).get("rius.span.pending")
                for s in spans)
 
 

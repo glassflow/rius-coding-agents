@@ -249,3 +249,34 @@ def called_tools(script: str) -> List[str]:
 def string_literals(script: str) -> List[str]:
     """What the script quotes, as far as it could be read."""
     return read(script or "")[0]
+
+
+# One JavaScript string escape: \xHH, \u{H..}, \uHHHH, \0, a control letter,
+# a line continuation, or a backslash before any other character.
+_ESCAPE = re.compile(
+    r"\\(?:x([0-9a-fA-F]{2})|u\{0*([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})"
+    r"|(0)(?![0-9])|([nrtbfv])|(\r\n|[\n\r\u2028\u2029])|(.))", re.DOTALL)
+_CONTROL = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v"}
+
+
+def _decoded(match) -> str:
+    hex2, braced, hex4, nul, control, newline, other = match.groups()
+    if hex2 or hex4:
+        return chr(int(hex2 or hex4, 16))
+    if braced:
+        # Past U+10FFFF it is no character: JavaScript rejects the literal.
+        if int(braced, 16) > 0x10FFFF:
+            return "u{" + braced + "}"
+        return chr(int(braced, 16))
+    if nul:
+        return "\0"
+    if control:
+        return _CONTROL[control]
+    return "" if newline else other
+
+
+def decode_escapes(literal: str) -> str:
+    """The literal with its JavaScript string escapes decoded. A malformed
+    `\\x` or `\\u` keeps the character after the backslash, as does any
+    escape JavaScript has no meaning for; a trailing backslash stays."""
+    return _ESCAPE.sub(_decoded, literal)

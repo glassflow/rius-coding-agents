@@ -35,7 +35,6 @@ class AgentProfile:
     provider: str
     # Under the OS home, never an agent's own home variable: see rius_dir.
     home_parts: Tuple[str, ...]
-    attr_prefix: str
     env_prefix: str
     command_prefix: str
     login_wait_budget: int
@@ -90,14 +89,14 @@ CLAUDE_CODE = AgentProfile(
     name="claude-code", display_name="Claude Code",
     service_name="claude-code", root_name="claude-code session",
     provider="anthropic", home_parts=(".claude",),
-    attr_prefix="cc.", env_prefix="RIUS_CLAUDE_", command_prefix="/rius:",
+    env_prefix="RIUS_CLAUDE_", command_prefix="/rius:",
     login_wait_budget=540, sends_agent_on_link=False)
 
 CODEX = AgentProfile(
     name="codex", display_name="Codex",
     service_name="codex", root_name="codex session",
     provider="openai", home_parts=(".codex",),
-    attr_prefix="codex.", env_prefix="RIUS_CODEX_",
+    env_prefix="RIUS_CODEX_",
     command_prefix="$rius:rius-",
     login_wait_budget=540, sends_agent_on_link=True,
     hook_parent_is_agent=True)
@@ -107,7 +106,7 @@ CURSOR = AgentProfile(
     name="cursor", display_name="Cursor",
     service_name="cursor", root_name="cursor session",
     provider="", home_parts=(".cursor",),
-    attr_prefix="cursor.", env_prefix="RIUS_CURSOR_", command_prefix="/rius-",
+    env_prefix="RIUS_CURSOR_", command_prefix="/rius-",
     login_wait_budget=540, sends_agent_on_link=True, sends_tokens=False)
 
 PROFILES = {p.name: p for p in (CLAUDE_CODE, CODEX, CURSOR)}

@@ -116,7 +116,7 @@ def test_a_killed_session_is_closed_by_the_next_session_start(home, sent,
     assert [s for s in closing if s.span_id == root and not s.pending]
     assert key == KEY
     assert resource["service.instance.id"] == state.load(DEAD, home)["instance_id"]
-    assert resource["cc.cwd"] == "/tmp/proj"
+    assert resource["process.working_directory"] == "/tmp/proj"
     assert not _marker(home, DEAD)
     assert state.load(DEAD, home)["finalized"] is True
 

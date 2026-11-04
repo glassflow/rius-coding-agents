@@ -56,10 +56,10 @@ def test_span_kind_is_the_internal_enum_integer():
     assert _one()["kind"] == 1
 
 
-def test_scope_name_is_glassflow():
-    assert otlp.SCOPE_NAME == "glassflow"
+def test_scope_name_is_rius():
+    assert otlp.SCOPE_NAME == "rius"
     scope = _doc()["resourceSpans"][0]["scopeSpans"][0]["scope"]
-    assert scope == {"name": "glassflow"}
+    assert scope == {"name": "rius"}
 
 
 def test_root_span_omits_parent_field():

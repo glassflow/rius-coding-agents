@@ -35,7 +35,7 @@ def test_claude_code_is_the_default_and_keeps_its_literals(tmp_path):
     assert cc.rius_dir("/h") == os.path.join("/h", ".claude", "rius")
     assert (cc.service_name, cc.root_name, cc.provider) == (
         "claude-code", "claude-code session", "anthropic")
-    assert (cc.attr_prefix, cc.env_var("DEBUG")) == ("cc.", "RIUS_CLAUDE_DEBUG")
+    assert cc.env_var("DEBUG") == "RIUS_CLAUDE_DEBUG"
     assert cc.command("login") == "/rius:login"
     assert config.DEFAULT_SERVICE_NAME == cc.service_name
     assert (spans.PROVIDER_NAME, spans.DEFAULT_ROOT_NAME) == (
@@ -149,8 +149,8 @@ def test_env_key_is_ignored_for_every_agent(codex, tmp_path):
     assert str(codex) in login.credentials_path(home)
 
 
-def test_codex_resource_attributes_use_its_prefix(codex, tmp_path,
-                                                  fixtures_dir, monkeypatch):
+def test_codex_resource_attributes_use_the_upstream_keys(codex, tmp_path,
+                                                        fixtures_dir, monkeypatch):
     sent = []
     monkeypatch.setattr(exporter.otlp, "encode",
                         lambda attrs, out: sent.append(attrs) or b"x")
@@ -164,7 +164,8 @@ def test_codex_resource_attributes_use_its_prefix(codex, tmp_path,
                               / "mock_tools_mcp_resume.jsonl")},
                  {}, home)
     assert sent and sent[0]["service.name"] == "codex"
-    assert "codex.cwd" in sent[0] and "cc.cwd" not in sent[0]
+    assert "process.working_directory" in sent[0]
+    assert "codex.cwd" not in sent[0] and "cc.cwd" not in sent[0]
 
 
 # --- entry points -------------------------------------------------------------

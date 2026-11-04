@@ -87,6 +87,14 @@ def real_agent_dirs_are_untouched():
                         "without an isolated HOME" % path, pytrace=False)
 
 
+@pytest.fixture(autouse=True)
+def stop_does_not_wait_for_answers(monkeypatch):
+    """Most test transcripts end before the turn's final answer, and each
+    Stop would wait for it. tests/test_final_answer.py sets its own budget."""
+    from rius_cc import final_answer
+    monkeypatch.setattr(final_answer, "WAIT_S", 0.0)
+
+
 @pytest.fixture
 def fixtures_dir() -> pathlib.Path:
     return pathlib.Path(__file__).parent / "fixtures"

@@ -81,7 +81,7 @@ def test_hook_to_receiver_full_path(server, tmp_path, fixtures_dir):
 
     req = otlp_json.to_request(got["body"])
     spans_out = req.resource_spans[0].scope_spans[0].spans
-    assert req.resource_spans[0].scope_spans[0].scope.name == "glassflow"
+    assert req.resource_spans[0].scope_spans[0].scope.name == "rius"
 
     kinds = {}
     for s in spans_out:

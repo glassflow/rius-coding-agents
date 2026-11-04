@@ -17,13 +17,16 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Iterable, List, Optional
+from . import _semconv_generated as semconv
 
 # Every value the attribute can take. A test asserts nothing else escapes.
-CLASSES = ("test", "build", "lint", "package", "git", "other")
+CLASSES = (semconv.RIUS_COMMAND_CLASS_TEST, semconv.RIUS_COMMAND_CLASS_BUILD,
+           semconv.RIUS_COMMAND_CLASS_LINT, semconv.RIUS_COMMAND_CLASS_PACKAGE,
+           semconv.RIUS_COMMAND_CLASS_GIT, semconv.RIUS_COMMAND_CLASS_OTHER)
 _RANK = {name: rank for rank, name in enumerate(reversed(CLASSES))}
 
-ATTRIBUTE = "rius.command.class"
-EXIT_CODE_ATTRIBUTE = "process.exit.code"
+ATTRIBUTE = semconv.RIUS_COMMAND_CLASS
+EXIT_CODE_ATTRIBUTE = semconv.PROCESS_EXIT_CODE
 
 # Longer commands are read only this far: a heredoc body cannot change
 # which program the command starts with.

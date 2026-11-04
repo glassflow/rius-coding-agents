@@ -81,10 +81,18 @@ def _server(handler_cls):
         srv.server_close()
 
 
+def _drain(handler):
+    # Read the request body before answering. On Windows, closing a socket
+    # with unread data in its receive buffer sends a reset instead of a FIN,
+    # and the client can see WinError 10053 before it reads the status line.
+    handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
+
+
 class _Recorder(BaseHTTPRequestHandler):
     seen = []
 
     def _record(self):
+        _drain(self)
         type(self).seen.append(self.headers.get("Authorization"))
         self.send_response(200)
         self.send_header("Content-Length", "2")
@@ -103,6 +111,7 @@ def _redirecting_to_recorder(code=302):
     with _server(_Recorder) as (_, target):
         class Redirect(BaseHTTPRequestHandler):
             def do_POST(self):
+                _drain(self)
                 self.send_response(code)
                 self.send_header("Location", target + "/stolen")
                 self.send_header("Content-Length", "0")

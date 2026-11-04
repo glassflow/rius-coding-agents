@@ -28,6 +28,15 @@ in a folder that sends structure only it is never sent, and the trace keeps the
 `claude-code session` title. A session disabled mid-way closes under the
 name it had already sent, never one given after the disable.
 
+**A session you named files under that name.** The name you gave it (not the
+title Claude Code writes from your first prompt; a bare `/rename`, which makes
+Claude Code pick the name, counts as naming it) is also the agent the session's spans and
+heartbeats are sent for, so the Agents filter lists it instead of
+`claude-code`. It is set on the spans, not on the resource, so subagents keep
+their own agent type, and `RIUS_SERVICE_NAME` still sets `service.name`. A
+name is cut to 256 bytes, so a long name in a non-Latin script can be shorter than the trace title. A session that was never named, or one in a folder
+that sends structure only, files under the service name as before.
+
 **One generation per API response.** Claude Code writes a single model
 response as several transcript lines, one per content block (thinking, text,
 each tool call), and every line repeats the response's token usage. The
@@ -35,6 +44,25 @@ plugin groups the lines by their `message.id`, so each response is one `LLM`
 span with its usage counted once, and every tool it called hangs beneath it.
 A response whose lines arrive over several hook events is re-sent under the
 same span id; the backend keeps the latest copy.
+
+**Each compaction is a `CHAIN` span** with `gen_ai.operation.name` set to
+`compaction`, beside the generations in the turn it happened in. It carries
+the trigger (`auto` or `manual`), the tokens before and after, the tokens
+dropped, how many messages were kept, and the size of the summary in bytes
+(`rius.compaction.*`). It starts `durationMs` before Claude Code's boundary
+entry and ends at it. The summary text is content: it is sent only where
+content is, and capped like the rest. The first model call after a
+compaction has `gen_ai.conversation.compacted` set; later calls do not. The
+summary entry itself is not a turn. Claude Code writes it just after the
+boundary, so the span can be sent once without the summary and again, under
+the same span id, with it. Cursor compactions are not spans but a
+`rius.compaction` event on the `LLM` span they interrupted, with the next
+`LLM` span flagged the same way; see [Cursor](cursor.md).
+
+**Codex compactions are `CHAIN` spans too**, read from the `compacted` line
+in the rollout, with the same flag on the next model call. See
+[Rius for Codex](codex.md#compactions) for what they carry and what is not
+known.
 
 **Each generation says what its prompt held**, as sizes, in
 `rius.context.sizes` (the attribute the Rius SDKs send). The console's
@@ -79,6 +107,14 @@ submit, tool start) that the backend shows as in-progress, then replaces with
 the finished span once the corresponding end event arrives. A session that
 dies mid-run leaves those pending spans unresolved, which is what "the agent
 died while running" looks like in the UI.
+
+**A turn's last model call goes out with the turn.** Claude Code writes the
+final answer to the transcript a moment after the turn's Stop hook fires, so
+the export for Stop waits up to 2 seconds for it. The export runs in the
+background, so the wait never holds up the session. An answer that is still
+not written by then is sent at the next hook event, outside the closed turn.
+A prompt you queued while Claude worked ends the wait too, and keeps its own
+turn.
 
 They do not stay pending forever. The backend counts a trace on the Agents
 and Users tabs only once every span of it has finished, so a killed session

@@ -1,7 +1,8 @@
 """Codex rollout JSONL -> neutral Record objects.
 
 A rollout (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`) is one
-`{timestamp, type, payload}` object per line. Only the lines that say what
+`{timestamp, type, payload}` object per line (Codex's `RolloutLine`, whose
+item is flattened into it: a compaction is `type: "compacted"`). Only the lines that say what
 happened are turned into records; prompts Codex injects, world state and the
 like are skipped. Knows nothing about spans (that's codex_spans.py).
 """
@@ -24,6 +25,8 @@ TOOL_CALL = "tool_call"
 TOOL_OUTPUT = "tool_output"
 MCP_RESULT = "mcp_result"
 SUBAGENT_STARTED = "subagent_started"
+COMMAND_END = "command_end"
+COMPACTED = "compacted"
 
 
 class Record:
@@ -91,6 +94,33 @@ def _usage(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "output_tokens": _int(last.get("output_tokens")),
         "reasoning_output_tokens": _int(last.get("reasoning_output_tokens")),
         "context_window": _int(info.get("model_context_window")),
+        # What Codex writes when it re-counts its context without calling
+        # the model (right after a compaction, say): the size it estimates
+        # in `total_tokens`, and nothing used. No model call is behind it.
+        "local_estimate": _estimate(last),
+        "context_tokens": _int(last.get("total_tokens")),
+    }
+
+
+def _estimate(last: Dict[str, Any]) -> bool:
+    return (_int(last.get("total_tokens")) > 0 and not _int(last.get("input_tokens"))
+            and not _int(last.get("output_tokens")))
+
+
+def _compacted(p: Dict[str, Any]) -> Dict[str, Any]:
+    """A `compacted` line: Codex replaced the history. `message` is the
+    summary text (empty when the summary is not readable text); the ids are
+    strings, and `window_id` an older Codex wrote as a number is no id."""
+    record = p.get("latest_token_usage_record")
+    usage = record.get("usage") if isinstance(record, dict) else None
+    return {
+        "message": _text(p.get("message")),
+        "window_id": _text(p.get("window_id")),
+        "compaction_response_id": _text(p.get("compaction_response_id")),
+        # The last call's prompt size, as Codex stamped it on the line: what
+        # to go by when no token_count was seen before it.
+        "recorded_tokens": _int(usage.get("input_tokens")
+                                if isinstance(usage, dict) else None),
     }
 
 
@@ -123,6 +153,21 @@ def _subagent_started(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "agent_id": _text(p.get("agent_thread_id"))}
 
 
+def _command_end(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A command Codex ran for a tool call, as the codex-cli 0.162.1 rollouts
+    here show it. It names no call: the code mode `exec` tool runs its
+    commands through it, and the call's own output does not say how they
+    ended. `turn_id` and `started_at_ms` are kept when it has them."""
+    item = p.get("item")
+    if not isinstance(item, dict) or item.get("type") != "CommandExecution":
+        return None
+    code = item.get("exit_code")
+    if not isinstance(code, int) or isinstance(code, bool):
+        return None
+    return {"exit_code": code, "turn_id": _text(p.get("turn_id")),
+            "started_at_ms": _int(p.get("started_at_ms"))}
+
+
 _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]] = {
     "task_started": (TURN_START, lambda p: {"turn_id": _text(p.get("turn_id"))}),
     "task_complete": (TURN_END, _turn_end),
@@ -132,6 +177,7 @@ _EVENTS: Dict[str, Tuple[str, Callable[[Dict[str, Any]], Optional[Dict[str, Any]
     "token_count": (USAGE, _usage),
     "mcp_tool_call_end": (MCP_RESULT, _mcp_result),
     "sub_agent_activity": (SUBAGENT_STARTED, _subagent_started),
+    "item_completed": (COMMAND_END, _command_end),
 }
 
 
@@ -181,6 +227,8 @@ def _fields_for(line_type: str, payload: Dict[str, Any]):
         return SESSION, _session(payload)
     if line_type == "turn_context":
         return TURN_CONTEXT, _turn_context(payload)
+    if line_type == "compacted":
+        return COMPACTED, _compacted(payload)
     table = _EVENTS if line_type == "event_msg" else _ITEMS if line_type == "response_item" else {}
     kind, parse = table.get(_text(payload.get("type")), (None, None))
     if kind is None:

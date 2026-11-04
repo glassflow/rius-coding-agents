@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
-from . import agent, command_class, context_sizes, scrub
+from . import agent, command_class, context_sizes, scrub, session_name
+from . import _semconv_generated as semconv
 
 PROVIDER_NAME = agent.CLAUDE_CODE.provider
 
@@ -29,11 +32,33 @@ TITLE_MAX_CHARS = 200
 SUBAGENT_TOOL_NAMES = ("Agent", "Task")
 # The tools whose input is a shell command line (command_class.py).
 SHELL_TOOL_NAMES = ("Bash",)
+# The tool that loads an Agent Skill, its input `{"skill": <name>}`.
+SKILL_TOOL_NAMES = ("Skill",)
+
+# How the entry Claude Code writes after a skill loads opens: the folder the
+# skill resolved from, then the SKILL.md body. The entry names the call it
+# belongs to in `sourceToolUseID`.
+_SKILL_BASE_DIR = re.compile(r"Base directory for this skill: ([^\n]+)")
+# A skill's name as Claude Code spells it: `plugin:skill` or a bare name.
+# The model writes it and it is kept with capture off, so nothing longer or
+# shaped otherwise is kept.
+_SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+# Where Claude Code unpacks its built-in skills for one run: a temporary
+# copy, which the conventions say a source URI must not name.
+_BUNDLED_SKILLS_DIR = "bundled-skills"
 
 # Status.message for a failed tool when content capture is off. Spelled out
 # rather than a bare "tool error" so a viewer can tell "we deliberately did
 # not send you the detail" from "the detail went missing".
 TOOL_ERROR_WITHHELD = "tool error (detail withheld: content capture off)"
+
+# Claude Code stops the turn with a row of this apiError when compaction keeps
+# refilling the context. The row is a synthetic assistant message, so the span
+# built from it is marked as the failure it is.
+AUTOCOMPACT_THRASHING = "autocompact_thrashing"
+# Its message is one fixed sentence of about 260 bytes, which the tool-error
+# cap would cut in the middle of its advice.
+AUTOCOMPACT_MESSAGE_MAX_BYTES = 512
 
 # A failed tool's error message is one line that says why, capped here. The
 # backend groups errors by it, so the whole output (an 80-line file a grep
@@ -68,6 +93,21 @@ SYSTEM_TURN_PREFIXES = (
     "<user-prompt-submit-hook",
 )
 
+# The decision Claude Code made on a proposed tool call before running it,
+# as a span event in the shape of an OPEN OTel GenAI proposal (a
+# `gen_ai.tool.call.decision` event). Not merged upstream and not in the
+# vendored registry, so it is only sent when the user opts in
+# (Ctx.tool_decisions); the names follow the proposal until it lands.
+TOOL_CALL_DECISION_EVENT = "gen_ai.tool.call.decision"
+TOOL_CALL_DECISION_OUTCOME = "gen_ai.tool.call.decision.outcome"
+DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
+DECISION_REQUIRE_APPROVAL = "require_approval"
+
+# The generated semconv module has no constant for this operation name (it
+# only lists "compaction" as a key of its operation-to-kind map).
+COMPACTION_OPERATION = "compaction"
+
 _OPERATION_BY_KIND = {
     "AGENT": "invoke_agent",
     "LLM": "chat",
@@ -80,37 +120,44 @@ _OPERATION_BY_KIND = {
 # blocklist -- a pending span is emitted before work finishes and must never
 # leak content such as input.value / output.value.
 _PENDING_ALLOWED_KEYS = {
-    "openinference.span.kind",
-    "gen_ai.operation.name",
-    "gen_ai.provider.name",
-    "gen_ai.tool.name",
-    "session.id",
-    "glassflow.span.pending",
+    semconv.OPENINFERENCE_SPAN_KIND,
+    semconv.GEN_AI_OPERATION_NAME,
+    semconv.GEN_AI_PROVIDER_NAME,
+    semconv.GEN_AI_TOOL_NAME,
+    semconv.GEN_AI_TOOL_CALL_ID,
+    semconv.SESSION_ID,
+    semconv.RIUS_SPAN_PENDING,
     # Identity, not content: which named agent this is and where a turn's
     # text came from. The UI filters on these while the span is still
     # running, and neither can carry a prompt or a tool's output.
-    "gen_ai.agent.name",
-    "cc.turn.source",
-    "cc.subagent.id",
-    "cc.subagent.depth",
-    "codex.subagent.id",
+    semconv.GEN_AI_AGENT_NAME,
+    semconv.CC_TURN_SOURCE,
+    semconv.CC_SUBAGENT_ID,
+    semconv.CC_SUBAGENT_DEPTH,
+    semconv.CODEX_SUBAGENT_ID,
     # The session id a turn's conversation continued from, and the id it
     # runs under now (Claude Code moved the conversation). Ids, not content.
-    "cc.continued_from",
-    "cc.claude_session_id",
+    semconv.CC_CONTINUED_FROM,
+    semconv.CC_CLAUDE_SESSION_ID,
     # The signed-in member who approved the key (exporter._stamp_user).
     # Identity the workspace already holds, never content.
-    "user.id",
+    semconv.USER_ID,
     # A word from command_class.CLASSES ("test", "build"), never the
     # command: what a running shell call is doing.
-    "rius.command.class",
+    semconv.RIUS_COMMAND_CLASS,
 }
 
 
 def _filter_pending_attrs(attributes: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for k, v in attributes.items():
-        if k in _PENDING_ALLOWED_KEYS or k.startswith("gen_ai.request."):
+        if k in _PENDING_ALLOWED_KEYS:
+            out[k] = v
+        # The request prefix admits identity parameters only: a content key
+        # under it (gen_ai.request.messages, ...) stays off a pending span.
+        elif (k.startswith(semconv.GEN_AI_REQUEST_PREFIX)
+              and k not in semconv.CONTENT_ATTRIBUTES
+              and not k.startswith(semconv.CONTENT_ATTRIBUTE_PREFIXES)):
             out[k] = v
     return out
 
@@ -144,7 +191,7 @@ class Ctx:
 
     def __init__(self, session_id, cwd, git_branch, cc_version, service_name,
                  capture_content, max_attr_bytes, conversation_id="",
-                 continued_from=""):
+                 continued_from="", tool_decisions=False, agent_name=""):
         self.session_id = session_id
         # The conversation this session id carries on. It is the session id
         # itself unless Claude Code moved the conversation to a new id; the
@@ -158,6 +205,11 @@ class Ctx:
         self.service_name = service_name
         self.capture_content = capture_content
         self.max_attr_bytes = max_attr_bytes
+        # Whether tool spans carry TOOL_CALL_DECISION_EVENT events.
+        self.tool_decisions = tool_decisions
+        # The name the user gave the session, which every span of the main
+        # agent files under (session_name.py). build() keeps it current.
+        self.agent_name = agent_name
 
 
 class Span:
@@ -182,14 +234,16 @@ class Span:
 
 def _base_attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {
-        "openinference.span.kind": kind_oi,
-        "session.id": ctx.conversation_id,
+        semconv.OPENINFERENCE_SPAN_KIND: kind_oi,
+        semconv.SESSION_ID: ctx.conversation_id,
     }
     op = _OPERATION_BY_KIND.get(kind_oi)
     if op is not None:
-        attrs["gen_ai.operation.name"] = op
+        attrs[semconv.GEN_AI_OPERATION_NAME] = op
     if kind_oi in ("LLM", "TOOL", "AGENT"):
-        attrs["gen_ai.provider.name"] = PROVIDER_NAME
+        attrs[semconv.GEN_AI_PROVIDER_NAME] = PROVIDER_NAME
+    if ctx.agent_name:
+        attrs[semconv.GEN_AI_AGENT_NAME] = ctx.agent_name
     return attrs
 
 
@@ -211,6 +265,161 @@ def exit_code_of(output: str) -> Optional[int]:
     output: Claude Code reports no exit code for a command that succeeded."""
     match = _EXIT_CODE.match(output.lstrip().split("\n", 1)[0])
     return int(match.group(1)) if match else None
+
+
+def _call_id_attr(attrs: Dict[str, Any], tool_use_id: Any) -> None:
+    """The model's id for the call, which its tool_use and tool_result
+    share: an id, not content, so it is on the pending span too."""
+    if isinstance(tool_use_id, str) and tool_use_id:
+        attrs[semconv.GEN_AI_TOOL_CALL_ID] = tool_use_id
+
+
+def _skill_attrs(ctx: Ctx, attrs: Dict[str, Any], name: str,
+                 base_dir: str) -> None:
+    """The skill a Skill call loaded, and where it resolved from when
+    Claude Code said so. The name is identity, like a tool's; the folder is
+    a path on the developer's machine, so it is content."""
+    if name:
+        attrs[semconv.GEN_AI_SKILL_NAME] = name
+    uri = _skill_source_uri(base_dir)
+    if uri:
+        _content_attr(ctx, attrs, semconv.GEN_AI_SKILL_SOURCE_URI, uri)
+
+
+def _skill_name(tool_input: Any) -> str:
+    return _checked_skill_name(
+        tool_input.get("skill") if isinstance(tool_input, dict) else None)
+
+
+def _checked_skill_name(name: Any) -> str:
+    if isinstance(name, str) and _SKILL_NAME_RE.fullmatch(name):
+        return name
+    return ""
+
+
+def _loaded_skill_name(entry: Any, single: bool, source_path: str,
+                       offset: Any, tool_id: str) -> str:
+    """The skill a Skill call that succeeded loaded: the name Claude Code
+    resolved, which it writes on the result entry as
+    `toolUseResult.commandName`, or, on an entry without one (an older
+    version), the call's own input read back from the transcript."""
+    result = entry.raw.get("toolUseResult") if single else None
+    if isinstance(result, dict) and "commandName" in result:
+        return _checked_skill_name(result.get("commandName"))
+    return _skill_name_at(source_path, offset, tool_id)
+
+
+def _skill_name_at(source_path: str, offset: Any, tool_id: str) -> str:
+    """The skill named by the tool_use `tool_id` on the transcript line at
+    `offset`. The open tool keeps only where that line is, never the name:
+    the state file holds no tool input, whatever the capture."""
+    if not source_path or not isinstance(offset, int) or offset < 0:
+        return ""
+    from . import transcript
+    try:
+        with open(source_path, "rb") as fh:
+            fh.seek(offset)
+            entry = transcript.parse_line(fh.readline().decode("utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for block in entry.tool_uses() if entry is not None else []:
+        if block.get("id") == tool_id:
+            return _skill_name(block.get("input"))
+    return ""
+
+
+def _skill_source_uri(base_dir: str) -> str:
+    """`file:///...` for the folder a skill was loaded from, or "" for a
+    temporary copy or a path that is not absolute."""
+    if not base_dir:
+        return ""
+    for flavour in (pathlib.PurePosixPath, pathlib.PureWindowsPath):
+        path = flavour(base_dir)
+        if _BUNDLED_SKILLS_DIR in path.parts:
+            return ""
+        try:
+            uri = _file_uri(path)
+        except ValueError:
+            continue
+        if uri:
+            return uri
+    return ""
+
+
+def _file_uri(path: Any) -> str:
+    """What `PurePath.as_uri()` gives, which Python 3.14 deprecates, or ""
+    for a path that is not absolute."""
+    if not path.is_absolute():
+        return ""
+    drive = path.drive
+    if len(drive) == 2 and drive[1] == ":":
+        return "file:///" + drive + quote(path.as_posix()[2:])
+    if drive:
+        # A UNC share: its host is the URI's.
+        return "file:" + quote(path.as_posix())
+    return "file://" + quote(path.as_posix())
+
+
+def _skill_dirs(entries: List[Any]) -> Dict[str, str]:
+    """tool_use id -> the folder its skill resolved from, for the Skill
+    calls whose folder entry is in `entries`. It follows the tool_result a
+    line or two later; one read past it by a hook is never joined."""
+    out: Dict[str, str] = {}
+    for entry in entries:
+        call_id = entry.raw.get("sourceToolUseID")
+        if entry.kind != "user" or not entry.raw.get("isMeta") \
+                or not isinstance(call_id, str):
+            continue
+        match = _SKILL_BASE_DIR.match(entry.text())
+        if match:
+            out[call_id] = match.group(1).strip()
+    return out
+
+
+def tool_decision(raw: Dict[str, Any]):
+    """(outcome, asked) for the decision recorded on a tool_result entry,
+    or (None, False) when none is.
+
+    Claude Code 2.1.296 and later write `permissionDecision` on the entry
+    holding a call's result: `accept` or `reject`, and a `source` that
+    starts with `user` when the user was asked. Earlier versions mark only
+    a denial, with `toolDenialKind` (`user-rejected` when the user said no).
+    The text of the result is never read for it.
+    """
+    decision = raw.get("permissionDecision")
+    if isinstance(decision, dict):
+        source = decision.get("source")
+        asked = isinstance(source, str) and source.startswith("user")
+        outcome = {"accept": DECISION_ALLOW,
+                   "reject": DECISION_DENY}.get(decision.get("decision"))
+        return outcome, asked and outcome is not None
+    kind = raw.get("toolDenialKind")
+    if isinstance(kind, str) and kind:
+        return DECISION_DENY, kind.startswith("user")
+    return None, False
+
+
+def _decision_events(entry: Any, tool_use_id: str, tool: Dict[str, Any]) -> list:
+    """The decision events for one call: `require_approval` when the user
+    was asked, at the proposal, then `allow` there too, or `deny` when the
+    refusal came back. Claude Code does not record when the user answered,
+    so an outcome that would share the ask's time is put 1 ns after it, for
+    a backend that orders events by time."""
+    outcome, asked = tool_decision(entry.raw)
+    if outcome is None:
+        return []
+    identity = {semconv.GEN_AI_TOOL_CALL_ID: tool_use_id,
+                semconv.GEN_AI_TOOL_NAME: tool["tool_name"]}
+    events = []
+    if asked:
+        events.append((tool["start_ns"], TOOL_CALL_DECISION_EVENT, dict(
+            identity, **{TOOL_CALL_DECISION_OUTCOME: DECISION_REQUIRE_APPROVAL})))
+    at = entry.timestamp_ns if outcome == DECISION_DENY else tool["start_ns"]
+    if asked:
+        at = max(at, tool["start_ns"] + 1)
+    events.append((at, TOOL_CALL_DECISION_EVENT,
+                   dict(identity, **{TOOL_CALL_DECISION_OUTCOME: outcome})))
+    return events
 
 
 def _command_attrs(attrs: Dict[str, Any], tool: Dict[str, Any]) -> None:
@@ -280,8 +489,8 @@ def turn_source_for(text: str) -> str:
     stripped = (text or "").lstrip()
     for prefix in SYSTEM_TURN_PREFIXES:
         if stripped.startswith(prefix):
-            return "system"
-    return "user"
+            return semconv.CC_TURN_SOURCE_SYSTEM
+    return semconv.CC_TURN_SOURCE_USER
 
 
 def new_scope() -> dict:
@@ -293,7 +502,8 @@ def new_scope() -> dict:
     """
     return {"open_tools": {}, "open_turns": {}, "open_task_spans": [],
             "last_ns": 0, "started": False, "start_ns": 0, "open_gen": None,
-            "context": None}
+            "context": None, "open_compaction": None, "compact_next": False,
+            "last_compaction": None}
 
 
 def _generation_for(entry: Any, scope: dict, root_span_id: str,
@@ -329,6 +539,13 @@ def _generation_for(entry: Any, scope: dict, root_span_id: str,
         # What the prompt held when this call was made: sizes, not content.
         "context_sizes": context_sizes.snapshot(scope),
     }
+    if scope.get("compact_next"):
+        # The first call after a compaction, and no other: the later ones
+        # also run on the compacted context, but only this one is the call
+        # that first saw it. Kept in the persisted gen so a later hook
+        # re-emitting the span still says it.
+        gen["compacted"] = True
+        scope["compact_next"] = False
     scope["open_gen"] = gen
     return gen, True
 
@@ -387,17 +604,17 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
 
     attrs = _base_attrs(ctx, "LLM")
     if model:
-        attrs["gen_ai.request.model"] = model
-        attrs["gen_ai.response.model"] = model
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
+        attrs[semconv.GEN_AI_RESPONSE_MODEL] = model
     if "input_tokens" in usage:
-        attrs["gen_ai.usage.input_tokens"] = _input_tokens_inclusive(usage)
+        attrs[semconv.GEN_AI_USAGE_INPUT_TOKENS] = _input_tokens_inclusive(usage)
     if "output_tokens" in usage:
-        attrs["gen_ai.usage.output_tokens"] = usage["output_tokens"]
+        attrs[semconv.GEN_AI_USAGE_OUTPUT_TOKENS] = usage["output_tokens"]
     thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
     if isinstance(thinking, int):
-        attrs["gen_ai.usage.reasoning.output_tokens"] = thinking
+        attrs[semconv.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] = thinking
     if "cache_read_input_tokens" in usage:
-        attrs["gen_ai.usage.cache_read.input_tokens"] = usage["cache_read_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = usage["cache_read_input_tokens"]
     if "cache_creation_input_tokens" in usage:
         # Upstream OTel GenAI semconv renamed this attribute to
         # gen_ai.usage.cache_write.input_tokens (semantic-
@@ -411,20 +628,108 @@ def _generation_span(ctx: Ctx, trace_id: str, gen: dict, lines: List[Any],
         # compatibility fallback that will eventually be removed.
         # Revisit and drop the legacy key once every deployment is
         # known to be at 000013+.
-        attrs["gen_ai.usage.cache_write.input_tokens"] = usage["cache_creation_input_tokens"]
-        attrs["gen_ai.usage.cache_creation.input_tokens"] = usage["cache_creation_input_tokens"]
+        cache_write = usage["cache_creation_input_tokens"]
+        attrs[semconv.GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = cache_write
+        attrs[semconv.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = cache_write
     if stop_reason:
-        attrs["gen_ai.response.finish_reasons"] = [stop_reason]
+        attrs[semconv.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
+    if gen.get("compacted"):
+        attrs[semconv.GEN_AI_CONVERSATION_COMPACTED] = True
     if gen.get("context_sizes"):
         # Sizes, not content: sent whatever the capture setting.
-        attrs["rius.context.sizes"] = gen["context_sizes"]
-    _content_attr(ctx, attrs, "output.value",
-                  earlier_text + "".join(line.text() for line in lines))
+        attrs[semconv.RIUS_CONTEXT_SIZES] = gen["context_sizes"]
+    text = earlier_text + "".join(line.text() for line in lines)
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, text)
+
+    status_code, status_message, events = "OK", "", []
+    if any(line.api_error() == AUTOCOMPACT_THRASHING for line in lines):
+        # The stop has no hook and no span of its own: this row is all there
+        # is. Its text is Claude Code's message, but a later version may
+        # quote a path in it, so it follows the capture gate like a tool's.
+        status_code = "ERROR"
+        status_message = AUTOCOMPACT_THRASHING
+        if ctx.capture_content and text:
+            status_message = exportable(text, AUTOCOMPACT_MESSAGE_MAX_BYTES)
+        attrs[semconv.ERROR_TYPE] = AUTOCOMPACT_THRASHING
+        events.append((lines[-1].timestamp_ns, semconv.EXCEPTION_EVENT, {
+            semconv.EXCEPTION_TYPE: AUTOCOMPACT_THRASHING,
+            semconv.EXCEPTION_MESSAGE: status_message,
+        }))
 
     return Span(
         trace_id=trace_id, span_id=gen["span_id"],
         parent_span_id=gen["parent_span_id"], name=model or "assistant",
         kind_oi="LLM", start_ns=gen["start_ns"], end_ns=lines[-1].timestamp_ns,
+        attributes=attrs, status_code=status_code, status_message=status_message,
+        pending=False, events=events,
+    )
+
+
+def _count(value: Any) -> Optional[int]:
+    """`value` when it is a non-negative integer, else None: Claude Code's
+    metadata is not ours, and a size is never written as garbage."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _open_compaction(entry: Any, scope: dict, root_span_id: str,
+                     key_prefix: str) -> Dict[str, Any]:
+    """What a compact_boundary entry says, as plain JSON for the state file.
+
+    Sizes, ids and words only: the summary text is never kept, it is used the
+    moment its entry is read (see emit_entries).
+    """
+    meta = entry.compact_metadata()
+    attrs: Dict[str, Any] = {
+        semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
+        semconv.RIUS_COMPACTION_EXECUTOR: semconv.RIUS_COMPACTION_EXECUTOR_CLIENT,
+    }
+    if meta.get("trigger") in (semconv.RIUS_COMPACTION_TRIGGER_AUTO,
+                               semconv.RIUS_COMPACTION_TRIGGER_MANUAL):
+        attrs[semconv.RIUS_COMPACTION_TRIGGER] = meta["trigger"]
+    before, after = _count(meta.get("preTokens")), _count(meta.get("postTokens"))
+    if before is not None:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_BEFORE] = before
+    if after is not None:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_AFTER] = after
+    if before is not None and after is not None and before >= after:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_DROPPED] = before - after
+    preserved = meta.get("preservedMessages")
+    kept = preserved.get("uuids") if isinstance(preserved, dict) else None
+    if isinstance(kept, list):
+        attrs[semconv.RIUS_COMPACTION_MESSAGES_KEPT] = len(kept)
+    uuid = entry.uuid if isinstance(entry.uuid, str) else ""
+    if uuid:
+        attrs[semconv.RIUS_COMPACTION_ID] = uuid
+    # The boundary is written when the compaction is done, so it is the end.
+    duration_ms = _count(meta.get("durationMs")) or 0
+    return {
+        # The timestamp stands in for a missing uuid, so two boundaries
+        # never share an id.
+        "span_id": span_id_for(key_prefix + "compaction:"
+                               + (uuid or str(entry.timestamp_ns))),
+        "parent_span_id": _current_turn_parent(scope, root_span_id),
+        "start_ns": max(entry.timestamp_ns - duration_ms * 1_000_000, 0),
+        "end_ns": entry.timestamp_ns,
+        "attrs": attrs,
+    }
+
+
+def _compaction_span(ctx: Ctx, trace_id: str, rec: Dict[str, Any],
+                     summary: str) -> Span:
+    attrs = _base_attrs(ctx, "CHAIN")
+    attrs[semconv.GEN_AI_OPERATION_NAME] = COMPACTION_OPERATION
+    attrs.update(rec["attrs"])
+    if summary:
+        # A size, not content: sent whatever the capture setting. The text
+        # is content and goes through the same gate as every other.
+        attrs[semconv.RIUS_COMPACTION_SUMMARY_BYTES] = len(summary.encode("utf-8"))
+        _content_attr(ctx, attrs, semconv.RIUS_COMPACTION_SUMMARY_TEXT, summary)
+    return Span(
+        trace_id=trace_id, span_id=rec["span_id"],
+        parent_span_id=rec["parent_span_id"], name=COMPACTION_OPERATION,
+        kind_oi="CHAIN", start_ns=rec["start_ns"], end_ns=rec["end_ns"],
         attributes=attrs, status_code="OK", status_message="", pending=False,
     )
 
@@ -449,8 +754,43 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
     # One generation span per API response in this batch, emitted after the
     # loop so it carries every line of the response that has arrived.
     batch_gens: Dict[str, Any] = {}
+    # (record, summary text) per compaction touched in this batch, for the
+    # same reason: a boundary and its summary entry are separate lines.
+    batch_compactions: Dict[str, Any] = {}
+    skill_dirs = _skill_dirs(entries) if ctx.capture_content else {}
     for entry in entries:
-        if entry.kind == "user":
+        if entry.is_compact_boundary():
+            # Claude Code writes the boundary, then (a few lines later, with
+            # an EARLIER timestamp) the user entry holding the summary. A
+            # hook can read between the two, so the span is sent as soon as
+            # the boundary is seen, and again with the summary once that
+            # arrives: same id, start and end, which the backend collapses
+            # like a response that grows. The record waits in the state
+            # (sizes only) for its summary; a summary that never comes just
+            # leaves the span without summary attributes.
+            rec = _open_compaction(entry, scope, root_span_id, key_prefix)
+            if entry.timestamp_ns <= (scope.get("last_compaction") or 0):
+                # Read again (a copied history, a rewound offset), this one
+                # or an earlier one: the span went out the first time, and
+                # the call it flagged is past. A transcript runs forward in
+                # time, so the latest boundary's time covers them all.
+                continue
+            scope["last_compaction"] = entry.timestamp_ns
+            scope["open_compaction"] = rec
+            scope["compact_next"] = True
+            batch_compactions[rec["span_id"]] = (rec, "")
+        elif entry.is_compact_summary():
+            # Not a prompt: no turn, whatever promptId it carries. The
+            # context account still restarts from it.
+            context_sizes.user_text(scope, entry)
+            rec = scope.get("open_compaction")
+            if isinstance(rec, dict):
+                batch_compactions[rec["span_id"]] = (rec, entry.text())
+                scope["open_compaction"] = None
+            # Its timestamp predates the boundary's: leave the clock alone,
+            # or the first call after the compaction would start before it.
+            continue
+        elif entry.kind == "user":
             tool_results = entry.tool_results()
             if tool_results:
                 result_sizes = []
@@ -472,11 +812,19 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         scope["open_task_spans"].remove(open_tool["span_id"])
                     is_error = bool(tr.get("is_error"))
                     attrs = _base_attrs(ctx, "TOOL")
-                    attrs["gen_ai.tool.name"] = open_tool["tool_name"]
+                    attrs[semconv.GEN_AI_TOOL_NAME] = open_tool["tool_name"]
+                    _call_id_attr(attrs, tool_use_id)
                     _command_attrs(attrs, open_tool)
+                    if open_tool["tool_name"] in SKILL_TOOL_NAMES and not is_error:
+                        # A failed call (an unknown skill, a denial) loaded
+                        # nothing, whatever name the model gave it.
+                        _skill_attrs(ctx, attrs, _loaded_skill_name(
+                            entry, len(tool_results) == 1, source_path,
+                            open_tool.get("offset"), tool_use_id),
+                            skill_dirs.get(tool_use_id, ""))
                     secret_file = scrub.reads_secret_file(open_tool["input_json"])
-                    _content_attr(ctx, attrs, "input.value", open_tool["input_json"])
-                    _content_attr(ctx, attrs, "output.value", scrub.SECRET_FILE_MARKER
+                    _content_attr(ctx, attrs, semconv.INPUT_VALUE, open_tool["input_json"])
+                    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, scrub.SECRET_FILE_MARKER
                                   if secret_file else content_str)
                     status_code = "ERROR" if is_error else "OK"
                     # Status.message is content too: it is a line of the
@@ -485,6 +833,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # only is not the guarantee the README makes it out to be.
                     status_message = ""
                     events = []
+                    if ctx.tool_decisions and len(tool_results) == 1:
+                        # The entry's decision is this call's: Claude Code
+                        # writes none on an entry holding several results.
+                        events += _decision_events(entry, tool_use_id, open_tool)
                     if is_error:
                         error_type = tool_error_type(open_tool["tool_name"], content_str)
                         if not ctx.capture_content:
@@ -494,7 +846,7 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         else:
                             status_message = (scrub.scrub(tool_error_line(content_str))
                                               or error_type)
-                        attrs["error.type"] = error_type
+                        attrs[semconv.ERROR_TYPE] = error_type
                         code = exit_code_of(content_str)
                         if open_tool.get("command_class") and code is not None:
                             attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
@@ -502,8 +854,8 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # message, and only falls back to the status message
                         # without one.
                         events.append((entry.timestamp_ns, "exception", {
-                            "exception.type": error_type,
-                            "exception.message": status_message,
+                            semconv.EXCEPTION_TYPE: error_type,
+                            semconv.EXCEPTION_MESSAGE: status_message,
                         }))
                     out.append(Span(
                         trace_id=trace_id, span_id=open_tool["span_id"],
@@ -539,13 +891,13 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         # new session id, in the same trace. Kept with the
                         # turn so its finished row says so too.
                         scope["open_turns"][entry.prompt_id]["continued"] = {
-                            "cc.continued_from": ctx.continued_from,
-                            "cc.claude_session_id": ctx.session_id,
+                            semconv.CC_CONTINUED_FROM: ctx.continued_from,
+                            semconv.CC_CLAUDE_SESSION_ID: ctx.session_id,
                         }
                     attrs = _base_attrs(ctx, "CHAIN")
-                    attrs["cc.turn.source"] = source
+                    attrs[semconv.CC_TURN_SOURCE] = source
                     attrs.update(scope["open_turns"][entry.prompt_id].get("continued") or {})
-                    attrs["glassflow.span.pending"] = True
+                    attrs[semconv.RIUS_SPAN_PENDING] = True
                     out.append(Span(
                         trace_id=trace_id, span_id=turn_span_id, parent_span_id=root_span_id,
                         name="turn", kind_oi="CHAIN", start_ns=entry.timestamp_ns,
@@ -583,6 +935,9 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                     # kept as one word: the command itself is not.
                     "command_class": (command_class.of_input(block.get("input"))
                                       if tool_name in SHELL_TOOL_NAMES else None),
+                    # Where the tool_use line is, for a Skill call: its
+                    # finished span reads the skill's name back from there.
+                    "offset": entry.offset if tool_name in SKILL_TOOL_NAMES else -1,
                 }
                 if tool_name in SUBAGENT_TOOL_NAMES:
                     scope["open_task_spans"].append(tool_span_id)
@@ -602,9 +957,10 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
                         }
 
                 attrs = _base_attrs(ctx, "TOOL")
-                attrs["gen_ai.tool.name"] = tool_name
+                attrs[semconv.GEN_AI_TOOL_NAME] = tool_name
+                _call_id_attr(attrs, tool_id)
                 _command_attrs(attrs, scope["open_tools"][tool_id])
-                attrs["glassflow.span.pending"] = True
+                attrs[semconv.RIUS_SPAN_PENDING] = True
                 out.append(Span(
                     trace_id=trace_id, span_id=tool_span_id, parent_span_id=llm_span_id,
                     name=tool_name, kind_oi="TOOL", start_ns=entry.timestamp_ns,
@@ -614,6 +970,8 @@ def emit_entries(entries: List[Any], scope: dict, ctx: Ctx, trace_id: str,
 
         scope["last_ns"] = entry.timestamp_ns
 
+    for rec, summary in batch_compactions.values():
+        out.append(_compaction_span(ctx, trace_id, rec, summary))
     for gen, lines in batch_gens.values():
         earlier = _earlier_text(ctx, source_path, gen, lines)
         out.append(_generation_span(ctx, trace_id, gen, lines, earlier))
@@ -656,7 +1014,7 @@ def root_name(state: dict) -> str:
 def _pending_root(ctx: Ctx, trace_id: str, root_span_id: str, start_ns: int,
                   name: str) -> Span:
     attrs = _base_attrs(ctx, "AGENT")
-    attrs["glassflow.span.pending"] = True
+    attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(
         trace_id=trace_id, span_id=root_span_id, parent_span_id=None,
         name=name, kind_oi="AGENT", start_ns=start_ns, end_ns=start_ns,
@@ -682,6 +1040,8 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
 
     note_titles(state, ctx, titles or {})
     name = root_name(state)
+    agent_name = session_name.agent_name(state)
+    ctx.agent_name = agent_name
     if entries:
         # A resumed session carries on after an earlier SessionEnd closed it.
         state["finalized"] = False
@@ -689,15 +1049,18 @@ def build(entries: List[Any], state: dict, ctx: Ctx,
         state["root_started"] = True
         state["root_start_ns"] = entries[0].timestamp_ns
         state["root_name_sent"] = name
+        state["agent_name_sent"] = agent_name
         out.append(_pending_root(ctx, trace_id, root_span_id,
                                  entries[0].timestamp_ns, name))
     elif (state.get("root_started")
-          and name != state.get("root_name_sent", DEFAULT_ROOT_NAME)):
+          and (name != state.get("root_name_sent", DEFAULT_ROOT_NAME)
+               or agent_name != state.get("agent_name_sent", ""))):
         # Renamed, or capture turned off. Recorded even on a closed trace,
         # which the next SessionEnd re-closes under this name. An open one
         # gets a pending copy now: the same span id and start, so the
         # backend replaces the row it has rather than adding one.
         state["root_name_sent"] = name
+        state["agent_name_sent"] = agent_name
         if not state.get("finalized"):
             out.append(_pending_root(ctx, trace_id, root_span_id,
                                      state["root_start_ns"], name))
@@ -724,20 +1087,20 @@ def subagent_span(ctx: Ctx, trace_id: str, span_id: str, parent_span_id: str,
     attrs = _base_attrs(ctx, "AGENT")
     agent_type = meta.get("agentType") or ""
     if agent_type:
-        attrs["gen_ai.agent.name"] = agent_type
+        attrs[semconv.GEN_AI_AGENT_NAME] = agent_type
     model = meta.get("model") or ""
     if model:
-        attrs["gen_ai.request.model"] = model
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
     if agent_id:
-        attrs["cc.subagent.id"] = agent_id
-    attrs["cc.subagent.depth"] = depth
+        attrs[semconv.CC_SUBAGENT_ID] = agent_id
+    attrs[semconv.CC_SUBAGENT_DEPTH] = depth
     description = meta.get("description") or ""
     if description:
         _content_attr(ctx, attrs, "gen_ai.agent.description", description)
     if prompt:
-        _content_attr(ctx, attrs, "input.value", prompt)
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, prompt)
     if pending:
-        attrs["glassflow.span.pending"] = True
+        attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(
         trace_id=trace_id, span_id=span_id, parent_span_id=parent_span_id,
         name=agent_type or "subagent", kind_oi="AGENT", start_ns=start_ns,
@@ -752,9 +1115,9 @@ def finalize_turn(state: dict, ctx: Ctx, now_ns: int) -> List[Any]:
     trace_id = trace_id_for(ctx.conversation_id)
     for prompt_id, turn in list(state["open_turns"].items()):
         attrs = _base_attrs(ctx, "CHAIN")
-        attrs["cc.turn.source"] = turn.get("source") or "user"
+        attrs[semconv.CC_TURN_SOURCE] = turn.get("source") or semconv.CC_TURN_SOURCE_USER
         attrs.update(turn.get("continued") or {})
-        _content_attr(ctx, attrs, "input.value", turn.get("text", ""))
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, turn.get("text", ""))
         out.append(Span(
             trace_id=trace_id, span_id=turn["span_id"], parent_span_id=turn["parent_span_id"],
             name="turn", kind_oi="CHAIN", start_ns=turn["start_ns"], end_ns=now_ns,
@@ -770,11 +1133,12 @@ def _close_open_tools(scope: dict, ctx: Ctx, trace_id: str,
     mid-call) must still get a finished row: the backend counts a trace only
     when every one of its spans has one."""
     out: List[Span] = []
-    for tool in scope["open_tools"].values():
+    for tool_id, tool in scope["open_tools"].items():
         attrs = _base_attrs(ctx, "TOOL")
-        attrs["gen_ai.tool.name"] = tool["tool_name"]
+        attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
+        _call_id_attr(attrs, tool_id)
         _command_attrs(attrs, tool)
-        _content_attr(ctx, attrs, "input.value", tool.get("input_json", ""))
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, tool.get("input_json", ""))
         out.append(Span(
             trace_id=trace_id, span_id=tool["span_id"],
             parent_span_id=tool["parent_span_id"], name=tool["tool_name"],

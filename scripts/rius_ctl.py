@@ -383,8 +383,8 @@ def _reason_lines(cfg):
 def _print_status(session_id, cwd, home, inferred=False, debug=False):
     # Decide for the folder the hooks are handed, not the shell's spelling.
     typed_cwd = cwd
-    cwd = config.resolved(cwd) if cwd else cwd
-    cfg = config.resolve(session_id or "", cwd or "", os.environ, home)
+    cwd = config.resolved(cwd)
+    cfg = config.resolve(session_id or "", cwd, os.environ, home)
     # The exporter's sticky stop outranks the rules for this one session, so
     # without this the rules would say "on" for a session that sends nothing.
     stopped = bool(session_id) and state.load(session_id, home).get("content_stopped")
@@ -466,8 +466,6 @@ NO_HOOK_RAN = ("No Rius hook has traced this session yet. If that is still "
 
 
 def _cwd_line(cwd):
-    if not cwd:
-        return "cwd: <unknown, default>"
     hooks_see = config.resolved(cwd)
     if hooks_see == cwd:
         return "cwd: %s" % cwd
@@ -664,7 +662,6 @@ def _date(timestamp):
 
 
 def _run_account_action(action, home, cwd, env_flag):
-    cwd = cwd or os.getcwd()
     handlers = {"login": lambda: _login(home, cwd, env_flag),
                 "login-wait": lambda: _login_wait(home, cwd),
                 "logout": lambda: _logout(home, cwd),
@@ -748,7 +745,9 @@ def _dispatch(argv, home):
     except ArgumentError as exc:
         print("%s Nothing was changed." % exc)
         return
-    session_id, cwd = flags.get("--session"), flags.get("--cwd")
+    # A slash command runs in the session's folder and cannot pass $PWD:
+    # Claude Code refuses to check a shell variable in manual permission mode.
+    session_id, cwd = flags.get("--session"), flags.get("--cwd") or os.getcwd()
     env_flag = flags.get("--env")
 
     if action in HOOKS_ACTIONS:
@@ -782,11 +781,11 @@ def _dispatch(argv, home):
         config.set_session_override(session_id, home, None)
         print("Session override cleared for session %s." % session_id)
     elif action == "enable-here":
-        _enable_here(cwd or os.getcwd(), home, False)
+        _enable_here(cwd, home, False)
     elif action == "content-on-here":
-        _enable_here(cwd or os.getcwd(), home, True)
+        _enable_here(cwd, home, True)
     elif action == "disable-here":
-        _disable_here(cwd or os.getcwd(), home)
+        _disable_here(cwd, home)
     elif action == "status":
         _print_status(session_id, cwd, home, inferred=inferred,
                       debug=bool(flags.get("--debug")))

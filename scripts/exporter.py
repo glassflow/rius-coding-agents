@@ -16,9 +16,10 @@ from typing import Mapping
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rius_cc import (agent, codex_session, config, continuation,  # noqa: E402
-                     cursor_export, cursor_spans, log as rius_log, notice,
-                     otlp, platform_compat, spans, state, subagents,
-                     transcript)
+                     cursor_export, cursor_spans, final_answer,
+                     log as rius_log, notice, otlp, platform_compat, spans,
+                     state, subagents, transcript)
+from rius_cc import _semconv_generated as semconv, distro  # noqa: E402
 
 
 # A 5xx or a transport failure may well clear up, so the same lines are
@@ -30,9 +31,10 @@ MAX_CONSECUTIVE_EXPORT_FAILURES = 5
 
 # Events after which nothing else will run for this session. Losing the lock
 # here means finalize_session never happens and the root span (plus any open
-# turn) stays pending forever, so these wait briefly for it.
+# turn) stays pending forever, so these wait briefly for it, outlasting a
+# Stop that holds the lock while it waits for the turn's final answer.
 FINAL_EVENTS = ("Stop", "SessionEnd")
-FINAL_EVENT_LOCK_TIMEOUT_S = 2.0
+FINAL_EVENT_LOCK_TIMEOUT_S = 2.0 + final_answer.WAIT_S
 
 # A session whose trace is still open this long after it was last seen, and
 # whose Claude Code process and pinger are both gone, is taken to be dead.
@@ -195,7 +197,7 @@ def _stamp_user(out, cfg) -> None:
     if not cfg.user_id:
         return
     for span in out:
-        span.attributes.setdefault("user.id", cfg.user_id)
+        span.attributes.setdefault(semconv.USER_ID, cfg.user_id)
 
 
 def _ship(out, resource_attrs, st, new_offset, session_id, home, cfg,
@@ -244,6 +246,8 @@ def _ctx(st, session_id, cfg, cwd, git_branch="", cc_version="",
         max_attr_bytes=cfg.max_attr_bytes,
         conversation_id=st.get("conversation") or "",
         continued_from=st.get("continued_from") or "",
+        tool_decisions=cfg.tool_decisions,
+        agent_name=st.get("agent_name_sent") or "",
     )
 
 
@@ -271,7 +275,8 @@ def _adopted_subagents(st, ctx, cfg, home, event, now_ns, final):
             cc_version=ctx.cc_version, service_name=ctx.service_name,
             capture_content=ctx.capture_content,
             max_attr_bytes=ctx.max_attr_bytes,
-            conversation_id=ctx.conversation_id)
+            conversation_id=ctx.conversation_id,
+            tool_decisions=ctx.tool_decisions, agent_name=ctx.agent_name)
         sub_dir = subagents.dir_for(item.get("transcript_path") or "", old_id)
         try:
             if not final:
@@ -303,13 +308,13 @@ def _on_shipped(session_id, home, st, saves):
 
 
 def _resource_attrs(cfg, instance_id, cwd, version="", git_branch=""):
-    prefix = agent.active().attr_prefix
     return {
-        "service.name": cfg.service_name,
-        "service.instance.id": instance_id,
-        prefix + "version": version,
-        prefix + "cwd": cwd,
-        prefix + "git_branch": git_branch,
+        semconv.SERVICE_NAME: cfg.service_name,
+        semconv.SERVICE_INSTANCE_ID: instance_id,
+        semconv.SERVICE_VERSION: version,
+        semconv.PROCESS_WORKING_DIRECTORY: cwd,
+        semconv.VCS_REF_HEAD_NAME: git_branch,
+        **distro.resource_attributes(),
     }
 
 
@@ -444,8 +449,35 @@ def _drop_copied_history(st, entries):
     return entries
 
 
+def _wait_for_turn_end(st, prompt_id, session_id, transcript_path, home, cfg):
+    started = time.monotonic()
+    found = final_answer.wait(transcript_path, st, prompt_id)
+    _log(home, cfg, "session %s: end of turn %s after %.2fs"
+         % (session_id, "read" if found else "not written yet",
+            time.monotonic() - started))
+
+
+def _read_new_lines(transcript_path, offset, end=None):
+    stats, titles = {}, {}
+    entries, new_offset = transcript.read_from(
+        transcript_path, offset, stats=stats, titles=titles, end=end)
+    return entries, new_offset, stats, titles
+
+
+def _read_to_turn_end(st, prompt_id, transcript_path):
+    """What a Stop reads: no further than the next turn's prompt, which the
+    next hook opens."""
+    offset = st.get("offset", 0)
+    entries, new_offset, stats, titles = _read_new_lines(transcript_path,
+                                                         offset)
+    cut = final_answer.next_turn(entries, st, prompt_id)
+    if cut == len(entries):
+        return entries, new_offset, stats, titles
+    return _read_new_lines(transcript_path, offset, end=entries[cut].offset)
+
+
 def _run_session(event, cfg, session_id, cwd, transcript_path, home,
-                 instance_id) -> int:
+                 instance_id, prompt_id="") -> int:
     block_timeout = (FINAL_EVENT_LOCK_TIMEOUT_S
                      if event in FINAL_EVENTS else 0.0)
     with state.session_lock(session_id, home,
@@ -483,11 +515,15 @@ def _run_session(event, cfg, session_id, cwd, transcript_path, home,
             state.save(session_id, home, st)
         instance_id = stored
 
-        read_stats = {}
-        titles = {}
-        entries, new_offset = transcript.read_from(
-            transcript_path, st.get("offset", 0), stats=read_stats,
-            titles=titles)
+        if event == "Stop":
+            _wait_for_turn_end(st, prompt_id, session_id, transcript_path,
+                               home, cfg)
+            entries, new_offset, read_stats, titles = _read_to_turn_end(
+                st, prompt_id, transcript_path)
+        else:
+            entries, new_offset, read_stats, titles = _read_new_lines(
+                transcript_path, st.get("offset", 0))
+        final_answer.note(st, entries)
         _note_skipped_lines(home, cfg, session_id, st, read_stats)
         if entries and not st.get("continuation_checked"):
             _link(st, session_id, transcript_path, home, cfg, final=True)
@@ -721,8 +757,10 @@ def run(event: str, payload: dict, env: Mapping[str, str], home: str,
             result = _run_codex_session(event, cfg, payload, home,
                                         instance_id)
         else:
-            result = _run_session(event, cfg, session_id, cwd,
-                                  transcript_path, home, instance_id)
+            prompt_id = payload.get("prompt_id")
+            result = _run_session(
+                event, cfg, session_id, cwd, transcript_path, home,
+                instance_id, prompt_id if isinstance(prompt_id, str) else "")
         if event == "SessionStart" and cfg.enabled and cfg.api_key:
             # After this session's own export: by then it has taken over any
             # conversation it continues, so that one's root is not swept.

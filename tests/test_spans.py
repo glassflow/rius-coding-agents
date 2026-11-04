@@ -1,6 +1,7 @@
 import pytest
 
 from rius_cc import spans, transcript
+from rius_cc import _semconv_generated as semconv
 
 
 def _ctx(session_id):
@@ -178,14 +179,14 @@ def test_pending_spans_never_carry_content(fixtures_dir):
         if s.pending:
             assert "input.value" not in s.attributes
             assert "output.value" not in s.attributes
-            assert s.attributes["glassflow.span.pending"] is True
+            assert s.attributes["rius.span.pending"] is True
 
 
 def test_pending_allowlist_strips_cache_usage_keys():
     # Pending spans carry identity attributes only -- neither the current
     # nor the legacy cache-usage key belongs on one.
     attrs = {
-        "glassflow.span.pending": True,
+        "rius.span.pending": True,
         "session.id": "s1",
         "gen_ai.usage.cache_write.input_tokens": 200,
         "gen_ai.usage.cache_creation.input_tokens": 200,
@@ -195,6 +196,16 @@ def test_pending_allowlist_strips_cache_usage_keys():
     assert "gen_ai.usage.cache_write.input_tokens" not in filtered
     assert "gen_ai.usage.cache_creation.input_tokens" not in filtered
     assert "gen_ai.usage.cache_read.input_tokens" not in filtered
+
+
+def test_pending_allowlist_keeps_request_content_keys_off():
+    # The gen_ai.request. prefix admits identity parameters, never a content
+    # key the registry files under it.
+    content = sorted(k for k in semconv.CONTENT_ATTRIBUTES
+                     if k.startswith(semconv.GEN_AI_REQUEST_PREFIX))
+    assert content
+    attrs = {"gen_ai.request.model": "claude", **{k: "x" for k in content}}
+    assert spans._filter_pending_attrs(attrs) == {"gen_ai.request.model": "claude"}
 
 
 def test_capture_content_false_strips_content(fixtures_dir):

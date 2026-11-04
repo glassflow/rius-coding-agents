@@ -4,6 +4,6 @@ disable-model-invocation: true
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" on:*)
 ---
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" on --session ${CLAUDE_SESSION_ID} --cwd "$PWD"`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" on --session ${CLAUDE_SESSION_ID}`
 
 Report the output above to the user verbatim. Do not add interpretation.

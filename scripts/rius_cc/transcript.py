@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 CONVERSATIONAL = ("user", "assistant")
 
+# The one system record that is read: Claude Code writes it when it compacts
+# the context, and spans.py turns it into a compaction span. The rest of its
+# system records (hook results, turn durations, ...) stay skipped.
+COMPACT_BOUNDARY_SUBTYPE = "compact_boundary"
+
 # The records Claude Code names a session with, and the key holding the name:
 # "custom" is /rename, --name or a hook's sessionTitle; "ai" is the summary it
 # writes of the first prompt. Both are rewritten throughout the session.
@@ -100,6 +105,23 @@ class Entry:
             return mid
         return self.uuid
 
+    def is_compact_boundary(self) -> bool:
+        return (self.kind == "system"
+                and self.raw.get("subtype") == COMPACT_BOUNDARY_SUBTYPE)
+
+    def is_compact_summary(self) -> bool:
+        """The user entry that holds a compaction's summary text."""
+        return self.kind == "user" and bool(self.raw.get("isCompactSummary"))
+
+    def api_error(self) -> str:
+        """Claude Code's name for the stop it wrote this row for, else ""."""
+        value = self.raw.get("apiError")
+        return value if isinstance(value, str) else ""
+
+    def compact_metadata(self) -> Dict[str, Any]:
+        meta = self.raw.get("compactMetadata")
+        return meta if isinstance(meta, dict) else {}
+
     def tool_uses(self) -> List[Dict[str, Any]]:
         return self._blocks("tool_use")
 
@@ -131,7 +153,9 @@ def parse_line_ex(line: str) -> Tuple[Optional[Entry], Optional[str]]:
         return None, "not valid JSON"
     if not isinstance(raw, dict):
         return None, "not a JSON object"
-    if raw.get("type") not in CONVERSATIONAL:
+    if raw.get("type") not in CONVERSATIONAL and not (
+            raw.get("type") == "system"
+            and raw.get("subtype") == COMPACT_BOUNDARY_SUBTYPE):
         return None, None          # normal: summary, mode, file-history, ...
     if "timestamp" not in raw or "uuid" not in raw:
         return None, "conversational line with no timestamp or uuid"
@@ -161,8 +185,10 @@ def title_record(line: str) -> Optional[Tuple[str, str]]:
 
 
 def read_from(path: str, offset: int, stats: Optional[dict] = None,
-              titles: Optional[dict] = None) -> Tuple[List[Entry], int]:
-    """Read complete lines from `offset`. Returns (entries, new_offset).
+              titles: Optional[dict] = None,
+              end: Optional[int] = None) -> Tuple[List[Entry], int]:
+    """Read complete lines from `offset`, up to `end` if given. Returns
+    (entries, new_offset).
 
     A trailing partial line is left unconsumed -- the exporter races the writer,
     and half a JSON object must not advance the offset past itself.
@@ -195,7 +221,7 @@ def read_from(path: str, offset: int, stats: Optional[dict] = None,
     try:
         with open(path, "rb") as fh:
             fh.seek(offset)
-            buf = fh.read()
+            buf = fh.read() if end is None else fh.read(max(0, end - offset))
     except OSError:
         return finish([], offset)
     start = 0

@@ -1,6 +1,6 @@
 import pytest
 
-from rius_cc import cursor_events, cursor_spans, otlp, spans
+from rius_cc import cursor_events, cursor_spans, distro, otlp, spans
 
 from .cursor_fixtures import BASE_NS, STEP_NS, spool
 
@@ -93,6 +93,10 @@ def test_one_llm_span_per_generation_with_model_and_no_tokens(tmp_path):
     assert (first.start_ns, first.end_ns) == (_at(1), _at(13))
     assert second.attributes["cursor.context.context_tokens"] == 108800
     assert second.attributes["cursor.context.context_window_size"] == 128000
+    # Cursor reports a whole 85; the registry types it double, so it is sent
+    # as 85.0 (an OTLP doubleValue), not intValue.
+    percent = second.attributes["cursor.context.context_usage_percent"]
+    assert percent == 85 and isinstance(percent, float)
     assert not any(k.startswith("gen_ai.usage.") for s in llms for k in s.attributes)
 
 
@@ -139,7 +143,7 @@ def test_unfinished_work_is_pending_without_content(tmp_path):
     assert {s.name for s in out} == {cursor_spans.DEFAULT_ROOT_NAME, "turn", "Shell"}
     for s in out:
         assert s.pending and s.status_code == "UNSET"
-        assert s.attributes["glassflow.span.pending"] is True
+        assert s.attributes["rius.span.pending"] is True
         assert "input.value" not in s.attributes
 
 
@@ -214,8 +218,10 @@ def test_resource_attributes(tmp_path):
     events = cursor_events.read_conversation(str(tmp_path), cid)
     assert cursor_spans.resource_attributes(events, "inst-1") == {
         "service.name": "cursor", "service.instance.id": "inst-1",
-        "cursor.version": "2026.08.27", "cursor.cwd": "/Users/dev/acme-api",
-        "cursor.git_branch": "fix/invoice-rounding"}
+        "service.version": "2026.08.27", "process.working_directory": "/Users/dev/acme-api",
+        "vcs.ref.head.name": "fix/invoice-rounding",
+        "telemetry.distro.name": "rius-coding-agents",
+        "telemetry.distro.version": distro.version()}
 
 
 def test_spans_encode_and_decode_as_otlp(tmp_path):
@@ -231,3 +237,7 @@ def test_spans_encode_and_decode_as_otlp(tmp_path):
     assert len(decoded) == len(out)
     shell = next(s for s in decoded if s.name == "Shell")
     assert shell.status.code == 2
+    llm = next(s for s in decoded if s.name == "gpt-5.1-codex")
+    percent = next(a.value for a in llm.attributes
+                   if a.key == "cursor.context.context_usage_percent")
+    assert percent.WhichOneof("value") == "double_value"

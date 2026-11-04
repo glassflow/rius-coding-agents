@@ -148,3 +148,31 @@ def test_tool_use_and_result_blocks(fixtures_dir):
 def test_text_concatenates_text_blocks(fixtures_dir):
     entries, _ = transcript.read_from(str(fixtures_dir / "simple.jsonl"), 0)
     assert entries[1].text() == "hi there"
+
+
+def test_a_compact_boundary_is_read_and_other_system_records_are_not(fixtures_dir):
+    entries, _ = transcript.read_from(str(fixtures_dir / "compaction.jsonl"), 0)
+    boundaries = [e for e in entries if e.is_compact_boundary()]
+    assert [e.uuid for e in boundaries] == ["b1", "b2"]
+    assert boundaries[0].kind == "system"
+    assert boundaries[0].timestamp_ns == 1790762400000000000 + 630 * 1_000_000_000
+    assert boundaries[0].compact_metadata()["preTokens"] == 150000
+    # the summary is a user entry that says what it is; the attachment line
+    # in between is not an entry at all
+    assert [e.uuid for e in entries if e.is_compact_summary()] == ["s1", "s2"]
+    assert [e.kind for e in entries].count("system") == 2
+    assert "t1" not in [e.uuid for e in entries]
+
+    other = ('{"type":"system","subtype":"turn_duration","uuid":"x",'
+             '"timestamp":"2026-09-30T10:00:00.000Z"}')
+    assert transcript.parse_line_ex(other) == (None, None)
+
+
+def test_a_boundary_with_no_timestamp_is_counted_as_skipped():
+    entry, reason = transcript.parse_line_ex(
+        '{"type":"system","subtype":"compact_boundary","uuid":"b"}')
+    assert entry is None and reason
+    entry, _ = transcript.parse_line_ex(
+        '{"type":"system","subtype":"compact_boundary","uuid":"b",'
+        '"timestamp":"2026-09-30T10:00:00.000Z","compactMetadata":[1]}')
+    assert entry.compact_metadata() == {}

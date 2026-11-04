@@ -23,6 +23,7 @@ waterfall that fills in while the session is still running.
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425cc7?style=flat-square&logo=opentelemetry&logoColor=white)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Zero runtime deps](https://img.shields.io/badge/dependencies-zero-6b7280?style=flat-square)
+[![Rius MCP connector](https://glama.ai/mcp/connectors/ai.glassflow/rius/badges/score.svg)](https://glama.ai/mcp/connectors/ai.glassflow/rius)
 
 <!-- SCREENSHOT SLOT: a Claude Code session's waterfall in the Rius console,
      captured on production with the workspace name masked. Save it as
@@ -75,7 +76,8 @@ capped at 32 KB.
 | Field | Example | Sent |
 |---|---|---|
 | `service.name`, `service.instance.id` | `claude-code`, a random id per session | always |
-| `cc.version`, `cc.cwd`, `cc.git_branch` | `2.1.289`, `/Users/ana/src/shop` (can include your user name), `main` | always |
+| `service.version`, `process.working_directory`, `vcs.ref.head.name` | Claude Code's version `2.1.289`, the folder `/Users/ana/src/shop` (can include your user name), the branch `main` | always |
+| `telemetry.distro.name`, `telemetry.distro.version` | `rius-coding-agents`, the plugin's version: tells Rius these spans come from this plugin | always (the version, when the plugin's manifest can be read) |
 | span name, ids, start and end time, status | trace and span ids are hashes of the session id | always |
 | `session.id`, `cc.claude_session_id`, `cc.continued_from` | Claude Code session ids | always |
 | `user.id` | the email you signed in with at `/rius:login`, so the console can list your sessions; none for a key stored with `use-key` | always |
@@ -83,15 +85,18 @@ capped at 32 KB.
 | `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` | `claude-opus-5-5`, `["tool_use"]` | always |
 | `gen_ai.usage.*` | input, output, reasoning, cache read and cache write token counts | always |
 | `rius.context.sizes` | byte sizes of the prompt by role and tool, no text | always |
-| `gen_ai.tool.name` | `Bash`, `mcp__github__create_issue` | always |
-| `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error` | always |
+| `gen_ai.tool.name`, `gen_ai.tool.call.id` | `Bash`, `mcp__github__create_issue`; the model's id for the call | always |
+| `gen_ai.skill.name` | `superpowers:systematic-debugging`: the Agent Skill a `Skill` call loaded | always |
+| `error.type`, `exception.type` | `Bash.exit_1`, `Read.tool_error`, `autocompact_thrashing`: Claude Code stopped the turn because compaction kept refilling the context | always |
 | `rius.command.class`, `process.exit.code` | `test`, `1`: the kind of command a shell call ran (`test`, `build`, `lint`, `package`, `git` or `other`), worked out on your machine, and its exit code when known. The command is not sent | always |
 | `gen_ai.agent.name`, `cc.subagent.id`, `cc.subagent.depth`, `cc.turn.source` | `Explore`, `user` | always |
-| `glassflow.span.pending` | `true` while a span is still running | always |
+| `rius.span.pending` | `true` while a span is still running | always |
 | `input.value`, `output.value` | prompt, reply, tool input and output | content mode |
 | `gen_ai.agent.description` | a subagent's description | content mode |
+| `gen_ai.skill.source.uri` | `file:///Users/ana/.claude/skills/review`: the folder a skill loaded from, when Claude Code names it (not for its built-in skills, which it unpacks to a temporary folder) | content mode |
 | session span name | the session title instead of `claude-code session` | content mode |
-| `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)` | content mode |
+| `gen_ai.agent.name` on the session's own spans | the name you gave the session with `/rename` or `claude --name`, so it files under that agent instead of `claude-code` (the title Claude Code writes from your first prompt is not used; a bare `/rename`, which makes Claude Code pick the name, counts as naming it) | content mode |
+| `exception.message`, failed tool status | one scrubbed line of the failing output; otherwise `tool error (detail withheld: content capture off)`. For `autocompact_thrashing`, Claude Code's message; otherwise just `autocompact_thrashing` | content mode |
 
 The plugin sends token counts. Rius prices them at API rates, so the cost in
 the console isn't what you pay on a Pro or Max subscription.
@@ -249,6 +254,40 @@ auto-update**, so Claude Code keeps the plugin updated from then on.
 [How it works](docs/how-it-works.md) has the span tree, how subagents are
 followed, the heartbeat, and why generation durations run long.
 
+## Context warnings
+
+Rius also tells you in Claude Code when a session's context is filling up.
+You see one line the first time the context passes 70% of the model's
+window, and one more the first time it passes 90% of a window larger than
+200k:
+
+```
+Context is 72% full (144k of 200k). Quality may drop; consider /compact or a new session.
+```
+
+After a compaction you see one line with the size it was compacted from:
+
+```
+Compacted from 168k tokens. Check that instructions you rely on are still followed.
+```
+
+(If the compaction is only noticed after the next reply, the line gives the
+size that reply was sent with, for example "Compacted 168k to 73k tokens".)
+
+Both are computed on your machine from the end of the session's transcript,
+shown to you only (they are never sent to the model), and need no network or
+tracing: they work in a folder where tracing is off, but, like every Rius
+hook, not before you have run `/rius:login`. A compaction starts the
+70% and 90% lines over. The window comes from a table of the models Rius
+knows, and a session on any other model gets no warning. Claude Code records
+the same model id for a 200k and a 1M session, so Rius assumes 200k until the
+model is requested with `[1m]` or the context passes 200k; a 1M session can
+therefore get the 70% line once between 140k and 200k. Because a session
+on the standard window compacts itself at about 167k, the 90% line is only
+shown once a window above 200k is known, so a 1M session on a plain id is not
+told it is 90% full at 180k. Set `RIUS_CONTEXT_WARN=0` to
+turn both lines off.
+
 ## Enabling a folder
 
 Tracing defaults to off everywhere. To turn it on for the folder you're
@@ -368,6 +407,8 @@ so in one line, and the session's start is logged in `~/.claude/rius/log/`.
 | `RIUS_CLAUDE_ENABLED` | unset | `false` turns tracing off, over every path rule; only `/rius:on` beats it for one session. `true` is ignored: run `/rius:enable-here` to trace a folder. |
 | `RIUS_CAPTURE_CONTENT` | unset | Can only lower capture. `false` sends structure only from every folder, whatever it chose (a failed tool's status reads `tool error (detail withheld: content capture off)`). `true` is ignored: run `/rius:enable-content-here` in a folder to send its content. |
 | `RIUS_CLAUDE_MAX_ATTR_BYTES` | `32768` | Per-value truncation cap for content attributes, so a large file read doesn't break the export. It can only be lowered. Truncated values carry an explicit `…[truncated N bytes]` marker. |
+| `RIUS_CONTEXT_WARN` | on | `0`, `false` or `off` turns off the [context warnings](#context-warnings) and the line after a compaction. |
+| `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS` | `false` | `true` adds a `gen_ai.tool.call.decision` event to each tool span whose call Claude Code allowed, denied, or asked you about before running it (`allow`, `deny`, `require_approval`), with the call's id and tool name. It follows an OTel GenAI proposal that is not final, so the names may change. No content; the environment may turn it on because it neither starts tracing nor sends more content. |
 | `RIUS_CLAUDE_DEBUG` | `false` | Verbose logging to `~/.claude/rius/log/`, including the detached exporter's and heartbeat pinger's own stderr (`spawn.log`). |
 
 Unhandled exceptions are written to `~/.claude/rius/log/` **regardless of
@@ -400,7 +441,8 @@ MCP entry stays production; add the local one with
 ## Asking Claude about your traces
 
 The plugin bundles the Rius MCP server as `rius`, so you can query the
-traces it produces from inside Claude Code. It connects to
+traces it produces from inside Claude Code. The same server is listed in the
+official MCP registry as `ai.glassflow/rius`. It connects to
 `https://mcp.eu.console.rius-glassflow.com/mcp` and signs in with Claude
 Code's own MCP OAuth, separately from `/rius:login`:
 
@@ -485,6 +527,24 @@ and more. Anything that already emits OpenTelemetry, whether through
 a plain [OTel SDK](https://docs.glassflow.ai/rius/interoperability/otel-sdks)
 or a [Collector](https://docs.glassflow.ai/rius/interoperability/collector),
 can send to Rius over OTLP.
+
+## Skills
+
+Agent skills that work in any coding agent that reads `SKILL.md` (Claude
+Code, Codex, Cursor and others), installed with the
+[`skills` CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add glassflow/rius-coding-agents
+```
+
+| Skill | What it does |
+|---|---|
+| [`agent-observability`](.agents/skills/agent-observability/SKILL.md) | Adds Rius to an AI agent or LLM app: installs the Python or TypeScript SDK, wires in the API key, and checks the first trace in the console or over MCP |
+| [`coding-agent-observability`](.agents/skills/coding-agent-observability/SKILL.md) | Sets up Rius for Claude Code, Codex or Cursor: installs this plugin, signs in, and shows where each session's trace, tokens and cost appear, per developer and per session |
+
+The skills live in `.agents/skills/`, not `skills/`, so the plugins above
+don't load them: install them with the command above.
 
 ## Documentation
 

@@ -7,7 +7,7 @@ allowed-tools:
   - Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login-wait)
 ---
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login --cwd "$PWD" -- '$ARGUMENTS'`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" login -- '$ARGUMENTS'`
 
 Report the output above to the user verbatim. Do not add interpretation.
 

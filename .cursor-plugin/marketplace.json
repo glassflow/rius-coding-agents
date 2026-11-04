@@ -4,14 +4,14 @@
     "name": "GlassFlow"
   },
   "metadata": {
-    "description": "Rius observability for coding agents"
+    "description": "Cursor plugin (beta) that streams your agent sessions to Rius as OpenTelemetry traces: prompts, model answers, tool calls and subagents."
   },
   "plugins": [
     {
       "name": "rius",
       "source": "./",
-      "description": "Stream Cursor agent sessions to Rius as OTLP GenAI traces (beta)",
-      "version": "0.6.1"
+      "description": "Cursor plugin (beta) that streams your agent sessions to Rius as OpenTelemetry traces: prompts, model answers, tool calls and subagents.",
+      "version": "0.8.2"
     }
   ]
 }

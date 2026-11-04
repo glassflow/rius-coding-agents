@@ -6,6 +6,7 @@ encodes them unchanged. The tree:
     AGENT  "codex session"            session:<thread id>
       CHAIN  turn                     one per Codex turn id
         LLM  <model>                  one per token_count (one model call)
+          CHAIN  compaction           one per `compacted` line (see _on_compacted)
           TOOL  <tool>                function_call / custom_tool_call, by call_id
             AGENT  <agent type>       a subagent, built from its own rollout
               CHAIN  turn  ...        with a state of its own (new_subagent_state)
@@ -26,10 +27,12 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import codex_rollout as cr
-from . import codex_script, command_class, scrub
-from .spans import (ERROR_MESSAGE_MAX_BYTES, TOOL_ERROR_WITHHELD, Ctx, Span,
+from . import codex_script, command_class, distro, scrub
+from .spans import (COMPACTION_OPERATION, ERROR_MESSAGE_MAX_BYTES,
+                    TOOL_ERROR_WITHHELD, Ctx, Span,
                     _base_attrs, _content_attr, span_id_for, trace_id_for,
                     truncate)
+from . import _semconv_generated as semconv
 
 PROVIDER_NAME = "openai"
 DEFAULT_ROOT_NAME = "codex session"
@@ -38,6 +41,10 @@ DEFAULT_ROOT_NAME = "codex session"
 # Ten digits at most, as in spans._EXIT_CODE.
 _EXIT_CODE = re.compile(r"^Process exited with code (-?\d{1,10})\s*$", re.MULTILINE)
 _OUTPUT_MARKER = "\nOutput:\n"
+# How code mode's `exec` starts its output when the script threw, and the
+# line before the error it threw.
+_SCRIPT_FAILED = "Script failed\n"
+_SCRIPT_ERROR = "Script error:"
 
 # In place of the output of a call that was not checked for a secret file.
 OUTPUT_NOT_CHECKED = "[redacted:not-checked]"
@@ -59,7 +66,14 @@ _EXECS_KEPT = 256
 def new_state() -> dict:
     return {"root_started": False, "root_start_ns": 0, "finalized": False,
             "session": {}, "model": "", "turn": None, "open_tools": {},
-            "spawned": {}, "execs": []}
+            "spawned": {}, "execs": [],
+            # A compaction still waiting for the size of the context it left
+            # (ids and sizes only), whether the next model call is the first
+            # after one, the time (ns) of the latest `compacted` line read,
+            # and the size of the context and its window as the last
+            # token_count said.
+            "open_compaction": None, "compact_next": False,
+            "last_compaction": None, "context_tokens": 0, "context_window": 0}
 
 
 def upgrade_state(state: dict) -> None:
@@ -68,6 +82,10 @@ def upgrade_state(state: dict) -> None:
     in `tool_starts`; none of that is left behind, so the plaintext does not
     outlive the upgrade and a subagent spawned by a call that began before it
     still finds that call."""
+    for key, value in (("open_compaction", None), ("compact_next", False),
+                       ("last_compaction", None), ("context_tokens", 0),
+                       ("context_window", 0)):
+        state.setdefault(key, value)
     open_ids = {tool["span_id"] for tool in state["open_tools"].values()}
     execs = state.setdefault("execs", [])
     for start_ns, span_id, name in state.pop("tool_starts", None) or []:
@@ -92,15 +110,15 @@ def new_subagent_state(agent_id: str, agent_type: str,
     state.update({"root_id": span_id_for("subagent:" + agent_id),
                   "root_parent": parent_span_id,
                   "root_name": agent_type or "subagent",
-                  "root_attrs": {"gen_ai.agent.name": agent_type,
-                                 "codex.subagent.id": agent_id}})
+                  "root_attrs": {semconv.GEN_AI_AGENT_NAME: agent_type,
+                                 semconv.CODEX_SUBAGENT_ID: agent_id}})
     return state
 
 
 def _attrs(ctx: Ctx, kind_oi: str) -> Dict[str, Any]:
     attrs = _base_attrs(ctx, kind_oi)
-    if "gen_ai.provider.name" in attrs:
-        attrs["gen_ai.provider.name"] = PROVIDER_NAME
+    if semconv.GEN_AI_PROVIDER_NAME in attrs:
+        attrs[semconv.GEN_AI_PROVIDER_NAME] = PROVIDER_NAME
     return attrs
 
 
@@ -117,7 +135,7 @@ def _pending(ctx: Ctx, span_id: str, parent: Optional[str], name: str,
              kind_oi: str, start_ns: int, extra: Dict[str, Any]) -> Span:
     attrs = _attrs(ctx, kind_oi)
     attrs.update(extra)
-    attrs["glassflow.span.pending"] = True
+    attrs[semconv.RIUS_SPAN_PENDING] = True
     return Span(trace_id=trace_id_for(ctx.conversation_id), span_id=span_id,
                 parent_span_id=parent, name=name, kind_oi=kind_oi,
                 start_ns=start_ns, end_ns=start_ns, attributes=attrs,
@@ -215,12 +233,12 @@ def _on_agent_message(rec, state, ctx, out):
 def _usage_attrs(ctx: Ctx, model: str, rec) -> Dict[str, Any]:
     attrs = _attrs(ctx, "LLM")
     if model:
-        attrs["gen_ai.request.model"] = model
-        attrs["gen_ai.response.model"] = model
-    attrs["gen_ai.usage.input_tokens"] = rec.get("input_tokens")
-    attrs["gen_ai.usage.output_tokens"] = rec.get("output_tokens")
-    attrs["gen_ai.usage.cache_read.input_tokens"] = rec.get("cached_input_tokens")
-    attrs["gen_ai.usage.reasoning.output_tokens"] = rec.get("reasoning_output_tokens")
+        attrs[semconv.GEN_AI_REQUEST_MODEL] = model
+        attrs[semconv.GEN_AI_RESPONSE_MODEL] = model
+    attrs[semconv.GEN_AI_USAGE_INPUT_TOKENS] = rec.get("input_tokens")
+    attrs[semconv.GEN_AI_USAGE_OUTPUT_TOKENS] = rec.get("output_tokens")
+    attrs[semconv.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = rec.get("cached_input_tokens")
+    attrs[semconv.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] = rec.get("reasoning_output_tokens")
     return attrs
 
 
@@ -243,17 +261,138 @@ def _reply(ctx: Ctx, turn: dict) -> str:
 
 
 def _on_usage(rec, state, ctx, out):
+    if rec.get("context_window"):
+        state["context_window"] = rec.get("context_window")
+    if rec.get("local_estimate"):
+        # Codex re-counted its context itself: no model call, so no LLM span
+        # and no flag, but it is the size the context was left at. (Codex's
+        # "context window full" update has the same shape, with a delta that
+        # is not a size; it is rare and, in a long session, zero.)
+        state["context_tokens"] = rec.get("context_tokens")
+        _settle_compaction(state, ctx, out, rec.get("context_tokens"),
+                           rec.timestamp_ns)
+        return
     if _repeats_last_call(rec, state):
         return
     turn = state["turn"]
+    state["context_tokens"] = rec.get("input_tokens")
+    _settle_compaction(state, ctx, out, rec.get("input_tokens"), rec.timestamp_ns)
     attrs = _usage_attrs(ctx, state["model"], rec)
-    _content_attr(ctx, attrs, "output.value", _reply(ctx, turn))
+    if state.get("compact_next") and rec.timestamp_ns >= (state.get("last_compaction") or 0):
+        # The first call after a compaction, and no other: the later ones
+        # also run on the compacted context, but only this one first saw it.
+        attrs[semconv.GEN_AI_CONVERSATION_COMPACTED] = True
+        state["compact_next"] = False
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, _reply(ctx, turn))
     out.append(_finished(ctx, _llm_span_id(turn), turn["span_id"],
                          state["model"] or "model call", "LLM",
                          turn["llm_start_ns"], rec.timestamp_ns, attrs))
     turn["llm_index"] += 1
     turn["llm_start_ns"] = rec.timestamp_ns
     turn["reply_at"] = []
+
+
+def _positive(value: Any) -> Optional[int]:
+    """`value` when it is a positive integer: a size of 0 is Codex not
+    knowing, and is never sent."""
+    ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return value if ok else None
+
+
+def _on_compacted(rec, state, ctx, out):
+    """Codex replaced the history with a summary (a `compacted` line).
+
+    The span is sent as soon as the line is read, and again, under the same
+    id, when the size of the context it left arrives (the next token_count,
+    which a later hook may be the one to read). The summary text is not
+    kept in the state: only where to read it again, as for any content."""
+    if rec.timestamp_ns <= (state.get("last_compaction") or 0):
+        # Read again (a rewound offset, a copied history): the span went
+        # out the first time, and the call it flagged is past.
+        return
+    state["last_compaction"] = rec.timestamp_ns
+    attrs: Dict[str, Any] = {
+        semconv.RIUS_COMPACTION_KIND: semconv.RIUS_COMPACTION_KIND_SUMMARIZE,
+        # Codex 0.162.1 sets compaction_response_id on every compaction, the
+        # local summarizer's too, so the id says nothing about who did it.
+        # What differs: a local one carries the summary text it wrote, and a
+        # remote (provider-side) one writes an empty message. The trigger is
+        # not known (Codex registers no hook for it), so it is not set.
+        semconv.RIUS_COMPACTION_EXECUTOR: (
+            semconv.RIUS_COMPACTION_EXECUTOR_CLIENT
+            if rec.get("message")
+            else semconv.RIUS_COMPACTION_EXECUTOR_PROVIDER),
+    }
+    # tokens.before is a measured prompt size and tokens.after (when Codex
+    # estimates it) is Codex's own count, so `dropped` mixes the two.
+    # A compaction right after one still waiting for its size has no size of
+    # its own before it: what is known is the size before the older one.
+    older_unsettled = isinstance(state.get("open_compaction"), dict)
+    before = None if older_unsettled else (
+        _positive(state.get("context_tokens"))
+        or _positive(rec.get("recorded_tokens")))
+    if before:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_BEFORE] = before
+    if _positive(state.get("context_window")):
+        attrs[semconv.RIUS_COMPACTION_CONTEXT_WINDOW] = state["context_window"]
+    ident = rec.get("window_id")
+    if ident:
+        attrs[semconv.RIUS_COMPACTION_ID] = ident
+    summary = rec.get("message")
+    if summary:
+        # A size, not content: sent whatever the capture setting.
+        attrs[semconv.RIUS_COMPACTION_SUMMARY_BYTES] = len(
+            summary.encode("utf-8", "surrogatepass"))
+    # A subagent's compaction is its own: its root id keeps the ids apart.
+    key = "compaction:" + (state.get("root_id") or "")
+    pending = {
+        "span_id": span_id_for(key + (ident or str(rec.timestamp_ns))),
+        "parent_span_id": state["turn"]["span_id"],
+        # Codex does not say how long it took: the line is the moment.
+        "start_ns": rec.timestamp_ns, "end_ns": rec.timestamp_ns,
+        "attrs": attrs, "summary_at": _hold(ctx, rec),
+    }
+    # A newer compaction takes over: the one still waiting for its size
+    # keeps what it was sent with, and is not given the newer one's.
+    state["open_compaction"] = pending
+    state["compact_next"] = True
+    _emit_compaction(ctx, pending, out)
+
+
+def _settle_compaction(state, ctx, out, tokens_after, at_ns) -> None:
+    """The first size Codex gives for the context after a compaction. A count
+    dated before the line (the rollout read from the top again) is not it."""
+    pending = state.get("open_compaction")
+    if not isinstance(pending, dict) or at_ns < pending["start_ns"]:
+        return
+    state["open_compaction"] = None
+    attrs = pending["attrs"]
+    after = _positive(tokens_after)
+    if after:
+        attrs[semconv.RIUS_COMPACTION_TOKENS_AFTER] = after
+        before = attrs.get(semconv.RIUS_COMPACTION_TOKENS_BEFORE)
+        if before is not None and before >= after:
+            attrs[semconv.RIUS_COMPACTION_TOKENS_DROPPED] = before - after
+    if (_positive(state.get("context_window"))
+            and semconv.RIUS_COMPACTION_CONTEXT_WINDOW not in attrs):
+        attrs[semconv.RIUS_COMPACTION_CONTEXT_WINDOW] = state["context_window"]
+    _emit_compaction(ctx, pending, out)
+
+
+def _emit_compaction(ctx: Ctx, pending: dict, out: list) -> None:
+    """The compaction's span, once per id in `out`: a batch that holds the
+    line and the count after it sends only the finished copy."""
+    attrs = _attrs(ctx, "CHAIN")
+    attrs[semconv.GEN_AI_OPERATION_NAME] = COMPACTION_OPERATION
+    attrs.update(pending["attrs"])
+    # The summary is content: read again from the rollout, behind the gate.
+    summary = _recall(ctx, pending.get("summary_at"), "message")
+    if summary:
+        _content_attr(ctx, attrs, semconv.RIUS_COMPACTION_SUMMARY_TEXT, summary)
+    out[:] = [s for s in out if s.span_id != pending["span_id"]]
+    out.append(_finished(ctx, pending["span_id"], pending["parent_span_id"],
+                         COMPACTION_OPERATION, "CHAIN", pending["start_ns"],
+                         pending["end_ns"], attrs))
 
 
 def _on_tool_call(rec, state, ctx, out):
@@ -272,7 +411,7 @@ def _on_tool_call(rec, state, ctx, out):
     state["open_tools"][call_id] = tool
     if name == EXEC_TOOL:
         _remember_exec(state, tool, _may_spawn(script, wrapped))
-    extra = {"gen_ai.tool.name": tool["tool_name"]}
+    extra = {semconv.GEN_AI_TOOL_NAME: tool["tool_name"]}
     if tool["command_class"]:
         extra[command_class.ATTRIBUTE] = tool["command_class"]
     out.append(_pending(ctx, tool["span_id"], tool["parent_span_id"],
@@ -300,6 +439,33 @@ def _on_mcp_result(rec, state, ctx, out):
     if tool is not None and rec.get("is_error"):
         tool["mcp_failed"] = True
         tool["error_at"] = _hold(ctx, rec)
+
+
+def _on_command_end(rec, state, ctx, out):
+    """A command Codex ran says how it ended but not for which call. A
+    code-mode `exec` script is the only call that runs commands this way, so
+    the code is given to it when it is the one call open; with calls running
+    together there is no telling, and each reads as it always did."""
+    open_tools = list(state["open_tools"].values())
+    if len(open_tools) != 1 or open_tools[0]["tool_name"] != EXEC_TOOL:
+        return
+    tool = open_tools[0]
+    if not _ran_in_call(rec, state, tool):
+        return
+    if not tool.get("inner_exit"):
+        tool["inner_exit"] = rec.get("exit_code")
+
+
+def _ran_in_call(rec, state: dict, tool: dict) -> bool:
+    """Whether a command end can belong to the call: it names another turn,
+    or a start before the call began, when it cannot. Codex 0.162.1 gives
+    `started_at_ms` equal to the end, so a command that began before the
+    call and ended during it is still not told apart."""
+    turn = state["turn"]
+    if rec.get("turn_id") and turn is not None and rec.get("turn_id") != turn["turn_id"]:
+        return False
+    started_ms = rec.get("started_at_ms")
+    return not started_ms or started_ms >= tool["start_ns"] // 1_000_000
 
 
 def _on_subagent_started(rec, state, ctx, out):
@@ -335,12 +501,25 @@ def exit_code_of(output) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def _exit_code(tool: dict, output) -> Optional[int]:
+    """The call's own exit code, else that of the command a script ran."""
+    code = exit_code_of(output)
+    return tool.get("inner_exit") if code is None else code
+
+
+def script_failed(output) -> bool:
+    """Whether an `exec` call's output says its script threw."""
+    return isinstance(output, str) and output.startswith(_SCRIPT_FAILED)
+
+
 def tool_error(tool: dict, output: str) -> Optional[str]:
     """error.type for a failed call, None for one that succeeded.
 
     A command that exited non-zero is `<tool>.exit_<code>`, as spans.py types
     a Claude Code Bash failure; an MCP call its server marked as an error is
-    `<tool>.tool_error`. Anything else reads as success: Codex has no generic
+    `<tool>.tool_error`; a code-mode `exec` whose script threw is
+    `exec.script_failed`, and one whose script ran a command that failed,
+    without throwing, `exec.exit_<code>`. Anything else reads as success: Codex has no generic
     error flag on a tool's output.
     """
     code = exit_code_of(output)
@@ -348,6 +527,10 @@ def tool_error(tool: dict, output: str) -> Optional[str]:
         return "%s.exit_%d" % (tool["tool_name"], code)
     if tool.get("mcp_failed"):
         return tool["tool_name"] + ".tool_error"
+    if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
+        return "exec.script_failed"
+    if tool.get("inner_exit"):
+        return "%s.exit_%d" % (tool["tool_name"], tool["inner_exit"])
     return None
 
 
@@ -356,7 +539,23 @@ def _error_detail(ctx: Ctx, tool: dict, output: str) -> str:
     if error:
         return error
     body = _command_output(output)
-    return _mcp_text(body) if tool.get("mcp_failed") else body
+    if tool.get("mcp_failed"):
+        return _mcp_text(body)
+    if tool.get("tool_name") == EXEC_TOOL and script_failed(output):
+        return _thrown_error(body)
+    if tool.get("inner_exit"):
+        return ""       # the script's last line is not the command's error
+    return body
+
+
+def _thrown_error(body: str) -> str:
+    """The first line of the error a script threw, the whole body when the
+    output has no `Script error:` part."""
+    thrown = body.partition(_SCRIPT_ERROR)[2]
+    for line in thrown.splitlines():
+        if line.strip():
+            return line
+    return body
 
 
 def error_line(text: str) -> str:
@@ -398,12 +597,15 @@ def _script_reads_secret_file(script: str) -> bool:
     stands anywhere in its text, as a path or as a word of a command: this
     does not rest on the scanner, which is only a best effort, so it also
     counts a property (`obj.key`) or a comment that names one. The literals the
-    scanner found are checked too. A script too long to read is taken to."""
+    scanner found are checked too. Escapes in the literals (`\\x2eenv`) are
+    decoded first. A script too long to read is taken to."""
     if len(script) > codex_script.MAX_CHARS:
         return True
     literals = codex_script.string_literals(script)
+    decoded = [codex_script.decode_escapes(text) for text in literals]
     return any(scrub.reads_secret_file(json.dumps({"command": text}))
-               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals)))
+               for text in (_SCRIPT_PUNCTUATION.sub(" ", script), " ".join(literals),
+                            " ".join(decoded)))
 
 
 _EXEC_NAME_TOOLS = 3
@@ -448,21 +650,21 @@ def _on_tool_output(rec, state, ctx, out):
     if tool["tool_name"] == SPAWN_TOOL:
         _note_spawned(state, tool, output)
     attrs = _attrs(ctx, "TOOL")
-    attrs["gen_ai.tool.name"] = tool["tool_name"]
+    attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
     if tool.get("command_class"):
         attrs[command_class.ATTRIBUTE] = tool["command_class"]
-        code = exit_code_of(output)
+        code = _exit_code(tool, output)
         if code is not None:
             attrs[command_class.EXIT_CODE_ATTRIBUTE] = code
     arguments = _arguments(ctx, tool)
     # Arguments are JSON, and an output often is (JSON.stringify in exec).
-    _content_attr(ctx, attrs, "input.value", arguments, json_text=True)
+    _content_attr(ctx, attrs, semconv.INPUT_VALUE, arguments, json_text=True)
     withheld = tool.get("secret_file") is not False
-    _content_attr(ctx, attrs, "output.value", _shown(tool, output), json_text=True)
+    _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, _shown(tool, output), json_text=True)
     error_type = tool_error(tool, output)
     status_message, events = "", []
     if error_type:
-        attrs["error.type"] = error_type
+        attrs[semconv.ERROR_TYPE] = error_type
         if not ctx.capture_content:
             status_message = TOOL_ERROR_WITHHELD
         elif withheld:
@@ -470,7 +672,7 @@ def _on_tool_output(rec, state, ctx, out):
         else:
             status_message = error_line(_error_detail(ctx, tool, output)) or error_type
         events.append((rec.timestamp_ns, "exception", {
-            "exception.type": error_type, "exception.message": status_message}))
+            semconv.EXCEPTION_TYPE: error_type, semconv.EXCEPTION_MESSAGE: status_message}))
     out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
                          _name(tool), "TOOL", tool["start_ns"],
                          rec.timestamp_ns, attrs,
@@ -563,12 +765,23 @@ def _close_open_tools(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
     for tool in state["open_tools"].values():
         _end_exec(state, tool, now_ns)
         attrs = _attrs(ctx, "TOOL")
-        attrs["gen_ai.tool.name"] = tool["tool_name"]
-        _content_attr(ctx, attrs, "input.value", _arguments(ctx, tool),
+        attrs[semconv.GEN_AI_TOOL_NAME] = tool["tool_name"]
+        _content_attr(ctx, attrs, semconv.INPUT_VALUE, _arguments(ctx, tool),
                       json_text=True)
+        error_type = tool_error(tool, "")
+        if tool.get("command_class") and _exit_code(tool, "") is not None:
+            attrs[command_class.EXIT_CODE_ATTRIBUTE] = _exit_code(tool, "")
+        status_message, events = "", []
+        if error_type:
+            attrs[semconv.ERROR_TYPE] = error_type
+            status_message = error_type if ctx.capture_content else TOOL_ERROR_WITHHELD
+            events.append((now_ns, "exception", {
+                semconv.EXCEPTION_TYPE: error_type,
+                semconv.EXCEPTION_MESSAGE: status_message}))
         out.append(_finished(ctx, tool["span_id"], tool["parent_span_id"],
-                             _name(tool), "TOOL", tool["start_ns"],
-                             now_ns, attrs, status_code="UNSET"))
+                             _name(tool), "TOOL", tool["start_ns"], now_ns,
+                             attrs, "ERROR" if error_type else "UNSET",
+                             status_message, events))
     state["open_tools"] = {}
     return out
 
@@ -577,16 +790,16 @@ def _close_turn(state: dict, ctx: Ctx, end_ns: int, rec) -> List[Span]:
     turn = state["turn"]
     out = _close_open_tools(state, ctx, end_ns)
     attrs = _attrs(ctx, "CHAIN")
-    attrs["codex.turn.id"] = turn["turn_id"]
+    attrs[semconv.CODEX_TURN_ID] = turn["turn_id"]
     if rec is not None:
         if rec.get("duration_ms"):
-            attrs["codex.turn.duration_ms"] = rec.get("duration_ms")
+            attrs[semconv.CODEX_TURN_DURATION_MS] = rec.get("duration_ms")
         if rec.get("ttft_ms"):
-            attrs["codex.turn.ttft_ms"] = rec.get("ttft_ms")
+            attrs[semconv.CODEX_TURN_TTFT_MS] = rec.get("ttft_ms")
         if rec.get("aborted"):
-            attrs["codex.turn.aborted"] = rec.get("reason") or "aborted"
-        _content_attr(ctx, attrs, "output.value", rec.get("last_agent_message"))
-    _content_attr(ctx, attrs, "input.value",
+            attrs[semconv.CODEX_TURN_ABORTED] = rec.get("reason") or "aborted"
+        _content_attr(ctx, attrs, semconv.OUTPUT_VALUE, rec.get("last_agent_message"))
+    _content_attr(ctx, attrs, semconv.INPUT_VALUE,
                   _recall(ctx, turn.get("text_at"), "text"))
     out.append(_finished(ctx, turn["span_id"], _root_span_id(state, ctx),
                          "turn", "CHAIN", turn["start_ns"], end_ns, attrs))
@@ -605,9 +818,11 @@ _HANDLERS = {
     cr.USER_MESSAGE: _on_user_message,
     cr.AGENT_MESSAGE: _on_agent_message,
     cr.USAGE: _on_usage,
+    cr.COMPACTED: _on_compacted,
     cr.TOOL_CALL: _on_tool_call,
     cr.MCP_RESULT: _on_mcp_result,
     cr.SUBAGENT_STARTED: _on_subagent_started,
+    cr.COMMAND_END: _on_command_end,
     cr.TOOL_OUTPUT: _on_tool_output,
     cr.TURN_END: _on_turn_end,
 }
@@ -615,7 +830,7 @@ _HANDLERS = {
 # Kinds that only mean something inside a turn. One seen with no turn open
 # began before this session was traced, and is dropped.
 _NEEDS_TURN = {cr.USER_MESSAGE, cr.AGENT_MESSAGE, cr.USAGE, cr.TOOL_CALL,
-               cr.TURN_END}
+               cr.COMPACTED, cr.TURN_END}
 
 
 def _inherited(rec, state: dict) -> bool:
@@ -651,7 +866,7 @@ def _adopt_role(state: dict, records: List[Any]) -> None:
     session = next((rec for rec in records if rec.kind == cr.SESSION), None)
     if session is not None and session.get("agent_role"):
         state["root_name"] = session.get("agent_role")
-        state["root_attrs"]["gen_ai.agent.name"] = session.get("agent_role")
+        state["root_attrs"][semconv.GEN_AI_AGENT_NAME] = session.get("agent_role")
 
 
 def build(records: List[Any], state: dict, ctx: Ctx) -> List[Span]:
@@ -692,11 +907,12 @@ def finalize_session(state: dict, ctx: Ctx, now_ns: int) -> List[Span]:
 
 
 def resource_attributes(state: dict) -> Dict[str, str]:
-    """The session's codex.* resource attributes, beside service.name."""
+    """The session's resource attributes, beside service.name."""
     session = state.get("session") or {}
     return {
-        "codex.version": session.get("cli_version", ""),
-        "codex.cwd": session.get("cwd", ""),
-        "codex.git_branch": session.get("git_branch", ""),
-        "codex.originator": session.get("originator", ""),
+        semconv.SERVICE_VERSION: session.get("cli_version", ""),
+        semconv.PROCESS_WORKING_DIRECTORY: session.get("cwd", ""),
+        semconv.VCS_REF_HEAD_NAME: session.get("git_branch", ""),
+        semconv.CODEX_ORIGINATOR: session.get("originator", ""),
+        **distro.resource_attributes(),
     }

@@ -26,9 +26,10 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List
 
+from . import _semconv_generated as semconv
 from . import net
 
-SCOPE_NAME = "glassflow"
+SCOPE_NAME = semconv.TRACER_NAME
 RETRY_DELAY_S = 0.5
 CONTENT_TYPE = "application/json"
 

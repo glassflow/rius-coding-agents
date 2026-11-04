@@ -130,7 +130,7 @@ class Pinger:
                  watch_pid, interval=INTERVAL_S, max_lifetime=MAX_LIFETIME_S,
                  ping_timeout=PING_TIMEOUT_S, final_ping_timeout=FINAL_PING_TIMEOUT_S,
                  poll_interval=POLL_INTERVAL_S, clock=time.monotonic, sleep=time.sleep,
-                 log=None):
+                 log=None, name_now=None):
         self.session_id = session_id
         self.home = home
         self.instance_id = instance_id
@@ -145,6 +145,7 @@ class Pinger:
         self.clock = clock
         self.sleep = sleep
         self._log = log or (lambda _msg: None)
+        self._name_now = name_now or (lambda: "")
 
     def _state_dir(self) -> str:
         return platform_compat.rius_dir(self.home, "state")
@@ -203,9 +204,19 @@ class Pinger:
         except OSError:
             pass
 
+    def _current_name(self) -> str:
+        """The name the session was given since the pinger started, else the
+        one it started with."""
+        try:
+            return self._name_now() or self.agent_name
+        except Exception as exc:
+            self._log("reading the session name failed: %r" % (exc,))
+            return self.agent_name
+
     def _send(self, stopped: bool) -> None:
         timeout = self.final_ping_timeout if stopped else self.ping_timeout
-        payload = build_payload(self.instance_id, self.agent_name, stopped=stopped)
+        payload = build_payload(self.instance_id, self._current_name(),
+                                stopped=stopped)
         try:
             self.transport(payload, timeout)
         except Exception as exc:  # never retried, never raised
@@ -281,7 +292,9 @@ def main() -> None:
     log("starting: watching pid %s, posting to %s"
         % (watch_pid if watch_pid > 0 else "<unknown>", url))
     pinger = Pinger(session_id, home, instance_id, cfg.service_name, transport,
-                    watch_pid, log=log)
+                    watch_pid, log=log,
+                    name_now=lambda: state.load(session_id, home).get(
+                        "agent_name_sent") or "")
     pinger.run()
 
 

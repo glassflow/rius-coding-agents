@@ -78,7 +78,8 @@ jobs:
                       "rius_cc.codex_session", "rius_cc.codex_trust",
                       "rius_cc.cursor_events", "rius_cc.cursor_spans",
                       "rius_cc.cursor_export", "rius_cc.cursor_hook",
-                      "rius_cc.cursor_install", "exporter",
+                      "rius_cc.cursor_install", "rius_cc.distro",
+                      "rius_cc._semconv_generated", "exporter",
                       "heartbeat", "hook", "rius_ctl"):
               importlib.import_module(mod)
           print("%d modules parse and import on %s" % (len(files), sys.version.split()[0]))

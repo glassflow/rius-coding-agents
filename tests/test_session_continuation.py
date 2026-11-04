@@ -309,9 +309,11 @@ def test_a_continuation_of_a_continuation_is_still_the_same_trace(
 
 # --- invariant 5 subtlety: background subagents at the switch --------------
 
-def test_a_subagent_running_at_the_switch_keeps_landing_in_the_trace(
-        tmp_path, home, sent):
+def _subagent_running_at_the_switch(tmp_path, home, sent, title=None):
     c = Conv(tmp_path, home)
+    if title:
+        _write(c.old, [{"type": "custom-title", "sessionId": OLD,
+                        "customTitle": title}])
     subdir = c.proj / OLD / "subagents"
     subdir.mkdir(parents=True)
     (subdir / "agent-bg1.meta.json").write_text(json.dumps({
@@ -343,12 +345,27 @@ def test_a_subagent_running_at_the_switch_keeps_landing_in_the_trace(
     c.run("SessionEnd")
     trace = _latest(sent)
     agent = trace[spans.span_id_for("subagent:agent-bg1")]
-    assert agent.pending is False
-    assert agent.end_ns == _ns("2026-09-30T10:05:30.000Z")
     sub_llm = [s for s in trace.values() if s.kind_oi == "LLM"
                and s.parent_span_id == agent.span_id]
+    return trace, agent, sub_llm
+
+
+def test_a_subagent_running_at_the_switch_keeps_landing_in_the_trace(
+        tmp_path, home, sent):
+    trace, agent, sub_llm = _subagent_running_at_the_switch(tmp_path, home, sent)
+    assert agent.pending is False
+    assert agent.end_ns == _ns("2026-09-30T10:05:30.000Z")
     assert [s.attributes["gen_ai.usage.output_tokens"] for s in sub_llm] == [13]
     assert not any(s.pending for s in trace.values())
+
+
+def test_a_subagent_running_at_the_switch_keeps_its_type_in_a_named_session(
+        tmp_path, home, sent):
+    _, agent, sub_llm = _subagent_running_at_the_switch(
+        tmp_path, home, sent, title="named-before-the-move")
+    assert agent.attributes["gen_ai.agent.name"] == "general-purpose"
+    assert [s.attributes.get("gen_ai.agent.name") for s in sub_llm] == [
+        "named-before-the-move"]
 
 
 # --- invariants 1 and 2: the stop belongs to the conversation --------------
@@ -596,6 +613,21 @@ def test_a_continued_session_keeps_the_name_given_before_the_move(
     c.run("Stop")
     c.run("SessionEnd")
     assert _closing_root(sent).name == "named-before-the-move"
+
+
+def test_a_stopped_continued_session_closes_under_the_agent_name_it_sent(
+        tmp_path, home, sent):
+    c = Conv(tmp_path, home)
+    _write(c.old, [{"type": "custom-title", "sessionId": OLD,
+                    "customTitle": "named-before-the-move"}])
+    c.before()
+    c.switch()
+    with open(config.path_rules_path(home), "w") as fh:
+        json.dump({"enabled_paths": ["/tmp"], "disabled_paths": ["/tmp/proj"]}, fh)
+    c.run("SessionStart")
+    c.run("SessionEnd")
+    closing = _closing_root(sent)
+    assert closing.attributes["gen_ai.agent.name"] == "named-before-the-move"
 
 
 def test_a_rename_after_the_move_renames_the_conversation(tmp_path, home, sent):

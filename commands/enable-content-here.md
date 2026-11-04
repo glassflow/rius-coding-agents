@@ -4,6 +4,6 @@ disable-model-invocation: true
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" content-on-here:*)
 ---
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" content-on-here --cwd "$PWD"`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" content-on-here`
 
 Report the output above to the user verbatim. Do not add interpretation.

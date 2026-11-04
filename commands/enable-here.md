@@ -4,7 +4,7 @@ disable-model-invocation: true
 allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" enable-here:*)
 ---
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" enable-here --cwd "$PWD"`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/rius_ctl.sh" enable-here`
 
 Report the output above to the user verbatim. Do not add interpretation.
 Whether this folder sends content is the user's choice alone: never run

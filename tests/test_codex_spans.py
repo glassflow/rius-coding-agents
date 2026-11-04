@@ -8,7 +8,7 @@ import pytest
 
 from rius_cc import codex_rollout as cr
 from rius_cc import codex_spans as cs
-from rius_cc import otlp, scrub, spans
+from rius_cc import distro, otlp, scrub, spans
 
 FIXTURE = "codex/mock_tools_mcp_resume.jsonl"
 THREAD = "01a10b40-afd3-7d51-a63c-9d2d01e8445e"
@@ -337,9 +337,12 @@ def test_an_empty_session_has_no_root_to_close():
 def test_resource_attributes_come_from_the_session(fixtures_dir):
     _, state = _build(fixtures_dir)
     attrs = cs.resource_attributes(state)
-    assert attrs["codex.version"] == "0.144.1"
-    assert attrs["codex.cwd"] == "/private/tmp/claude-501/codexr-t3/work"
+    assert attrs["service.version"] == "0.144.1"
+    assert attrs["process.working_directory"] == "/private/tmp/claude-501/codexr-t3/work"
     assert attrs["codex.originator"] == "codex_exec"
+    # The backend reads the working directory as the session's repo only
+    # beside this marker.
+    assert {k: attrs[k] for k in distro.resource_attributes()} == distro.resource_attributes()
 
 
 def test_spans_decode_as_otlp(fixtures_dir):

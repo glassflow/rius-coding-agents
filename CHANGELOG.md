@@ -4,23 +4,109 @@ Notable changes to the `rius` Claude Code plugin. Versions follow
 [semantic versioning](https://semver.org). The version in
 `.claude-plugin/plugin.json` is what the marketplace installs.
 
-## 0.6.2 (unreleased)
+## 0.8.2 (2026-10-28)
 
-- `--env local`: send traces to a Rius stack on this machine
-  (`use-key --env local`).
-- A shell call's span says what kind of command it ran:
-  `rius.command.class` is `test`, `build`, `lint`, `package`, `git` or
-  `other`, with `process.exit.code` when the agent reports one. Worked out on
-  your machine and sent with capture off; the command itself is not sent.
-  Claude Code (Bash), Codex (`exec_command`, and code-mode scripts that call
-  it) and Cursor (Shell). The console can then say "tests failed" instead
-  of "Bash failed".
+- Claude Code: each turn's last model call is now sent with its turn, when
+  the turn ends. Claude Code writes the final answer to the transcript just
+  after the end-of-turn hook fires, so it used to reach Rius at the next hook
+  event: minutes later, or never if the session went idle. The background
+  export now waits up to 2 seconds for it. A prompt you queued while Claude
+  worked keeps its own turn.
 
-## 0.6.1 (unreleased)
+## 0.8.1 (2026-10-28)
 
-Fixes for the Codex and Cursor betas, and every span now names who sent it.
+- Claude Code: a session you named (`claude --name X` or `/rename`) now files
+  under that name as its agent, instead of `claude-code`. A rename mid-session
+  applies from the next export.
+- Claude Code: the `/rius:*` commands now run in Claude Code's default manual
+  permission mode. They used to fail with a "shell command permission check
+  failed" error and only worked in auto mode.
 
-### All agents
+## 0.8.0 (2026-10-27)
+
+- Claude Code: a compaction becomes a `CHAIN` span (`gen_ai.operation.name`
+  `compaction`, `rius.compaction.*`) beside the generations of the turn it
+  happened in. It carries the trigger (`auto` or `manual`), the tokens before
+  and after, the tokens dropped, the messages kept and the size of the summary
+  that replaced the history. The summary text is content, so it is sent only
+  where content is. The first model call after a compaction has
+  `gen_ai.conversation.compacted` set.
+- Codex: each `compacted` line in the rollout becomes the same `compaction`
+  span, with `executor` `client` or `provider` and the token counts Codex
+  reports. Written from Codex's source and a synthetic rollout; no real Codex
+  session with a compaction has been checked yet.
+- Cursor: the `preCompact` hook becomes a `rius.compaction` event on the
+  running generation's `LLM` span, and the next `LLM` span is flagged with
+  `gen_ai.conversation.compacted`. Built from Cursor's hooks documentation; no
+  real Cursor compaction has been checked yet.
+- Claude Code: a line in the session when the context first passes 70% of the
+  model's window, one more at 90% (only on a window above 200k), and one after
+  a compaction saying how much it dropped. Computed on your machine from the
+  transcript, shown to you only. `RIUS_CONTEXT_WARN=0` turns them off.
+- Every Claude Code tool span carries `gen_ai.tool.call.id`, the id of the
+  model's tool_use, as Cursor's already did.
+- A `Skill` call's span names the Agent Skill it loaded, with the OTel GenAI
+  conventions' `gen_ai.skill.name`, and, in content mode, the folder Claude
+  Code loaded it from, as `gen_ai.skill.source.uri` (`file://...`). A
+  built-in skill, which Claude Code unpacks to a temporary folder, gets no
+  source. A call that failed, such as an unknown skill, names none.
+- Experimental, off unless `RIUS_CLAUDE_EXPERIMENTAL_TOOL_DECISIONS=true`:
+  each tool span carries a `gen_ai.tool.call.decision` event for the
+  decision Claude Code made before running the call (`allow`, `deny`, or
+  `require_approval` when it asked you first), read from the
+  `permissionDecision` Claude Code 2.1.296 and later records, or the
+  `toolDenialKind` of an earlier version's denial. It follows an open OTel
+  GenAI proposal, so its names may change before it is final.
+- Claude Code: when Claude Code stops a turn because compaction kept
+  refilling the context (autocompact thrashing), the model call where it
+  stopped is marked as an error on its `LLM` span, with `error.type`
+  `autocompact_thrashing` and an exception event, so the stop shows up as a
+  failure on the trace. Its message is sent only where content is.
+
+## 0.7.0 (2026-10-20)
+
+- An `agent-observability` skill, installed with
+  `npx skills add glassflow/rius-coding-agents`: it adds Rius tracing to an
+  AI agent or LLM app with the Python or TypeScript SDK and checks the first
+  trace. It ships in `.agents/skills/` and is not part of the plugin.
+- A `coding-agent-observability` skill, installed the same way: a coding
+  agent asked how to track Claude Code, Codex or Cursor usage and cost can
+  set Rius up. The listings gain the `coding-agents` and `token-usage`
+  keywords (`token-usage` not on Cursor), and the Codex listing's short and
+  long descriptions name usage, cost and subagents.
+- The plugin and marketplace listings for Claude Code, Codex and Cursor
+  describe what a session trace holds, and carry more search keywords.
+  The Cursor listing leaves out tokens and cost, which Cursor does not report.
+- Codex: a command that fails inside a code-mode script that does not throw
+  now marks the `exec` span as an error (`exec.exit_<n>`) and sets
+  `process.exit.code`, read from the rollout's command events (as
+  codex-cli 0.162.1 writes them). A probe such as `rg` or `test -f` that
+  returns 1 on purpose reads as an error too, as it does for `exec_command`.
+  A call interrupted after such a command keeps that error instead of
+  reading as unset.
+- Attribute names now come from the Rius attribute registry (rius-semconv),
+  vendored at `scripts/rius_cc/_semconv_generated.py`, and CI fails when the
+  copy drifts from its pinned release. What changes on the wire, for all
+  three agents:
+  - The folder, git branch and agent version are sent as the OpenTelemetry
+    keys `process.working_directory`, `vcs.ref.head.name` and
+    `service.version`, instead of `cc.cwd`, `cc.git_branch` and `cc.version`
+    (and their `codex.*` and `cursor.*` twins).
+  - The resource carries `telemetry.distro.name=rius-coding-agents` and the
+    plugin's version, which tells Rius the folder and branch belong to a
+    coding session.
+  - A running span is marked `rius.span.pending` instead of
+    `glassflow.span.pending`, and the instrumentation scope is `rius`
+    instead of `glassflow`.
+  - Cursor's context fill is sent as a number with a fraction
+    (`cursor.context.context_usage_percent`).
+
+  Rius shows the folder and branch from either spelling, so older and newer
+  sessions sit side by side in the console. Update the Rius backend before
+  this plugin release: one that predates the new keys shows no folder or
+  branch for new sessions.
+
+## 0.6.2 (2026-10-13)
 
 - Every span carries `user.id`: the email you signed in with at
   `/rius:login`, which the workspace already holds as the key's approver.
@@ -31,6 +117,27 @@ Fixes for the Codex and Cursor betas, and every span now names who sent it.
   protobuf, so the wire format is readable text and the hand-written binary
   encoder is gone. The receiver has accepted both since 2026-10-05. Same
   spans, same attributes; nothing changes in what is traced.
+- A square icon for the plugin's directory listing.
+- `--env local`: send traces to a Rius stack on this machine
+  (`use-key --env local`).
+- A shell call's span says what kind of command it ran:
+  `rius.command.class` is `test`, `build`, `lint`, `package`, `git` or
+  `other`, with `process.exit.code` when the agent reports one. Worked out on
+  your machine and sent with capture off; the command itself is not sent.
+  Claude Code (Bash), Codex (`exec_command`, and code-mode scripts that call
+  it) and Cursor (Shell). The console can then say "tests failed" instead
+  of "Bash failed".
+- Codex code mode: an `exec` call whose script throws is now a failed span
+  (`exec.script_failed`).
+- Cursor: spool pruning no longer mistakes a conversation id with a dot for
+  another one.
+- Codex code mode: a secret file named through a JavaScript escape
+  (`"\x2eenv"`) now withholds the call's output.
+
+## 0.6.1 (2026-10-06)
+
+Fixes for the Codex and Cursor betas. Claude Code: no change in what is
+traced or sent.
 
 ### Codex (beta)
 

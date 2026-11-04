@@ -85,14 +85,59 @@ One trace per Codex session (thread). A resumed session (`codex resume`,
 | AGENT `codex session` | the session; open until the session is closed (below) |
 | CHAIN `turn` | one per turn: prompt, final reply, `codex.turn.duration_ms`, `codex.turn.ttft_ms` |
 | LLM `<model>` | one per model call: `input_tokens` (includes cached), `cache_read.input_tokens`, `output_tokens`, `reasoning.output_tokens` |
-| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>`, an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
+| TOOL `<tool>` | one per call; a command that exits non-zero is `error.type = exec_command.exit_<n>` (`exec.exit_<n>` when a code-mode script ran it), an MCP error is `<tool>.tool_error`; a shell call (`exec_command`, or a code-mode script that calls it) carries `rius.command.class` (`test`, `build`, `lint`, `package`, `git`, `other`) and `process.exit.code` |
 | AGENT `<role>` | a subagent, under the `spawn_agent` call that started it (`multi_agent_v1`, or the opt-in `multi_agent_v2`), with its own turns and calls |
+| CHAIN `compaction` | one per compaction Codex records, in the turn it happened in (below) |
 
-Resource attributes: `service.name=codex`, `codex.version`, `codex.cwd`,
-`codex.originator`. Content rules are the same as for Claude Code:
+Resource attributes: `service.name=codex`, `service.version` (Codex's
+version), `process.working_directory`, `vcs.ref.head.name`,
+`codex.originator`, and `telemetry.distro.name=rius-coding-agents` with
+the plugin's version. Content rules are the same as for Claude Code:
 `$rius:rius-enable-here` sends structure only, `$rius:rius-enable-content-here`
 adds content with secrets removed, and `RIUS_CAPTURE_CONTENT=false` turns
 content off everywhere.
+
+### Compactions
+
+When Codex compacts a conversation it writes a `compacted` line, and Rius
+sends it as a `CHAIN` span with `gen_ai.operation.name` set to `compaction`
+(`rius.compaction.*`):
+
+- `kind` is `summarize`. `executor` is `client` when the `compacted` line
+  carries the summary text Codex wrote, and `provider` when its message is
+  empty (a remote compaction, where the provider wrote the summary). The
+  response id cannot tell them apart: Codex 0.162.1 sets it on both. The
+  trigger (`auto` or `manual`) is not set: the rollout does not say.
+- `tokens.before` is the prompt size of the last model call before it,
+  `tokens.after` the size of the context Codex counts next, and
+  `tokens.dropped` the difference when it is positive. After a local
+  compaction Codex counts its own estimate of the new context (a
+  `token_count` that used no tokens); that is `tokens.after`, and it is not a
+  model call, so it gets no `LLM` span (a remote compaction is counted the
+  same way). Otherwise the next call's prompt size is used. `tokens.before`
+  is a measured prompt size and `tokens.after` may be Codex's estimate, so
+  `tokens.dropped` mixes the two. A compaction that follows another before
+  any count arrived has no `tokens.before`: the size known then is from
+  before the older one. `context_window` and `id` (Codex's window id) are
+  set when known.
+- The span has no duration: Codex does not say how long a compaction took,
+  so it starts and ends at its line. It is sent when the line is read and
+  sent again, under the same span id, once the size after it is known.
+- The first model call after a compaction has `gen_ai.conversation.compacted`
+  set; the later ones do not.
+- `summary.bytes` is the size of the summary. The summary text
+  (`summary.text`) is content: it is sent only where content is, with
+  secrets removed and capped like the rest, and is not kept in the state
+  file.
+
+This was written from Codex's source (openai/codex: the `compacted` rollout
+line and the `token_count` event), not from a recorded compaction: none of
+the rollouts used here holds one, and the tests run on a synthetic rollout
+(`tests/fixtures/codex/synthetic_compaction.jsonl`). The `executor`
+rule (an empty message means the provider did it) was checked against the
+0.162.1 source (`compact.rs`, `compact_remote_v2.rs`), and holds for that
+version only; older writers were not read. A compaction written while no turn is
+open (or inside a turn a forked session copied) is dropped.
 
 ### How a session ends
 
@@ -137,8 +182,24 @@ turn things off.
 - Code mode (`code_mode_host`, on by default in codex-cli 0.144.1) runs
   every tool through one `exec` call that runs a script. Each such call is
   one TOOL span; the commands, patches and spawns inside it get no spans of
-  their own. Its output carries no exit code, so a failed command inside
-  `exec` reads as success.
+  their own. When the script throws, Codex reports `Script failed` and the
+  span is an error (`exec.script_failed`, message: the thrown error's first
+  line). A command that fails inside a script that does not throw is read
+  from the rollout, where codex-cli 0.162.1 writes an `item_completed`
+  event for each command (`CommandExecution`, with its `exit_code`, and no
+  such event in the 0.144.1 rollouts checked): the span is an error
+  (`exec.exit_<n>`, the first non-zero code) and `process.exit.code` is
+  set. A command that returns non-zero on purpose (`rg` with no match,
+  `test -f`) reads as an error too, as it does for `exec_command`. That
+  event names no call, so the code is given to the `exec` call that is the
+  only call open, when the event's turn is the open turn and its
+  `started_at_ms` is not before the call began; while calls run together, a
+  failed command inside a script that does not throw still reads as
+  success. In the one 0.162.1 rollout checked `started_at_ms` equals the
+  end, so a command that began before the call and ended during it is not
+  told apart. A call interrupted after such a command keeps its error. The
+  call's output carries no exit code, and Codex's hooks were not checked
+  for one.
   - **Name (best effort).** The span is named after the tools its script
     calls (`exec_command`, `apply_patch`, `mcp__<server>__<tool>`). The
     script is read by a small scanner, not a JavaScript parser: when it
@@ -152,7 +213,10 @@ turn things off.
     replaced, whether the name is a path, a word of a command, a property
     such as `obj.key`, or a comment. This does not rest on the scanner, so
     it errs towards withholding the output of a harmless script; a script
-    over 64 KB is withheld as well. A script the scanner cannot read to its
+    over 64 KB is withheld as well. Escapes in a quoted name
+    (`"\x2eenv"`) are decoded before the check. A name built while the
+    script runs (`'.' + 'env'`, `String.fromCharCode`) is still not seen.
+    A script the scanner cannot read to its
     end is not withheld for that: it is only named plain `exec`.
   - **Subagents (placement approximate, none dropped while the rollout
     exists).** A subagent spawned inside `exec` goes under the call that was

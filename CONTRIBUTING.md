@@ -50,10 +50,11 @@ CI enforces most of these, and a PR that breaks one won't merge.
   isn't enabled, and structure only (the default for a folder) has to drop
   every content field, including in error paths. Content that is sent goes
   through `scripts/rius_cc/scrub.py` first.
-- **The environment only turns things off.** A cloned repo's
-  `.claude/settings.json` reaches every hook, so nothing read from the
-  environment may enable tracing, raise capture, or pick the key or its
-  server.
+- **The environment can't turn tracing on or raise capture.** A cloned
+  repo's `.claude/settings.json` reaches every hook, so nothing read from
+  the environment may enable tracing, raise capture, or pick the key or
+  its server. It may turn on debug output, or experimental telemetry that
+  carries no content, for a trace that is already enabled.
 - **No keys in logs, state files or commits.** The CI secret scan checks
   tracked files and history.
 
