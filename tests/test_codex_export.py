@@ -1,6 +1,7 @@
 """`--agent codex` end to end through the exporter: hook events re-read the
-rollout, subagents land under the spawn_agent call that started them, and
-the sweep closes a dead Codex session's trace after an hour.
+rollout, subagents land under the spawn_agent call that started them, Codex
+exiting closes the trace, and the sweep closes a dead Codex session's trace
+no pinger closed after an hour.
 
 The subagent fixtures are one real codex-cli 0.144.1 run against a mock
 model: a `tools please` turn, then a resumed turn that spawns a `default`
@@ -241,6 +242,67 @@ def test_the_closing_spans_carry_no_content(codex_home, tmp_path, sent,
     for s in _spans(sent):
         assert "input.value" not in s.attributes
         assert "output.value" not in s.attributes
+
+
+# --- Codex exiting: its pinger closes the trace --------------------------------
+
+def _exit(tmp_path, now_ns):
+    cfg = config.resolve(PARENT, "/tmp/proj", ENV, str(tmp_path))
+    exporter.close_exited_codex(cfg, PARENT, "/tmp/proj", str(tmp_path),
+                                now_ns=now_ns)
+
+
+def test_codex_exiting_closes_its_trace_as_it_exits(codex_home, tmp_path, sent,
+                                                    rollouts):
+    """Not when it was last seen: the receiver refuses a span it gets more
+    than an hour after its end, and a session can sit idle longer than that
+    before Codex is quit."""
+    last_ns = _open_dead_session(tmp_path, rollouts)
+    del sent[:]
+    exited_ns = last_ns + 3 * HOUR_NS
+    _exit(tmp_path, exited_ns)
+    roots = {s.name: s for s in _spans(sent) if s.kind_oi == "AGENT"}
+    assert set(roots) == {"codex session", "default"}
+    assert all(not s.pending and s.end_ns == exited_ns for s in roots.values())
+    assert not state.trace_is_open(_state(tmp_path))
+    del sent[:]
+    _sweep(tmp_path, exited_ns + 2 * HOUR_NS)
+    assert sent == [], "the sweep finds nothing left to close"
+
+
+def test_codex_exiting_sends_what_the_rollout_holds_past_the_last_hook(
+        codex_home, tmp_path, sent, rollouts):
+    """A Stop export that has not taken the lock when Codex exits reads
+    nothing after the close, so the close reads it."""
+    whole = rollouts[PARENT].read_bytes()
+    _run("Stop", tmp_path, rollouts[PARENT])
+    expected = set(_finished(sent))
+    del sent[:]
+    shutil.rmtree(str(tmp_path / ".codex" / "rius" / "state"))
+    rollouts[PARENT].write_bytes(b"".join(whole.splitlines(keepends=True)[:12]))
+    _run("Stop", tmp_path, rollouts[PARENT])
+    rollouts[PARENT].write_bytes(whole)
+    _exit(tmp_path, _state(tmp_path)["last_ns"] + HOUR_NS)
+    assert expected <= set(_finished(sent))
+
+
+def test_codex_exiting_leaves_a_trace_opened_with_another_key(
+        codex_home, tmp_path, sent, rollouts):
+    last_ns = _open_dead_session(tmp_path, rollouts)
+    del sent[:]
+    signed_in.sign_in(str(tmp_path), api_key="gf_otherworkspace99.sig")
+    _exit(tmp_path, last_ns + HOUR_NS)
+    assert sent == []
+    assert state.trace_is_open(_state(tmp_path))
+
+
+def test_a_closed_codex_trace_sends_nothing_more_on_exit(codex_home, tmp_path,
+                                                         sent, rollouts):
+    last_ns = _open_dead_session(tmp_path, rollouts)
+    _exit(tmp_path, last_ns + 1)
+    del sent[:]
+    _exit(tmp_path, last_ns + 2)
+    assert sent == []
 
 
 def test_a_subagent_id_that_is_not_an_id_is_ignored(codex_home, tmp_path,

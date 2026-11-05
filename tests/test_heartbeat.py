@@ -177,6 +177,54 @@ def test_dead_parent_exits_without_stopped_ping(tmp_path):
     assert all(not p.get("stopped") for p in sent)
 
 
+def test_a_dead_parent_runs_the_exit_hook_once(tmp_path):
+    exits = []
+    pinger, _, _ = _make_pinger(tmp_path, lambda p, t: None, watch_pid=999999,
+                                on_exit=lambda: exits.append(1))
+    pinger.run()
+    assert exits == [1]
+
+
+def test_a_stop_file_or_the_cap_never_runs_the_exit_hook(tmp_path):
+    exits = []
+    pinger, _, _ = _make_pinger(tmp_path, _stop_writer(tmp_path, []),
+                                on_exit=lambda: exits.append(1))
+    pinger.run()
+    pinger, _, _ = _make_pinger(tmp_path, lambda p, t: None, max_lifetime=1.0,
+                                on_exit=lambda: exits.append(1))
+    pinger.run()
+    assert exits == []
+
+
+def test_a_failing_exit_hook_is_logged_not_raised(tmp_path):
+    logged = []
+
+    def boom():
+        raise OSError("boom")
+
+    pinger, _, _ = _make_pinger(tmp_path, lambda p, t: None, watch_pid=999999,
+                                on_exit=boom, log=logged.append)
+    pinger.run()
+    assert any("closing the trace on exit failed" in m for m in logged)
+    assert not os.path.exists(pinger.pid_path())
+
+
+def test_only_codex_closes_its_trace_when_it_exits(monkeypatch, tmp_path):
+    """Codex has no SessionEnd; Claude Code's own SessionEnd closes its
+    trace, and its killed sessions are left to the sweep."""
+    import exporter
+    from rius_cc import agent
+    home = str(tmp_path)
+    assert heartbeat._closer("s1", "/tmp/proj", home) is None
+    closed = []
+    monkeypatch.setattr(exporter, "close_exited_codex",
+                        lambda cfg, *args: closed.append((cfg.api_key,) + args))
+    with agent.using(agent.CODEX):
+        sign_in(home, api_key="glassflow_k")
+        heartbeat._closer("s1", "/tmp/proj", home)()
+    assert closed == [("glassflow_k", "s1", "/tmp/proj", home)]
+
+
 def test_max_lifetime_cap_exits_without_stopped_ping(tmp_path):
     """The cap bounds the PINGER's lifetime, not the agent's. A stopped
     ping at the cap would falsely assert a still-running agent had
